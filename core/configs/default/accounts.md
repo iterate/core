@@ -17,6 +17,15 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
 - GitHub's deliveries for an installation the member administers arrive as
   `events.iterate.com/github/webhook-received` on `/integrations/github/<installation id>`, signed
   by the Cloud's key: `event.source.signer.principal.actor` is `"iterate-cloud"`.
+- The Cloud's key reaches the mind by a member's press, once: the Cloud's page
+  `https://cloud.iterate.com/enrol?domain=<domain>` links to the mind's `/keys/enrol` with
+  `actor=iterate-cloud`, the key and `cloud=https://cloud.iterate.com`. The mind reads
+  `<cloud>/.well-known/iterate-cloud` when it shows the page and again at the press, and gives the
+  name `iterate-cloud` only to the key that this origin publishes there. The page names the
+  Cloud's host; the member's passkey signs the origin with the key; `/keys` shows the key as
+  published by that host. The key adds events under `/integrations/` and nothing else. The mind
+  trusts one such key at a time: to move to a new key or another Cloud, a member removes the old
+  key on `/keys` first.
 - Every delivery of the Cloud (GitHub, Slack, Gmail, Calendar, X) comes in that form until the
   owner lets iterate.iterate.com in ([minds.md](minds.md)). Then the same type and payload arrive on
   `/minds/iterate.iterate.com/integrations/<provider>/<account>`, signed by the mind iterate.iterate.com, and reach

@@ -149,15 +149,69 @@ test("a name another live key lends is held; the same key, another name and no n
   expect(otherKeyLending(lending, "key-c", undefined)).toBeNull();
 });
 
-test("no service gets the name that the mind trusts a signer by", () => {
-  const ask = new URLSearchParams({
+test("the name iterate-cloud goes only with an iterate Cloud's https origin, and that origin goes with that name alone, under /integrations/", () => {
+  const ask = (fields: Record<string, string>) =>
+    serviceKeyRequestOf(
+      new URLSearchParams({
+        actor: "iterate-cloud",
+        label: "iterate Cloud",
+        publicKey: "abc_-1",
+        paths: "/integrations/",
+        ...fields,
+      }),
+    );
+  expect(ask({ cloud: "https://cloud.example.com" })).toEqual({
     actor: "iterate-cloud",
     label: "iterate Cloud",
     publicKey: "abc_-1",
-    paths: "/integrations/",
+    paths: ["/integrations/"],
+    cloud: "https://cloud.example.com",
   });
-  expect(serviceKeyRequestOf(ask)).toEqual({
-    refused: expect.stringContaining("iterate-cloud"),
+  const refusals = {
+    noCloud: ask({}),
+    anotherActor: ask({ actor: "a-service", cloud: "https://cloud.example.com" }),
+    plainHttp: ask({ cloud: "http://cloud.example.com" }),
+    aPath: ask({ cloud: "https://cloud.example.com/x" }),
+    aSlash: ask({ cloud: "https://cloud.example.com/" }),
+    aUser: ask({ cloud: "https://a@cloud.example.com" }),
+    aLend: ask({ cloud: "https://cloud.example.com", provide: "whatsapp" }),
+    outsideIntegrations: ask({ cloud: "https://cloud.example.com", paths: "/secrets/" }),
+  };
+  expect(refusals).toEqual({
+    noCloud: { refused: expect.stringContaining("names no address (cloud)") },
+    anotherActor: { refused: "The field cloud goes only with the name iterate-cloud." },
+    plainHttp: { refused: expect.stringContaining("must be an https address with no path") },
+    aPath: { refused: expect.stringContaining("must be an https address with no path") },
+    aSlash: { refused: expect.stringContaining("must be an https address with no path") },
+    aUser: { refused: expect.stringContaining("must be an https address with no path") },
+    aLend: { refused: "iterate Cloud's key adds events: it lends no capability." },
+    outsideIntegrations: { refused: "The service may add events under /integrations/ alone." },
+  });
+});
+
+test("a member's signature for iterate Cloud's key names the Cloud's origin, and allows that origin alone; another service's payload is what it was", () => {
+  const cloud = {
+    actor: "iterate-cloud",
+    label: "iterate Cloud",
+    publicKey: "pk",
+    paths: ["/integrations/"],
+    cloud: "https://cloud.example.com",
+  };
+  const signed = enrolPayloadOf("key-a", cloud);
+  expect(signed).toMatchObject({ cloud: "https://cloud.example.com" });
+  expect(allowsExactly(signed, "key-a", cloud)).toBe(true);
+  expect(allowsExactly(signed, "key-a", { ...cloud, cloud: "https://other.example.com" })).toBe(
+    false,
+  );
+  const { cloud: _, ...withoutCloud } = signed;
+  expect(allowsExactly(withoutCloud, "key-a", cloud)).toBe(false);
+  const service = { actor: "a-service", label: "A", publicKey: "pk", paths: ["/integrations/a/"] };
+  expect(enrolPayloadOf("key-b", service)).toEqual({
+    key: "key-b",
+    actor: "a-service",
+    label: "A",
+    paths: ["/integrations/a/"],
+    provide: null,
   });
 });
 

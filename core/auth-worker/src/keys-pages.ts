@@ -2,9 +2,12 @@ import { base64url, fromBase64url, keyIdOf, STACK_KEY_PATH } from "iterate/signe
 import { type AccountFact, AccountFacts } from "./account-facts.ts";
 import { isOwner } from "./config.ts";
 import { type Session, sessionOf } from "./cookies.ts";
+import { cloudKeyRefusal } from "./cloud-key.ts";
 import { configOf, type Env, issuerOf } from "./env.ts";
 import {
   allowsExactly,
+  CLOUD_ACTOR,
+  cloudPlainly,
   enrolPayloadOf,
   honouredNext,
   type LendingKey,
@@ -87,6 +90,8 @@ type KeyRow = {
   actor: string | null;
   paths: string | null;
   provide: string | null;
+  /** The iterate Cloud that published the key, for `CLOUD_ACTOR`'s key (../migrations/0019). */
+  origin: string | null;
   label: string;
   format: string;
   credential_id: string | null;
@@ -129,8 +134,9 @@ async function keysPage(env: Env, session: Session, next: string | null): Promis
       paths: JSON.parse(key.paths || "[]") as string[],
       provide: key.provide || undefined,
     });
+    const published = key.origin ? `, published by ${text(new URL(key.origin).host)}` : "";
     const what = key.actor
-      ? `a key for ${text(key.actor)}: it can ${text(scope)}`
+      ? `a key for ${text(key.actor)}${published}: it can ${text(scope)}`
       : key.format === "webauthn"
         ? "passkey"
         : text(key.format);
@@ -455,13 +461,28 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
   if (!key) return errorPage("The service's key is not one this mind can use.", 400);
   const held = await nameHeldByAnotherKey(env, key, ask);
   if (held) return held;
+  const notPublished = ask.cloud && (await cloudKeyRefusal(ask.cloud, ask.publicKey));
+  if (notPublished) return errorPage(notPublished, 400);
   const next = honouredNext(url.searchParams.get("next"), config);
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${text(value)}">`;
   const statement = statementHtml(statementInParts(ask, { mind, key, person: session.email }));
   const start = text(key.slice(0, 8));
+  // iterate Cloud's page names the Cloud's host, which the member must recognise, and not the
+  // link's label
+  const cloud = ask.cloud ? cloudPlainly(ask.cloud, mind) : null;
+  const opening = cloud
+    ? `<h1>${text(cloud.heading)}</h1>
+      <p>${text(cloud.can)}</p>
+      <p><strong>${text(cloud.recognise)}</strong></p>`
+    : `<h1>Sign this statement?</h1>
+      <p>${text(scopePlainly(ask, mind))}</p>`;
+  // every part of the Cloud's statement is checked or plain
+  const fromLink = cloud
+    ? ""
+    : `<span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. `;
   return page({
-    title: "Sign this statement?",
+    title: cloud ? cloud.heading : "Sign this statement?",
     // The consent page's own look, over the plain page's stylesheet. A part may break across lines,
     // so a long path still fits a phone, and each line of it keeps its tint.
     style: `
@@ -472,17 +493,16 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
 .part-you { background: color-mix(in oklab, var(--foreground) 8%, transparent); }
 .legend { font-size: 0.8125rem; line-height: 1.9; }
 summary { cursor: pointer; }`,
-    body: `<h1>Sign this statement?</h1>
-      <p>${text(scopePlainly(ask, mind))}</p>
+    body: `${opening}
       <p class="statement">${statement}</p>
-      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(mind)} checked this. <span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. Plain words are the same on every key page.</p>
+      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(mind)} checked this. ${fromLink}Plain words are the same on every key page.</p>
       <p>Any member can remove the key on <a href="${KEYS_PATH}">Your keys</a>.</p>
       <details>
         <summary>What is a key?</summary>
         <p class="muted">A key has two halves. Its holder keeps the private half and signs with it; that half never comes to ${text(mind)}. ${text(mind)} keeps the public half and checks each signature with it. ${start} is the start of the public half's fingerprint.</p>
       </details>
       <form method="post" action="${ENROL_PATH}" class="actions" data-enrol="${text(JSON.stringify(enrolPayloadOf(key, ask)))}">
-        ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${next ? hidden("next", next) : ""}
+        ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${ask.cloud ? hidden("cloud", ask.cloud) : ""}${next ? hidden("next", next) : ""}
         ${hidden("decision", "cancel")}${hidden("signed", "")}
         <button type="submit" data-allow>Sign with your passkey</button>
         <button type="submit" class="link">Cancel</button>
@@ -560,13 +580,16 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
       "No key was added: the signed statement is for another key, or for another reach.",
       403,
     );
+  // read again at the press: the Cloud may have changed its key since the page was shown
+  const notPublished = ask.cloud && (await cloudKeyRefusal(ask.cloud, ask.publicKey));
+  if (notPublished) return errorPage(notPublished, 400);
   const at = Date.now();
   const { meta } = await env.DB.prepare(
-    `insert into keys (id, actor, paths, public_key, format, label, added_via, added_by, added_at, provide)
-     values (?1, ?2, ?3, ?4, 'p256', ?5, 'enrol-page', ?6, ?7, ?8)
+    `insert into keys (id, actor, paths, public_key, format, label, added_via, added_by, added_at, provide, origin)
+     values (?1, ?2, ?3, ?4, 'p256', ?5, 'enrol-page', ?6, ?7, ?8, ?9)
      on conflict (id) do update set actor = excluded.actor, paths = excluded.paths,
        label = excluded.label, added_by = excluded.added_by, added_at = excluded.added_at,
-       provide = excluded.provide, last_used_at = null, revoked_at = null
+       provide = excluded.provide, origin = excluded.origin, last_used_at = null, revoked_at = null
      where keys.revoked_at is not null and keys.user_id is null`,
   )
     .bind(
@@ -578,6 +601,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
       session.userId,
       at,
       ask.provide || null,
+      ask.cloud || null,
     )
     .run();
   const facts = new AccountFacts();
@@ -592,6 +616,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
         actor: ask.actor,
         paths: ask.paths,
         provide: ask.provide,
+        cloud: ask.cloud,
         addedBy: session.userId,
         ...signerOf(change),
       },
@@ -612,14 +637,15 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
 }
 
 /** The refusal for a key that asks to lend a name another live key lends (./key-rules.ts
- *  `otherKeyLending`), or null. A lend by a member's own session is in no table here, so the
- *  consent page says of every key that lends what it does to a name in use: it takes the name only
- *  when that lend ends. */
+ *  `otherKeyLending`), or for iterate Cloud's name while another live key holds it, or null. A lend
+ *  by a member's own session is in no table here, so the consent page says of every key that lends
+ *  what it does to a name in use: it takes the name only when that lend ends. */
 async function nameHeldByAnotherKey(
   env: Env,
   key: string,
   ask: ServiceKeyRequest,
 ): Promise<Response | null> {
+  if (ask.actor === CLOUD_ACTOR) return cloudNameHeld(env, key);
   if (!ask.provide) return null;
   const { results } = await env.DB.prepare(
     `select id, label, provide, added_at from keys
@@ -636,12 +662,32 @@ async function nameHeldByAnotherKey(
   );
 }
 
+/** ONE KEY OF iterate Cloud AT A TIME: a reader trusts the name `CLOUD_ACTOR` alone, so a Cloud
+ *  at another origin, or a new key of the same Cloud, gets it only once a member removed the key
+ *  that holds it now. Allowing a key replaces no other by itself. */
+async function cloudNameHeld(env: Env, key: string): Promise<Response | null> {
+  const held = await env.DB.prepare(
+    `select id, label, origin, added_at from keys
+     where actor = ?1 and revoked_at is null and id != ?2 order by added_at limit 1`,
+  )
+    .bind(CLOUD_ACTOR, key)
+    .first<{ id: string; label: string; origin: string | null; added_at: number }>();
+  if (!held) return null;
+  const by = held.origin ? new URL(held.origin).host : "an address that this mind did not keep";
+  return errorPage(
+    `The name ${CLOUD_ACTOR} is held now by the key that ${by} publishes (key ${held.id.slice(0, 8)}, added ${day(held.added_at)}). This mind trusts one key of iterate Cloud at a time, and allowing this one replaces nothing by itself. If this key is to replace that one, a member removes that key on Your keys first.`,
+    409,
+    undefined,
+    [{ href: KEYS_PATH, label: "Your keys" }],
+  );
+}
+
 async function liveFor(env: Env, key: string, ask: ServiceKeyRequest): Promise<boolean> {
   const row = await env.DB.prepare(
     `select 1 from keys where id = ?1 and actor = ?2 and paths = ?3
-       and provide is ?4 and revoked_at is null`,
+       and provide is ?4 and origin is ?5 and revoked_at is null`,
   )
-    .bind(key, ask.actor, JSON.stringify(ask.paths), ask.provide || null)
+    .bind(key, ask.actor, JSON.stringify(ask.paths), ask.provide || null, ask.cloud || null)
     .first();
   return Boolean(row);
 }

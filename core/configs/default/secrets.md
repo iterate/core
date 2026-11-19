@@ -8,8 +8,8 @@ GitHub App's JWT), and the rules that make an act wait for a member's yes (`itx.
 A secret can hold a P-256 key that signs statements to other minds, the way the iterate Cloud
 writes into a mind's `/integrations/`. `itx.secrets.generateSigningKey("/secrets/signer",
 { statementPaths: ["/integrations/"] })` makes the key inside the secrets Worker and answers its
-`publicKey` and `keyId`; `describe` answers them too, so a page can publish them. The other mind
-trusts that public key in its config (`auth.keys`, with the same `paths`).
+`publicKey` and `keyId`; `describe` answers them too, so a page can publish them. A member of the
+other mind allows that public key on its `/keys/enrol` (with the same `paths`).
 `itx.secrets.signStatement("/secrets/signer", { mind, path, type, payload })` answers the
 envelope to `POST` to `https://iterate.<mind>/statements`. The private key never leaves: the
 secret is never sent with a request and is lent to nothing, and it signs only paths under its

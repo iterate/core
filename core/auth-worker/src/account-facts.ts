@@ -66,6 +66,8 @@ const KeyAdded = z.union([
     paths: z.array(z.string()),
     /** The capability the key's token may lend, `itx.<provide>`, when it has one. */
     provide: z.string().optional(),
+    /** The iterate Cloud's origin that published the key, for the actor `iterate-cloud`. */
+    cloud: z.string().optional(),
     addedBy: z.string(),
   }),
 ]);

@@ -37,9 +37,12 @@ export const underPaths = (path: string, paths: readonly string[] | undefined) =
 
 const SERVICE_PATHS_ROOT = "/integrations/";
 
-/** A name that a reader in the mind trusts a signer by (core/configs/default/worker.ts), so no
- *  service gets it for the asking on `/keys/enrol`. */
-const RESERVED_ACTOR = "iterate-cloud";
+/** THE NAME THAT A READER IN THE MIND TRUSTS iterate Cloud BY (core/configs/default
+ *  cloud-deliveries.ts), so no service gets it for the asking on `/keys/enrol`. It goes only with
+ *  `cloud`, the Cloud's origin, and only to the key that this origin publishes at
+ *  `<cloud>/.well-known/iterate-cloud` (./cloud-key.ts). No config of the stack names a Cloud: the
+ *  link names the origin, the consent page shows it, and the member's passkey signs it. */
+export const CLOUD_ACTOR = "iterate-cloud";
 
 export type ServiceKeyRequest = {
   actor: string;
@@ -49,7 +52,18 @@ export type ServiceKeyRequest = {
   paths: string[];
   /** The one capability the key's token may lend, as `itx.<provide>` (./key-tokens.ts). */
   provide?: string;
+  /** The origin of the iterate Cloud whose key this is: for `CLOUD_ACTOR` alone, and always with
+   *  it. */
+  cloud?: string;
 };
+
+/** `value` when it is an `https:` origin and nothing more: no path, query, user or trailing
+ *  slash. Null for anything else. */
+function cloudOriginOf(value: string): string | null {
+  if (!URL.canParse(value)) return null;
+  const url = new URL(value);
+  return url.protocol === "https:" && url.origin === value ? value : null;
+}
 
 /** A capability's name, as `iterate provide` takes it: `whatsapp`, `whatsapp.jonas`. */
 const CAPABILITY_NAME = /^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)*$/;
@@ -83,10 +97,22 @@ export function serviceKeyRequestOf(
     .map((prefix) => prefix.trim())
     .filter(Boolean);
   const provide = field("provide");
+  const cloud = field("cloud");
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(actor))
     return { refused: "The service's name must be lowercase letters, digits and hyphens." };
-  if (actor === RESERVED_ACTOR)
-    return { refused: `No service may call itself ${RESERVED_ACTOR} here.` };
+  if (actor === CLOUD_ACTOR && !cloud)
+    return {
+      refused: `The name ${CLOUD_ACTOR} goes only to the key that an iterate Cloud publishes at its own address, and this link names no address (cloud). Start again from the Cloud's own page.`,
+    };
+  if (cloud && actor !== CLOUD_ACTOR)
+    return { refused: `The field cloud goes only with the name ${CLOUD_ACTOR}.` };
+  if (cloud && !cloudOriginOf(cloud))
+    return {
+      refused:
+        "The Cloud's address (cloud) must be an https address with no path, such as https://cloud.iterate.com.",
+    };
+  if (cloud && provide)
+    return { refused: "iterate Cloud's key adds events: it lends no capability." };
   if (!label || label.length > 100) return { refused: "The service must give a short name." };
   if (!/^[A-Za-z0-9_-]+$/.test(publicKey)) return { refused: "The service sent no public key." };
   // A key a member allows on a page reaches integrations alone: a link someone was tricked into
@@ -113,11 +139,13 @@ export function serviceKeyRequestOf(
     return {
       refused: `The service must name what it asks for: a capability to lend (provide), or where under ${SERVICE_PATHS_ROOT} it adds events (paths).`,
     };
+  if (cloud) return { actor, label, publicKey, paths, cloud };
   return provide ? { actor, label, publicKey, paths, provide } : { actor, label, publicKey, paths };
 }
 
-/** WHAT A MEMBER SIGNS TO ALLOW A SERVICE'S KEY: the key and all that it may do, and the label
- *  that the consent page shows. The page signs this, and the answer is taken only for the same. */
+/** WHAT A MEMBER SIGNS TO ALLOW A SERVICE'S KEY: the key and all that it may do, the label that
+ *  the consent page shows, and for iterate Cloud's key the Cloud's origin. The page signs this, and
+ *  the answer is taken only for the same. */
 export function enrolPayloadOf(key: string, ask: ServiceKeyRequest) {
   return {
     key,
@@ -125,6 +153,7 @@ export function enrolPayloadOf(key: string, ask: ServiceKeyRequest) {
     label: ask.label,
     paths: ask.paths,
     provide: ask.provide || null,
+    cloud: ask.cloud,
   };
 }
 
@@ -141,7 +170,8 @@ export function allowsExactly(
     payload.actor === asked.actor &&
     payload.label === asked.label &&
     JSON.stringify(payload.paths) === JSON.stringify(asked.paths) &&
-    (payload.provide || null) === asked.provide
+    (payload.provide || null) === asked.provide &&
+    (payload.cloud || null) === (asked.cloud || null)
   );
 }
 
@@ -210,17 +240,26 @@ export function statementInParts(
         { text: " now, the key's holder takes it when that lend ends." },
       ],
     );
+  // the Cloud's name and origin are checked: the origin published this very key under that name
+  const named = ask.cloud ? checked(ask.actor) : link(ask.actor);
   if (adds.length)
     sentences.push([
       { text: "Each event that it adds shows the name " },
-      link(ask.actor),
+      named,
       { text: " and this key." },
     ]);
-  sentences.push([
-    { text: "The link says that the key belongs to " },
-    link(`“${ask.label}”`),
-    { text: "." },
-  ]);
+  if (ask.cloud)
+    sentences.push([
+      { text: "The key is the one that " },
+      checked(ask.cloud),
+      { text: " publishes as iterate Cloud's." },
+    ]);
+  else
+    sentences.push([
+      { text: "The link says that the key belongs to " },
+      link(`“${ask.label}”`),
+      { text: "." },
+    ]);
   return sentences;
 }
 
@@ -265,6 +304,19 @@ export function scopePlainly(
     ? "It cannot approve requests, and it reads nothing but what the agents send it."
     : "It cannot read anything, approve requests or reach an agent.";
   return `This lets whoever holds this key ${can}. ${cannot}`;
+}
+
+/** THE CONSENT PAGE'S FIRST WORDS FOR iterate Cloud's KEY. The Cloud's host is what the member
+ *  must recognise, so it names the asker; the link's label never does. A key of the Cloud's is
+ *  trusted further than any other service's: what it adds, the mind reads as the providers' own
+ *  (core/configs/default cloud-deliveries.ts). */
+export function cloudPlainly(cloud: string, mind: string) {
+  const host = new URL(cloud).host;
+  return {
+    heading: `iterate Cloud at ${host} asks to add events to ${mind}`,
+    can: `With this key it can add events under ${SERVICE_PATHS_ROOT}, and ${mind} reads them as GitHub's, Slack's, Google's and X's own. It can read nothing and change nothing else.`,
+    recognise: `The key is the one that ${host} publishes. Sign only if ${host} is the iterate Cloud that you use.`,
+  };
 }
 
 /** What the key lets its service do, in a person's words: for the consent page and `/keys`. */
