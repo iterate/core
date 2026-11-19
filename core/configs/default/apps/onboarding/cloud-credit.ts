@@ -39,6 +39,7 @@ export type CreditFailure =
   | "none-today" // 402 iterate_credit_none_today: no new grant today
   | "paused" // 402 iterate_credit_paused: iterate's total for the day is spent
   | "not-connected" // 402 iterate_credit_not_connected: this mind has no grant (a balance)
+  | "not-approved" // 403 iterate_credit_not_approved: an owner of iterate has not let this mind in yet
   | "not-recognised" // 401: the Cloud did not recognise this mind's signature
   | "no-working-key" // 502: the Cloud could not use this mind's key
   | "stack-without-proxy" // the stack keeps no secret by proxy
@@ -105,6 +106,7 @@ const REFUSALS: Record<string, CreditFailure> = {
   iterate_credit_none_today: "none-today",
   iterate_credit_paused: "paused",
   iterate_credit_not_connected: "not-connected",
+  iterate_credit_not_approved: "not-approved",
 };
 
 /** Why the proxy refused, from its status and its error's code. */

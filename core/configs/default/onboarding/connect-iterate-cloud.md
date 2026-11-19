@@ -24,7 +24,9 @@ the company that made this mind, gives it $10 of credit for OpenAI and Exa. The 
 with ONE passkey press: the rule that lets iterate add messages under `/minds/iterate.iterate.com/`
 (the same rule as `let-iterate-in.md`). When the signed rule lands, the mind asks iterate Cloud
 for the grant and makes `/secrets/openai` and `/secrets/exa` secrets by iterate's proxy, where no
-key of the owner's is set. The owner's own key is never replaced.
+key of the owner's is set. The owner's own key is never replaced. A person at iterate approves
+each mind before its credit comes: until then the connect answers `not-approved`, nothing is set,
+the owner's rule stays, and a later `connect` gets the credit.
 
 Who pays: before the connect, the mind's agents already work, paid by the owner's own Cloudflare
 account (its AI Gateway credit, the last of the agents' keys in `agents.ts`). After it, each agent

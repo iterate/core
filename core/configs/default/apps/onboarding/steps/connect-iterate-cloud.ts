@@ -104,6 +104,8 @@ const FAILURES: Record<string, string> = {
   "none-today":
     "iterate gives a limited number of new credits each day, and today's are gone. Try again tomorrow (UTC).",
   paused: "iterate's credit is paused until tomorrow (UTC).",
+  "not-approved":
+    "iterate has not approved this mind yet. A person at iterate approves each mind. Try again when they have.",
   stopped: "The connect stopped before it finished.",
   spent: "This mind's iterate credit is used.",
   "approval-rule":
@@ -117,6 +119,10 @@ const RULE_STANDS =
 
 /** The reasons whose fix is the update command. */
 const UPDATE_REASONS = new Set(["not-recognised", "no-working-key", "stack-without-proxy"]);
+
+/** iterate's proxy grants the credit only to a mind that an owner of iterate let in with a passkey
+ *  (else `not-approved`): the offer says so before the owner signs. */
+const APPROVED_FIRST = "A person at iterate approves each mind before its credit comes.";
 
 /** WHO PAYS before the connect: the agents' last key is the mind's AI Gateway (agents.ts). */
 const AGENTS_PAID_TODAY =
@@ -348,6 +354,7 @@ function words(state: StepState, context: StepContext): Card {
       left
         ? `Your mind has ${dollars(left)} of iterate's credit for AI left: voice calls, web research, and your agents' model requests.`
         : `iterate, the company that made this software, gives your mind ${dollars(CREDIT_USD)} of credit for AI: voice calls, web research, and your agents' model requests.`,
+      ...(left ? [] : [APPROVED_FIRST]),
       AGENTS_PAID_TODAY,
     ],
     points: [
@@ -477,6 +484,9 @@ async function creditOutcome(context: StepContext): Promise<Outcome> {
     const kinds = await Promise.all(CREDIT_SECRETS.map(({ path }) => context.credit.secret(path)));
     if (!kinds.some(takesCredit)) return { ownKeys: true };
     const answer = await context.credit.connect();
+    // no grant, so nothing is set: a secret by proxy would only be refused. On "not-approved" the
+    // owner's rule stays, so that iterate can tell the mind once it is approved, and a later
+    // press connects with no new passkey
     if (!answer.ok) return { failed: answer.reason };
     // a spent grant sets nothing: the next check would only switch the proxy off again
     if (spentOf(answer.balance) === "spent") return { failed: "spent" };

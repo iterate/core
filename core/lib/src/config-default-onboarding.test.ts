@@ -122,6 +122,7 @@ test("not asked: the card says what iterate sees and cannot see, and offers Conn
   });
   expect(card?.text).toEqual([
     "iterate, the company that made this software, gives your mind $10 of credit for AI: voice calls, web research, and your agents' model requests.",
+    "A person at iterate approves each mind before its credit comes.",
     "Your agents already work without it, paid by your own Cloudflare account (its AI Gateway credit). After you connect, each agent request goes to iterate's credit first.",
   ]);
   expect(card?.points?.find((point) => point.title === "When the $10 is spent")?.text).toBe(
@@ -254,6 +255,10 @@ test("an owner's own OpenAI key is never written: the credit takes Exa alone, an
 test.for([
   ["none-today", /today's are gone\. Try again tomorrow \(UTC\)\./],
   ["paused", /iterate's credit is paused until tomorrow \(UTC\)\./],
+  [
+    "not-approved",
+    /iterate has not approved this mind yet\. A person at iterate approves each mind\. Try again when they have\./,
+  ],
   ["not-recognised", /did not recognise this mind's signature/],
   ["cloud-unreachable", /iterate Cloud did not answer\. Try again in a minute\./],
 ] as const)(
@@ -269,9 +274,30 @@ test.for([
   },
 );
 
+test("not approved yet: no secret by proxy, the rule stands, and a press once iterate approved the mind connects with no new passkey", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({ connect: { ok: false, reason: "not-approved" } });
+  const context = contextOf(mind, fake.credit);
+  const refused = await runStep(context, STEP, "connect");
+  expect(refused).toMatchObject({ status: "failed" });
+  expect(fake).toMatchObject({ secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" } });
+  expect(refused.words).toMatch(/Your signed rule still lets iterate send help and updates/);
+  expect(refused.words).toMatch(/Buttons: Try again · Not now · End the rule/);
+  // a person at iterate approved the mind: the Cloud grants
+  fake.state.connect = { ok: true, balance: BALANCE };
+  await nextMs();
+  const connected = await runStep(context, STEP, "connect");
+  expect(connected).toMatchObject({ status: "connected" });
+  expect(mind).toMatchObject({ proposed: [] });
+  expect(fake).toMatchObject({
+    secrets: { "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" },
+  });
+});
+
 test.for([
   "none-today",
   "paused",
+  "not-approved",
   "not-recognised",
   "no-working-key",
   "cloud-unreachable",
@@ -618,7 +644,7 @@ test("a balance that comes back above zero (an estimate settled lower): the card
     "Your mind has $0.10 of iterate's credit for AI left: voice calls, web research, and your agents' model requests.",
   );
   expect(offer.words).toContain("When the $0.10 is spent");
-  expect(offer.words).not.toMatch(/gives your mind \$10/);
+  expect(offer.words).not.toMatch(/gives your mind \$10|approves each mind/);
   const again = await runStep(context, STEP, "connect");
   expect(again).toMatchObject({ status: "connected" });
   expect(again.words).toMatch(/\$0\.10 of \$10 left\./);
@@ -642,6 +668,9 @@ test("the guides say who pays, and the spoken offer does not claim the agents ne
       " ",
     );
   const guide = read("onboarding/connect-iterate-cloud.md");
+  expect(guide).toContain(
+    "A person at iterate approves each mind before its credit comes: until then the connect answers `not-approved`, nothing is set, the owner's rule stays, and a later `connect` gets the credit.",
+  );
   expect(guide).toContain(
     "before the connect, the mind's agents already work, paid by the owner's own Cloudflare account",
   );
@@ -1328,6 +1357,18 @@ test.for([
     "none-today",
   ],
   [402, { error: { code: "iterate_credit_paused" } }, "paused"],
+  [
+    403,
+    {
+      error: {
+        code: "iterate_credit_not_approved",
+        message:
+          "iterate has not approved this mind yet. A person at iterate lets a mind in with their passkey; then connect again.",
+        remainingUsd: 0,
+      },
+    },
+    "not-approved",
+  ],
   [401, {}, "not-recognised"],
   [502, {}, "no-working-key"],
   [500, {}, "cloud-unreachable"],
