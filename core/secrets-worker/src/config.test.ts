@@ -15,11 +15,17 @@ const ITERATE__CLOUDFLARE_CLIENT = JSON.stringify({
   clientId: "the-stack-client",
   clientSecret: "a client secret for a test, never a real one",
 });
+/** The stack's SFU app and TURN key, as the deploy binds them: one made, one not. */
+const ITERATE__CLOUDFLARE_REALTIME = JSON.stringify({
+  sfu: { appId: "the-sfu-app", appSecret: "an app secret for a test, never a real one" },
+  turn: { refusal: "Authentication error" },
+});
 const ITERATE__CLOUDFLARE_ACCOUNT_ID = "0".repeat(32);
 const VARS = {
   ITERATE,
   ITERATE__AT_REST_KEY,
   ITERATE__CLOUDFLARE_CLIENT,
+  ITERATE__CLOUDFLARE_REALTIME,
   ITERATE__CLOUDFLARE_ACCOUNT_ID,
 };
 
@@ -49,9 +55,15 @@ test("a dump of the config prints REDACTED where the at-rest key and the client'
   expect(JSON.parse(JSON.stringify(config))).toMatchObject({
     atRestKey: "REDACTED",
     cloudflareClient: { clientId: "the-stack-client", clientSecret: "REDACTED" },
+    cloudflareRealtime: {
+      sfu: { appId: "the-sfu-app", appSecret: "REDACTED" },
+      turn: { refusal: "Authentication error" },
+    },
   });
   expect(`${config.atRestKey}`).toBe("REDACTED");
-  expect(inspect(config, { depth: 5 })).not.toMatch(/an at-rest key for a test|a client secret/);
+  expect(inspect(config, { depth: 5 })).not.toMatch(
+    /an at-rest key for a test|a client secret|an app secret/,
+  );
 });
 
 test("a stack whose deploy made no client says so, with Cloudflare's words", () => {
@@ -72,6 +84,16 @@ test.for([
 ] as const)("a config with %s is refused, and the refusal names the variable", ([, value]) => {
   expect(() => secretsConfigOf({ ...VARS, ITERATE__CLOUDFLARE_CLIENT: value })).toThrow(
     "ITERATE__CLOUDFLARE_CLIENT",
+  );
+});
+
+test.for([
+  ["no word of the SFU app and TURN key", undefined],
+  ["an app with no secret", JSON.stringify({ sfu: { appId: "a" }, turn: { refusal: "c" } })],
+  ["no word of the TURN key", JSON.stringify({ sfu: { refusal: "c" } })],
+] as const)("a config with %s is refused, and the refusal names the variable", ([, value]) => {
+  expect(() => secretsConfigOf({ ...VARS, ITERATE__CLOUDFLARE_REALTIME: value })).toThrow(
+    "ITERATE__CLOUDFLARE_REALTIME",
   );
 });
 

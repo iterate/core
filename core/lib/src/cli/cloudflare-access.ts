@@ -75,6 +75,9 @@ export const STACK_SCOPES = [
   "workers-routes.write",
   // the apex and wildcard records of each zone
   "dns.write",
+  // the Realtime SFU app and the TURN key that a call app uses. Not the only permission that
+  // makes them: "Realtime" or "Realtime Admin" does too (core/alchemy src/realtime.ts)
+  "calls.write",
   // telemetry's two API tokens of the account
   MAKES_API_TOKENS,
   // What those two tokens hold beside the catalog's write: a token made through a sign-in may

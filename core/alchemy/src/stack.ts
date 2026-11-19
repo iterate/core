@@ -39,6 +39,7 @@ import { ArtifactsRepoSubscription } from "./artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinks } from "./catalog-tables-of-sinks.ts";
 import { CloudflareOAuthClient } from "./cloudflare-oauth-client.ts";
 import { type MindConfig, namesOf } from "./config.ts";
+import { REALTIME_SFU, realtimeConfigOf, TURN_KEY } from "./realtime.ts";
 
 const core = (path: string) => resolve(import.meta.dirname, "../..", path);
 /** A Worker's fetch to a hostname of its own zone reaches the Worker routed there. */
@@ -311,6 +312,13 @@ export const mindStack = (config: MindConfig) =>
       scopes: CLOUDFLARE_READ_SCOPES,
     });
 
+    // ── the stack's Realtime SFU app and TURN key at Cloudflare: calls work from the first deploy ──
+    // Neither costs anything until a call uses it. Cloudflare shows each one's secret only when
+    // it makes it: the stack's state keeps it. A deploy whose credential may not make Realtime
+    // (Calls) resources makes neither, and says so in one line (./realtime.ts).
+    const realtimeSfu = yield* Cloudflare.Calls.App(REALTIME_SFU, { name: names.realtimeSfu });
+    const turnKey = yield* Cloudflare.Calls.TurnKey(TURN_KEY, { name: names.turnKey });
+
     // ── secrets ──
     const secrets = yield* Cloudflare.Worker("Secrets", {
       ...sharedWorkerProps,
@@ -336,6 +344,19 @@ export const mindStack = (config: MindConfig) =>
                   : { refusal },
               ),
             ),
+          ),
+        ),
+        // The SFU app and TURN key above, for this Worker alone, which serves them as two secrets
+        // that the stack made: each one's id and secret, or why it was not made. One secret
+        // variable, as JSON (core/secrets-worker/src/config.ts `cloudflareRealtime`).
+        ITERATE__CLOUDFLARE_REALTIME: Output.all(
+          realtimeSfu.appId,
+          realtimeSfu.secret,
+          turnKey.keyId,
+          turnKey.key,
+        ).pipe(
+          Output.map(([appId, appSecret, keyId, key]) =>
+            Redacted.make(JSON.stringify(realtimeConfigOf({ appId, appSecret, keyId, key }))),
           ),
         ),
         // the account that the stack runs in: a grant through the client above must reach it alone

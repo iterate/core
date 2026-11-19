@@ -16,13 +16,19 @@ with no passkey left a way back in. What follows is the deploy by hand.
   and nothing that only a mind Worker binds.
 - Every resource of the account is named `iterate-<alchemy.stageName>-…` (`namesOf` in
   `src/config.ts`).
-- The stack's state, with the generated keys, the two API tokens' values and the OAuth client's
-  secret, is in the Worker `iterate-<alchemy.stageName>-state` of the same account.
+- The stack's state, with the generated keys, the two API tokens' values and the secrets of the
+  OAuth client, the SFU app and the TURN key, is in the Worker `iterate-<alchemy.stageName>-state` of the same account.
 - One private OAuth client of the account, `iterate-<alchemy.stageName>-cloudflare`, registered
   with read scopes alone (iterate/api `CLOUDFLARE_READ_SCOPES`). A member connects the mind to
   its own account through it, and the secrets Worker alone holds its secret.
+- One Realtime SFU app, `iterate-<alchemy.stageName>-realtime-sfu`, and one TURN key,
+  `iterate-<alchemy.stageName>-turn`, by Alchemy's own resources. The secrets Worker alone holds
+  their secrets, and serves them as `/secrets/cloudflare-realtime-sfu` and
+  `/secrets/cloudflare-turn`. They cost nothing until a call uses them.
 - Six providers of our own are beside the script, each for one thing that Alchemy does not do
-  (read in 2.0.0-beta.85 and in beta.87, the version that `pnpm-workspace.yaml` pins). The header of each file says what, and when the file can go.
+  (read in 2.0.0-beta.85 and in beta.87, the version that `pnpm-workspace.yaml` pins), and one
+  wrapper of Alchemy's own (`src/realtime.ts`). The header of each file says what, and when the
+  file can go.
 
 ## The one input
 
@@ -75,6 +81,11 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   seconds longer, makes no client and says so, and each later deploy asks again. Until one makes
   it, a member makes a client by hand and gives it to the mind (the template's
   `cloudflare.md`).
+- The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
+  permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
+  asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,
+  says so in one line, and the secrets Worker answers `/secrets/cloudflare-realtime-sfu` and
+  `/secrets/cloudflare-turn` as not set, with that reason. Each later deploy asks again.
 - Every zone must be in the account already. Alchemy does not take over a resource that exists,
   such as a DNS record of the zone: remove it, or pass `--adopt`.
 
@@ -108,6 +119,9 @@ A destroy erases the mind: its contexts, files, repos, members and secrets. It l
 - The TXT record `_dmarc.<zone>`, which Cloudflare's Email Sending wrote.
 - R2's record of the telemetry bucket's data catalog, as inactive. No API removes it.
 - The OAuth client, when the destroy's credential may not delete OAuth clients: the destroy
+  says so and goes on.
+- The SFU app and the TURN key, when the destroy's credential lacks the permission to delete Realtime (Calls)
+  resources: the destroy
   says so and goes on.
 - The account's Zero Trust organization and its one-time PIN login. They belong to the account,
   and other things in it may use them (`src/access-team.ts`).

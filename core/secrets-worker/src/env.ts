@@ -23,6 +23,9 @@ declare global {
       /** Made by the stack and bound as a secret: the config's `cloudflareClient`, as JSON
        *  (./config.ts). Never returned or logged. */
       ITERATE__CLOUDFLARE_CLIENT: string;
+      /** Made by the stack and bound as a secret: the config's `cloudflareRealtime`, as JSON
+       *  (./config.ts). Never returned or logged. */
+      ITERATE__CLOUDFLARE_REALTIME: string;
       /** The config's `cloudflareAccountId`: the account that the stack runs in (./config.ts). */
       ITERATE__CLOUDFLARE_ACCOUNT_ID: string;
       /** One object per secret, named by its path (./secret/durable-object.ts). */

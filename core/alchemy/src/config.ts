@@ -86,6 +86,8 @@ export const namesOf = ({ alchemy }: { alchemy: { stageName: string } }) => {
     ownerEmailProof: `${prefix}-owner-email-proof`,
     secrets: `${prefix}-secrets`,
     cloudflareClient: `${prefix}-cloudflare`,
+    realtimeSfu: `${prefix}-realtime-sfu`,
+    turnKey: `${prefix}-turn`,
     mind: `${prefix}-mind`,
     mindKv: `${prefix}-mind-kv`,
     files: `${prefix}-files`,

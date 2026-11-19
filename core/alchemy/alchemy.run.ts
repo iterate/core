@@ -13,6 +13,7 @@ import { CatalogTablesOfSinksProvider } from "./src/catalog-tables-of-sinks.ts";
 import { CloudflareOAuthClientProvider } from "./src/cloudflare-oauth-client.ts";
 import { loadMindConfig, namesOf } from "./src/config.ts";
 import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
+import { CallsWithoutWriteProviders } from "./src/realtime.ts";
 import { mindStack, refuseDeploy } from "./src/stack.ts";
 
 const config = loadMindConfig();
@@ -43,6 +44,9 @@ export default Alchemy.Stack(
       CatalogTablesOfSinksProvider(),
       CloudflareOAuthClientProvider(),
       DataCatalogProviderThatWaitsForItsToken(),
+      // Alchemy's own providers of the SFU app and TURN key, where a credential without "Calls
+      // Write" leaves them not made (src/realtime.ts): these win over `Cloudflare.providers()`
+      CallsWithoutWriteProviders(),
     ).pipe(Layer.provideMerge(Cloudflare.providers())),
     // The state, with the generated keys, lives in the mind's own account. Alchemy opens it for
     // a deploy and for a destroy, and a destroy does not run the stack's program: so both are

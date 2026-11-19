@@ -37,6 +37,7 @@ import {
   type PendingSecretOAuth,
 } from "../secret-oauth.ts";
 import { startLinkOf } from "../secret-oauth-start.ts";
+import { stackSecretDescription, stackSecretOf, stackSecretRefusal } from "../stack-secrets.ts";
 import {
   isStackTokenEndpoint,
   stackClientFor,
@@ -110,6 +111,9 @@ import {
 } from "./key-ops.ts";
 
 type Current = StoredSecret;
+
+/** The nonce of a secret that the stack made: it has no cell, and it is never refreshed. */
+const STACK_NONCE = "stack";
 
 // Per fixed minute, in memory: an eviction resets them. `verifyHmac` is not counted.
 const OPERATIONS_PER_MINUTE = 300;
@@ -306,9 +310,20 @@ export class SecretDurableObject extends DurableObject<Env> {
     return configOf(this.env).atRestKey.exposeSecret();
   }
 
+  /** What the stack holds at this path, when the path is one whose value the deploy made
+   *  (../stack-secrets.ts): the config is its value, and this object's storage is not read. */
+  #stackSecret(path: string) {
+    return stackSecretOf(configOf(this.env).cloudflareRealtime, path);
+  }
+
   // The pages' own calls and another secret's `clientSecretFor` are this Worker's alone: no door
   // outside it reaches them.
   async secret(path: string, verb: string, input: unknown): Promise<unknown> {
+    const stack = this.#stackSecret(this.#pathOf(path));
+    if (stack) {
+      if (verb === "describe") return stackSecretDescription(stack, path);
+      throw stackSecretRefusal(path, verb);
+    }
     const verbs: {
       [V in SecretVerb]: (input: SecretVerbs[V]["input"]) => Promise<SecretVerbs[V]["answer"]>;
     } = {
@@ -1593,8 +1608,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     // An ask of the Cloud uses no value of the secret: nothing is substituted or pinned. It is
     // still a request that the secret's connection makes, so the secret's rule holds it as any
     // other. Asked of the request that is sent: a wait call sends the stored text.
+    const stack = this.#stackSecret(path);
     const askFor = (sent: Request) => {
-      const connected = this.#current()?.cell.refresh;
+      // a secret that the stack made has no connection: whatever this object stored is not read
+      const connected = stack ? undefined : this.#current()?.cell.refresh;
       return askOf(
         sent,
         connected?.kind === "oauth-refresh-token" && connected.client && "cloud" in connected.client
@@ -1608,11 +1625,22 @@ export class SecretDurableObject extends DurableObject<Env> {
     const upgrades = request.headers.get("upgrade")?.toLowerCase() === "websocket";
     // The pin is checked at every read: after a refresh it may have moved.
     const read = async () => {
-      const current = this.#current();
-      if (!current) return null;
-      if (!originPinned(request.url, current.cell.urls))
-        throw pinRefusal(path, request.url, current.cell.urls);
-      const record = await this.#open(path, current);
+      // a secret that the stack made is the config's, and one that it did not make is not set
+      const current = stack ? undefined : this.#current();
+      const held = stack
+        ? "record" in stack && {
+            nonce: STACK_NONCE,
+            urls: stack.record.urls,
+            open: async () => stack.record,
+          }
+        : current && {
+            nonce: current.cell.nonce,
+            urls: current.cell.urls,
+            open: () => this.#open(path, current),
+          };
+      if (!held) return null;
+      if (!originPinned(request.url, held.urls)) throw pinRefusal(path, request.url, held.urls);
+      const record = await held.open();
       if (record.operations.includes("signStatement"))
         throw new SecretRefused(
           `itx.fetch: the secret ${path} is a signing key: it signs (signStatement) and is never sent`,
@@ -1621,7 +1649,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       // redirect with it or quote it back
       if (record.placement === "header" && secretPathsIn(request.url).length)
         throw new SecretRefused(placementRefusal(path));
-      return { nonce: current.cell.nonce, record };
+      return { nonce: held.nonce, record };
     };
     const usedFact = (status: number): SecretFact => ({
       type: "events.iterate.com/secret/used",

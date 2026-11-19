@@ -322,6 +322,10 @@ function stack(cloudflareClient: object, cloudflare: Cloudflare = {}) {
     }),
     ITERATE__AT_REST_KEY: "at-rest-key-for-tests-only",
     ITERATE__CLOUDFLARE_CLIENT: JSON.stringify(cloudflareClient),
+    ITERATE__CLOUDFLARE_REALTIME: JSON.stringify({
+      sfu: { refusal: "Authentication error" },
+      turn: { refusal: "Authentication error" },
+    }),
     ITERATE__CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
     APPROVALS: { getByName: () => ({ add: async () => {}, remove: async () => {} }) },
   };

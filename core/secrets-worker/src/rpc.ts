@@ -14,6 +14,7 @@ import { actsGate, secretObject } from "./objects.ts";
 import { listSetSecrets } from "./secret-list.ts";
 import { cloudOriginOf } from "./secrets.ts";
 import { hasCloudflareClient } from "./stack-client.ts";
+import { STACK_SECRET_PATHS } from "./stack-secrets.ts";
 
 export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   fetch(request: Parameters<SecretsService["fetch"]>[0]) {
@@ -29,10 +30,12 @@ export class Secrets extends WorkerEntrypoint<Env> implements SecretsService {
   }
   /* oxlint-enable iterate/mechanical-class-impl */
 
-  /** The secrets that are set, in one call (./secret-list.ts). */
+  /** The secrets that are set, in one call (./secret-list.ts), with the stack's own when its
+   *  deploy made them (./stack-secrets.ts). */
   async listSecrets() {
+    const set = this.env.APPROVALS.getByName(SET);
     return listSetSecrets({
-      list: this.env.APPROVALS.getByName(SET),
+      list: { paths: async () => [...new Set([...(await set.paths()), ...STACK_SECRET_PATHS])] },
       secretOf: (path) => {
         const secret = secretObject(this.env, path);
         return {
