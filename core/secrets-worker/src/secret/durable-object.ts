@@ -52,6 +52,7 @@ import {
   completeSecretOAuth,
   grantCeilingOf,
   grantRefusal,
+  provenanceRefusal,
   normalizeSecretOAuth,
   stateOf,
   type PendingSecretOAuth,
@@ -1365,7 +1366,13 @@ export class SecretDurableObject extends DurableObject<Env> {
     material: SecretMaterial,
   ): Promise<boolean> {
     const endpoint = options.revocationEndpoint;
-    if (!endpoint || options.cloud) return false;
+    // the refused tokens go back to the provider that issued them, and to no other host
+    if (
+      !endpoint ||
+      options.cloud ||
+      new URL(endpoint).origin !== new URL(options.tokenEndpoint).origin
+    )
+      return false;
     try {
       const clientSecret = await this.#clientSecretOf(path)(options.clientSecret, endpoint);
       let revoked = true;
@@ -2178,6 +2185,11 @@ export class SecretDurableObject extends DurableObject<Env> {
           source: refresh.source,
           material: record.material,
         });
+      else if (provenanceRefusal(refresh.tokenEndpoint, urls))
+        // a record older than the rule: the scope answer would be another host's word
+        throw new Error(
+          `${refresh.kind}: ${provenanceRefusal(refresh.tokenEndpoint, urls)}: the grant is not refreshed. Connect again.`,
+        );
       else if (refresh.client && "stack" in refresh.client)
         // A grant through the stack's own client at Cloudflare: the stack holds no such client's
         // secret, so it cannot refresh. A member connects again.

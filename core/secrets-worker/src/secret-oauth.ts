@@ -175,6 +175,8 @@ export function normalizeSecretOAuth(
     const url = new URL(String(options[key]));
     if (url.protocol !== "https:")
       throw new Error(`secrets.beginOAuth: ${key} must be an https URL`);
+    if (url.username || url.password)
+      throw codedError("INVALID_INPUT", `secrets.beginOAuth: ${key} carries no user or password`);
     return url;
   };
   const authorizationEndpoint = endpoint("authorizationEndpoint");
@@ -189,14 +191,18 @@ export function normalizeSecretOAuth(
   const account = accountLookupOf(options.account, urls);
   // the vault's own ceiling for the provider: the scope answer that it checks must be the
   // provider's own, so a grant whose token may go to the provider comes from its token endpoint
-  const own = ownCeilingOf([authorizationEndpoint.origin, tokenEndpoint.origin, ...urls]);
-  if (own && !ownCeilingOf([tokenEndpoint.origin]))
+  const origins = [authorizationEndpoint.origin, tokenEndpoint.origin, ...urls];
+  const own = ownCeilingOf(origins);
+  const odd = own && origins.find((origin) => ownCeilingOf([origin]) && !plainOrigin(origin));
+  if (odd)
     throw codedError(
       "INVALID_INPUT",
-      `secrets.beginOAuth: a grant whose token may go to ${own.provider} comes from ${own.provider}'s own token endpoint, not ${tokenEndpoint.origin}`,
+      `secrets.beginOAuth: ${odd} is ${own.provider}'s host in another spelling: name it in lower case, with no trailing dot and no port`,
     );
+  const unproven = provenanceRefusal(tokenEndpoint.origin, origins);
+  if (unproven) throw codedError("INVALID_INPUT", `secrets.beginOAuth: ${unproven}`);
   const grantedWithin = grantedWithinOf(options.grantedWithin, options.scope, Boolean(cloud), own);
-  const revocationEndpoint = revocationEndpointOf(options.revocationEndpoint, urls);
+  const revocationEndpoint = revocationEndpointOf(options.revocationEndpoint, tokenEndpoint.origin);
   const expectAccount = typeof options.expectAccount === "string" ? options.expectAccount : "";
   if ("expectAccount" in options && !expectAccount)
     throw codedError(
@@ -278,9 +284,33 @@ const OWN_CEILINGS: readonly { provider: string; hosts: RegExp; scopes: readonly
 
 /** The vault's own ceiling for the first provider that one of `origins` belongs to. */
 function ownCeilingOf(origins: readonly string[]) {
-  return OWN_CEILINGS.find(({ hosts }) =>
-    origins.some((origin) => URL.canParse(origin) && hosts.test(new URL(origin).hostname)),
-  );
+  return OWN_CEILINGS.find(({ hosts }) => origins.some((origin) => hosts.test(hostOf(origin))));
+}
+
+/** A host as the ceilings compare it: lower case, and with no trailing dot, which names the same
+ *  host in DNS (`mcp.cloudflare.com.`). "" for what is no URL. */
+function hostOf(origin: string): string {
+  if (!URL.canParse(origin)) return "";
+  return new URL(origin).hostname.toLowerCase().replace(/\.$/, "");
+}
+
+/** An origin spelled as `new URL` spells a plain one: no trailing dot, no port. */
+function plainOrigin(origin: string): boolean {
+  const url = new URL(origin);
+  return !url.port && !url.hostname.endsWith(".");
+}
+
+/** WHERE THE SCOPE ANSWER COMES FROM: a grant whose token may go to a provider with a ceiling of
+ *  the vault's own must come from that provider's own token endpoint, or the scopes that the vault
+ *  checks are another host's word. The words of the refusal, or undefined. At the connect and at
+ *  each refresh, since a record may be older than the rule. */
+export function provenanceRefusal(
+  tokenEndpoint: string,
+  origins: readonly string[],
+): string | undefined {
+  const own = ownCeilingOf(origins);
+  if (!own || ownCeilingOf([tokenEndpoint])) return undefined;
+  return `a grant whose token may go to ${own.provider} comes from ${own.provider}'s own token endpoint, not ${new URL(tokenEndpoint).origin}`;
 }
 
 /** THE CEILING THAT A GRANT IS HELD TO, at its consent and at each refresh: the caller's
@@ -345,15 +375,15 @@ function scopeListOf(value: unknown, client: boolean): string[] {
   return value;
 }
 
-/** RFC 7009's endpoint, where the vault gives back a grant that it refused: https, within the
- *  pin, since the refused token goes there. */
-function revocationEndpointOf(value: unknown, urls: string[]): string | undefined {
+/** RFC 7009's endpoint, where the vault gives back a grant that it refused: on the token
+ *  endpoint's own origin, the provider that issued the tokens, since the refused tokens go there. */
+function revocationEndpointOf(value: unknown, issuer: string): string | undefined {
   if (value === undefined) return undefined;
   const url = typeof value === "string" && URL.canParse(value) ? new URL(value) : null;
-  if (url?.protocol !== "https:" || !urls.includes(url.origin))
+  if (url?.protocol !== "https:" || url.origin !== issuer || url.username || url.password)
     throw codedError(
       "INVALID_INPUT",
-      `secrets.beginOAuth: revocationEndpoint is an https URL within the pin ${urls.join(", ")}`,
+      `secrets.beginOAuth: revocationEndpoint is an https URL on the token endpoint's own origin, ${issuer}`,
     );
   return url.href;
 }

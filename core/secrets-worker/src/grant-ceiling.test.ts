@@ -3,7 +3,7 @@ import { SECRET_USE_HEADER } from "iterate/secret-placeholder";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
 import { SecretDurableObject } from "./secret/durable-object.ts";
-import { grantRefusal } from "./secret-oauth.ts";
+import { grantCeilingOf, grantRefusal, provenanceRefusal } from "./secret-oauth.ts";
 
 // workerd's own comparison, which Node's Web Crypto has not got
 Object.assign(crypto.subtle, { timingSafeEqual });
@@ -299,6 +299,110 @@ test("a late refusal of one attempt leaves a newer attempt as it is", async () =
   expect(await result(secret, second.nonce)).toEqual({ status: "pending" });
 });
 
+test.for<[string, object, RegExp]>([
+  [
+    "a trailing dot",
+    {
+      authorizationEndpoint: `${CLOUDFLARE}./authorize`,
+      tokenEndpoint: `${CLOUDFLARE}./token`,
+      urls: [`${CLOUDFLARE}.`],
+    },
+    /mcp\.cloudflare\.com\. is Cloudflare's host in another spelling/,
+  ],
+  [
+    "a port",
+    {
+      tokenEndpoint: `${CLOUDFLARE}:8443/token`,
+      urls: [CLOUDFLARE, `${CLOUDFLARE}:8443`],
+    },
+    /:8443 is Cloudflare's host in another spelling/,
+  ],
+  [
+    "a user and password",
+    { tokenEndpoint: "https://user:pass@mcp.cloudflare.com/token" },
+    /tokenEndpoint carries no user or password/,
+  ],
+  [
+    "a revocation address on another host",
+    {
+      revocationEndpoint: "https://api.cloudflare.com/revoke",
+      urls: [CLOUDFLARE, "https://api.cloudflare.com"],
+    },
+    /revocationEndpoint is an https URL on the token endpoint's own origin, https:\/\/mcp\.cloudflare\.com/,
+  ],
+])(
+  "Cloudflare's host in %s: the connect is refused before anything is asked",
+  async ([, options, words]) => {
+    const { secret } = vault({});
+    await expect(
+      secret.secret(PATH, "beginOAuth", { ...CLOUDFLARE_CONNECT, ...options }),
+    ).rejects.toThrow(words);
+  },
+);
+
+test("Cloudflare's host in upper case is Cloudflare's: a grant that holds a write is refused", async () => {
+  const { secret, current } = vault({ granted: "zone.read workers-scripts.write offline_access" });
+  const { nonce } = await begun(secret, {
+    ...CLOUDFLARE_CONNECT,
+    authorizationEndpoint: "https://MCP.Cloudflare.COM/authorize",
+    tokenEndpoint: "https://MCP.Cloudflare.COM/token",
+    urls: ["https://MCP.CLOUDFLARE.COM"],
+  });
+  expect(await secret.completeOAuth(PATH, { code: "the-code", nonce, by: member })).toEqual(
+    refused(nonce, /may not hold: workers-scripts\.write/),
+  );
+  expect(current()).toBeUndefined();
+});
+
+test("a record or attempt from before, in any spelling of Cloudflare's host, is held to the vault's ceiling", () => {
+  const reads = grantCeilingOf(undefined, [`${CLOUDFLARE}./token`]);
+  expect({
+    dotted: reads?.includes("zone.read") && !reads.includes("workers-scripts.write"),
+    upper: grantCeilingOf(undefined, ["https://MCP.CLOUDFLARE.COM./token"]) === reads,
+    port: grantCeilingOf(undefined, [`${CLOUDFLARE}:8443`]) === reads,
+    elsewhere: grantCeilingOf(undefined, [ORIGIN]),
+  }).toEqual({ dotted: true, upper: true, port: true, elsewhere: undefined });
+});
+
+test("an attempt from before whose revocation address is another host: no token goes there, and the fact says not revoked", async () => {
+  const { secret, seen, olderAttempt } = vault({
+    granted: "zone.read workers-scripts.write offline_access",
+  });
+  const { nonce } = await begun(secret, { ...CONNECT, revocationEndpoint: TOKEN_ENDPOINT });
+  olderAttempt((options) => {
+    options.revocationEndpoint = "https://elsewhere.example.org/revoke";
+  });
+  expect(await secret.completeOAuth(PATH, { code: "the-code", nonce, by: member })).toEqual(
+    refused(nonce, /workers-scripts\.write/, false),
+  );
+  expect(seen).toEqual([`${TOKEN_ENDPOINT} authorization_code`]);
+});
+
+test("a grant from before whose token may go to Cloudflare, from a token endpoint elsewhere: its refresh is refused, and nothing is asked of that endpoint", async () => {
+  const { secret, current, seen, olderAttempt } = vault({ granted: "zone.read offline_access" });
+  const { nonce } = await begun(secret, CONNECT);
+  olderAttempt((options) => {
+    options.urls = [ORIGIN, "https://api.cloudflare.com"];
+  });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  await secret.completeOAuth(PATH, { code: "the-code", nonce, by: member });
+  vi.setSystemTime(Date.now() + 61 * 60_000);
+  await secret.fetch(useOfTheGrant());
+  vi.useRealTimers();
+  expect(seen).toEqual([
+    `${TOKEN_ENDPOINT} authorization_code`,
+    `${MCP} POST tools/list Bearer access-1`,
+  ]);
+  expect({
+    kept: Boolean(current()),
+    words: provenanceRefusal(TOKEN_ENDPOINT, [TOKEN_ENDPOINT, "https://api.cloudflare.com"]),
+  }).toEqual({
+    kept: true,
+    words:
+      "a grant whose token may go to Cloudflare comes from Cloudflare's own token endpoint, not https://mcp.example.net",
+  });
+});
+
 test("the ceiling's words: none named, one beyond, all within", () => {
   expect([
     grantRefusal(undefined, WITHIN),
@@ -426,5 +530,14 @@ function vault(provider: Provider) {
       .object({ cell: z.object({ refresh: z.unknown() }) })
       .optional()
       .parse(state.storage.kv.get("current"))?.cell;
-  return { secret, current, seen };
+  /** Changes the waiting attempt's options in place, as an attempt stored by an older vault. */
+  const olderAttempt = (change: (options: Record<string, unknown>) => void) => {
+    const pending = z
+      .object({ options: z.record(z.string(), z.unknown()) })
+      .passthrough()
+      .parse(state.storage.kv.get("pending"));
+    change(pending.options);
+    state.storage.kv.put("pending", pending);
+  };
+  return { secret, current, seen, olderAttempt };
 }
