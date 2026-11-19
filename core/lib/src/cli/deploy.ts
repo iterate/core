@@ -8,7 +8,8 @@
 //      person brings;
 //   3. what the account must have: a workers.dev name, Workers Paid and R2;
 //   4. the script's one input (core/alchemy/src/config.ts), written here: for a new mind from the
-//      answers, for a mind that is there already from that mind's own config (`deployedMind`);
+//      answers, for a mind that is there already from that mind's own config (`deployedMind`),
+//      for an earlier deploy whose config is here, from that config (`earlierDeployOf`);
 //      and for a new mind its identity (./identity.ts): one root key and the genesis that it
 //      signed, in two files on this computer, before anything is deployed;
 //   5. the stack's source (core/alchemy and the Workers), fetched and installed in the background
@@ -19,8 +20,9 @@
 //      coding agents of this computer.
 //
 // It handles the expected way alone. A run that stops says why, changes nothing more, and can be
-// run again: every step reads the account's state first, and a deploy keeps what it made. Each
-// choice has a flag, so a coding agent can run and supervise it with nobody at the terminal.
+// run again on the same computer: every step reads the account's state first, and a deploy keeps
+// what it made. Each choice has a flag, so a coding agent can run and supervise it with nobody at
+// the terminal.
 import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -486,7 +488,27 @@ type Run = {
   log: string;
   children: Set<ChildProcess>;
   say?: (line: string) => void;
+  /** a deploy that goes on with an earlier one whose config is here (`earlierDeployOf`) */
+  adopt?: boolean;
 };
+
+/** THE ARGUMENTS OF `pnpm run deploy` of core/alchemy. A deploy that stopped before its end can
+ *  leave a resource that Cloudflare made and Alchemy's state does not hold, since its creation was
+ *  under way at the stop: Alchemy then refuses it ("OwnedBySomeoneElse", for a Pipelines stream,
+ *  which carries no owner's tag) unless `--adopt` takes it over. The stage's state store says that
+ *  such a resource, under the stage's own name, is the stack's own: so a deploy that goes on
+ *  adopts. So does a new mind beside a store that reads as a destroy's leftover: a stack that
+ *  stopped before its first Worker and its first record reads the same from outside, with its
+ *  bucket, tokens and streams there, and after a real destroy nothing is there to take over. No
+ *  other deploy adopts. */
+export const deployArgsOf = (stageName: string, adopt = false) => [
+  "run",
+  "deploy",
+  "--stage",
+  stageName,
+  "--yes",
+  ...(adopt ? ["--adopt"] : []),
+];
 
 /** One `pnpm run deploy` of core/alchemy: its exit code, and whether the state store refused it.
  *  Every line goes to the log file, with the token's text replaced. */
@@ -494,7 +516,7 @@ function deployOnce(run: Run): Promise<{ code: number; storeRefused: boolean }> 
   return new Promise((done, failed) => {
     const file = createWriteStream(run.log, { flags: "a" });
     const { command, first } = run.source.pnpm;
-    const child = spawn(command, [...first, "run", "deploy", "--stage", run.stageName, "--yes"], {
+    const child = spawn(command, [...first, ...deployArgsOf(run.stageName, run.adopt)], {
       cwd: join(run.source.dir, "core/alchemy"),
       env: {
         ...process.env,
@@ -1005,6 +1027,73 @@ export async function deployedMind(cf: Cloudflare, account: string, stageName: s
   return { ...config, stageName };
 }
 
+/** THE STACK'S OTHER WORKERS, by which a state store with no mind is told apart: the script makes
+ *  the state store first, and a destroy erases every other Worker and leaves the store
+ *  (core/alchemy/README.md, "What a destroy leaves"). The boundary is read before (`deployedMind`). */
+const otherWorkersOf = (stageName: string) =>
+  ["telemetry", "auth", "secrets", "mind"].map((part) => `iterate-${stageName}-${part}`);
+
+/** AN EARLIER DEPLOY OF THE STAGE `stageName`, for an account where `deployedMind` found no mind:
+ *
+ *  - no state store of the stage (`iterate-<stage>-state`): undefined, a new mind;
+ *  - the store, and this computer holds the config of that stage, account and domain, with a mind
+ *    id, which this command wrote to `configFile` before it deployed: `mind`, which the run goes
+ *    on with. That is a deploy that stopped before its end, or a mind destroyed and deployed again
+ *    from here; either way that config is the mind's, and its id is kept;
+ *  - the store and no such config, with nothing else of the stage (the zone is not in use, and the
+ *    account holds none of the stack's other Workers): what a destroy leaves, `leftover`, a new mind
+ *    with a new identity, since nothing of the old mind is left;
+ *  - the store, no config, and more of the stage: a deploy that stopped, begun on another computer.
+ *    It stops with nothing changed, whatever the flags: a second identity for the same mind is a
+ *    fault, and the zone's records may be that deploy's own. */
+export async function earlierDeployOf(
+  cf: Cloudflare,
+  account: string,
+  stageName: string,
+  zone: { domain: string; uses: string[] },
+  configFile: string,
+) {
+  const { domain } = zone;
+  const store = `iterate-${stageName}-state`;
+  const workers = [store, ...otherWorkersOf(stageName)];
+  const answers = await Promise.all(
+    workers.map((name) => cf("GET", `/accounts/${account}/workers/scripts/${name}/settings`)),
+  );
+  const unread = answers.findIndex((answer) => answer.status !== 200 && answer.status !== 404);
+  if (unread >= 0)
+    throw new Error(
+      `Cloudflare did not answer whether the account holds the Worker ${workers[unread]} (${answers[unread]!.status}: ${answers[unread]!.error}). Nothing was changed. Run the command again.`,
+    );
+  if (answers[0]!.status === 404) return undefined;
+  const deployConfig = parsed(
+    KeptDeployConfig,
+    existsSync(configFile) ? readFileSync(configFile, "utf8") : "",
+  );
+  // the script's input holds the mind's own config, with its zones under `cloudflare`
+  const config =
+    deployConfig &&
+    DeployedConfig.safeParse({ ...deployConfig, zones: deployConfig.cloudflare.zones }).data;
+  if (
+    config?.mindId &&
+    config.zones.includes(domain) &&
+    deployConfig?.cloudflare.accountId === account &&
+    deployConfig.alchemy.stageName === stageName
+  )
+    return { mind: { ...config, stageName, deployConfig } };
+  const more = [
+    ...workers.slice(1).filter((_, index) => answers[index + 1]!.status === 200),
+    ...zone.uses,
+  ];
+  if (more.length === 0) return { leftover: store };
+  throw new Error(
+    [
+      `The account holds the state store of a mind's stack at ${domain}, the Worker ${store}, and more of that stack (${more.slice(0, 5).join(", ")}${more.length > 5 ? ", and more" : ""}), and no mind answers there yet: a deploy of it stopped before its end. The config that the deploy began with, with the mind's id, is on the computer that began it (${configFile.replace(homedir(), "~")}), and this computer has none for this account. Nothing was changed. Two ways on:`,
+      "- Run the command on the computer that began the deploy: it goes on with it.",
+      `- Or erase the half-made stack: \`pnpm run destroy --stage ${stageName} --yes\` in core/alchemy with a config of that stage and account (iterate deploy's README, "Erase a mind"). The command then deploys a new mind there. --erase-records erases no record of a half-made stack.`,
+    ].join("\n"),
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // The mind's first steps.
 
@@ -1235,9 +1324,10 @@ export function identityKeyLineOf(
 
 /** THE IDENTITY OF A MIND THAT HAS NONE (./identity.ts): the one that an earlier run on this
  *  computer made for this control-plane hostname, when a first deploy stopped half way, so that
- *  the mind goes on with that id; else a new one. Its key is on this computer when this answers. */
-async function identityOfNewMind(controlPlaneHostname: string) {
-  const earlier = await identityMadeFor(controlPlaneHostname, IDENTITIES);
+ *  the mind goes on with that id; else, and always where a destroy left the old mind's store
+ *  alone (`fresh`), a new one. Its key is on this computer when this answers. */
+async function identityOfNewMind(controlPlaneHostname: string, fresh: boolean) {
+  const earlier = fresh ? undefined : await identityMadeFor(controlPlaneHostname, IDENTITIES);
   if (!earlier) return (await newIdentity([controlPlaneHostname], IDENTITIES)).mindId;
   p.log.info(
     `Using the identity made on ${earlier.madeAt.toISOString().slice(0, 16).replace("T", " ")} UTC for ${controlPlaneHostname}.`,
@@ -1455,6 +1545,8 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     // settings hold the mind's own config. The command deploys over it with what the mind has,
     // but for what a flag names.
     const stageName = pick.zone?.stageName || stageNameOf(domain);
+    const work = join(CACHE, "deploys", stageName);
+    const configFile = join(work, "config.json");
     const deployed = await deployedMind(cf, account.id, stageName);
     if (deployed && !deployed.zones.includes(domain))
       throw new Error(
@@ -1464,12 +1556,25 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       throw new Error(
         `The mind at ${deployed.controlPlaneHostname} was deployed before its stack kept the deploy's whole config, so a deploy from here could drop what no Worker holds, such as its sandboxes' image. Nothing was changed. Deploy it once with its own config by core/alchemy's script (core/alchemy/README.md), then run the command again.`,
       );
+    // AN EARLIER DEPLOY (`earlierDeployOf`): one whose config is here goes on with that config, its
+    // mind's id among it, but for what a flag names; a destroy's leftover store is a new mind
+    const earlier = deployed
+      ? undefined
+      : await earlierDeployOf(
+          cf,
+          account.id,
+          stageName,
+          { domain, uses: pick.zone?.uses || [] },
+          configFile,
+        );
+    const unfinished = earlier?.mind;
+    const mind = deployed || unfinished;
     const config = deployConfigOf({
       accountId: account.id,
       domain,
-      owner: deployed ? input.owner : await newOwner(),
+      owner: mind ? input.owner : await newOwner(),
       controlPlaneHostname: input.controlPlaneHostname,
-      deployed,
+      deployed: mind,
     });
     const { controlPlaneHostname } = config;
     // a mind with no id gets one, which this run makes or checks: asked before anything changes
@@ -1502,13 +1607,22 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       )
         throw new Error("Nothing was changed.");
       p.log.info(`Deploying over it, ${how}.`);
-    } else p.log.info(`The mind's owner is ${config.ownerEmails.join(", ")}.`);
+    } else if (unfinished)
+      p.log.info(
+        `This computer holds the config of an earlier deploy of this mind (${configFile.replace(homedir(), "~")}), and the account holds its stack's state store: going on with that config. Its owners: ${config.ownerEmails.join(", ")}; its control plane: ${controlPlaneHostname}.`,
+      );
+    else if (earlier?.leftover)
+      p.log.info(
+        `The account holds ${earlier.leftover}, the state store that a destroy of a mind at ${domain} leaves, and nothing else of that mind: deploying a new mind there, with a new identity. Its owner is ${config.ownerEmails.join(", ")}.`,
+      );
+    else p.log.info(`The mind's owner is ${config.ownerEmails.join(", ")}.`);
     // A ZONE IN USE: the person says yes to losing everything on it before anything changes. The
     // erase itself is the last thing before the deploy (below). Asked here for a zone that the
     // account has, and after the wait for a zone that arrives during the run: Cloudflare copies
     // the records it finds when a domain is added.
+    // The domain of a mind, or of an earlier deploy whose config is here, is never erased.
     const holdingsToErase = async (uses: string[], zoneId: string) => {
-      if (uses.length === 0) return undefined;
+      if (mind || uses.length === 0) return undefined;
       const holdings = await holdingsOf(cf, zoneId);
       if (!holdings)
         throw new Error(
@@ -1530,10 +1644,9 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
         throw new Error("Nothing was changed. Run the command again with another domain.");
       return holdings;
     };
-    let holdings =
-      pick.zone && !deployed
-        ? await holdingsToErase(pick.zone.uses || [], pick.zone.id)
-        : undefined;
+    let holdings = pick.zone
+      ? await holdingsToErase(pick.zone.uses || [], pick.zone.id)
+      : undefined;
 
     // the account's workers.dev name: a new account has none, and a Worker needs one
     if (!resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)) {
@@ -1560,7 +1673,6 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       throw error;
     });
     waiting.done(`iterate's source is ready (${seconds(sourceBegan)}): ${ready.dir}`);
-    const work = join(CACHE, "deploys", stageName);
     mkdirSync(work, { recursive: true, mode: 0o700 });
     const log = join(work, "deploy.log");
     writeFileSync(log, "");
@@ -1621,8 +1733,8 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
     // its signed genesis are on this computer before the script gets the id. A mind that has an
     // id keeps it, and this run signs nothing. That holds for an id that is no genesis's hash
     // too: such a mind accepts no identity record, and the command does not mend it.
-    const mindId = config.mindId || (await identityOfNewMind(controlPlaneHostname));
-    const configFile = join(work, "config.json");
+    const mindId =
+      config.mindId || (await identityOfNewMind(controlPlaneHostname, Boolean(earlier?.leftover)));
     writeFileSync(configFile, `${JSON.stringify({ ...config, mindId }, null, 2)}\n`);
     access = await renewed();
     if (holdings) {
@@ -1641,12 +1753,13 @@ export async function deployMind(input: DeployInput, steps: MindSteps) {
       log,
       children,
       say: deploying.say,
+      adopt: Boolean(earlier),
     });
     if (code !== 0) {
       deploying.fail(`The deploy failed (exit ${code}).`);
       console.log(readFileSync(log, "utf8").trimEnd().split("\n").slice(-40).join("\n"));
       throw new Error(
-        `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again.`,
+        `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.`,
       );
     }
     deploying.done(`Deployed (${seconds(deployBegan)}).`);

@@ -139,9 +139,10 @@ What it does, in order:
 7. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
    `deploy.log` beside the config. A new state store can refuse the run that made it ("State
    store request failed"): the command then deploys once more by itself. Any other failure prints
-   the log's last lines and its path. Then the command waits until the sign-in page and the
-   domain's own front page answered five times in a row. On a dev zone the whole command took
-   2 min 14 s (18 Nov 2026): the deploy 1 min 50 s, the wait 20 s.
+   the log's last lines and its path. Run the command again on the same computer: it goes on
+   with that deploy ("A deploy that stopped", below). Then the command waits until the sign-in
+   page and the domain's own front page answered five times in a row. On a dev zone the whole
+   command took 2 min 14 s (18 Nov 2026): the deploy 1 min 50 s, the wait 20 s.
 
 **A mind that is there already.** When a route of the domain names a mind's boundary Worker, the
 command reads that mind's own config from Cloudflare (the boundary Worker's variable `ITERATE`),
@@ -156,6 +157,34 @@ run over a mind with a sandbox image planned no changes and took 29 s (18 Nov 20
 - A mind of iterate's earlier stack (its boundary Worker has no variable `ITERATE`) is refused
   too. The command does not move such a mind, and never offers to erase its domain: iterate
   moves it.
+
+**A deploy that stopped** before its end (a failure, or Ctrl-C) leaves the stack's state store
+(the Worker `iterate-<stage>-state`) and what else it made, the domain's records among them, and
+no mind yet. A destroy leaves the store too ([Erase a mind](#erase-a-mind)). When the account has
+the store and no mind's boundary Worker, the next run decides by what is there:
+
+- **This computer holds the config of that stage, account and domain** (`config.json` above,
+  written by the earlier run): it says "This computer holds the config of an earlier deploy of
+  this mind (…), and the account holds its stack's state store: going on with that config", and
+  deploys with it: the same mind id, owners and hostname, but for what a flag names. It asks
+  nothing about the domain's records and erases none. Its deploy takes over (Alchemy's
+  `--adopt`) what the earlier one made and had not yet recorded in the state, such as a
+  telemetry stream that was under way at the stop.
+- **No such config, and nothing else of the stack**: the domain is not in use (a destroy leaves
+  only a `_dmarc` record, which is no use) and the account holds none of the stack's other
+  Workers. The store is a destroy's leftover: the command deploys a new mind there, with a new
+  identity. This deploy takes over too: a stack that stopped before its first Worker and its
+  first record reads the same from outside, and after a real destroy nothing is there to take
+  over.
+- **No such config, and more of the stack** (the deploy began on another computer, or the cache
+  is gone): the command makes no second identity for the mind. It says what is there and stops,
+  with nothing changed. Run it on the computer that began the deploy, or erase the half-made
+  stack ("Erase a mind", with a config of that stage and account); the command then deploys a
+  new mind there. `--erase-records` erases no record of a half-made stack.
+
+One gap is known: a stop after the boundary Worker exists makes the next run a deploy over a
+mind that is there, which does not adopt, so a resource that was under way at the stop is
+refused. The way out is core/alchemy's script by hand, with `--adopt` after the deploy's flags.
 
 After the deploy, with a person at the terminal, it does the mind's first steps:
 
@@ -187,10 +216,10 @@ computer in to the mind first. Then it goes on and asks the onboarding agent, wh
 shows whether a model is connected. The coding agents that it offers the MCP server to are the
 ones on the terminal's computer, and it prints the commands for the other computer.
 
-**It handles the expected way alone.** A run that stops says why. Run it again: each step reads
-what the account has, and a deploy keeps what it made. A coding agent can run and supervise it:
-with nobody at the terminal each choice comes from its flag (`iterate deploy --help`), and a
-missing one is named.
+**It handles the expected way alone.** A run that stops says why. Run it again on the same
+computer: each step reads what the account has, and a deploy keeps what it made. A coding agent
+can run and supervise it: with nobody at the terminal each choice comes from its flag
+(`iterate deploy --help`), and a missing one is named.
 
 ## Erase a mind
 

@@ -16,8 +16,10 @@ import {
   candidatesOf,
   closingOf,
   chatgptPlanWay,
+  deployArgsOf,
   deployConfigOf,
   deployedMind,
+  earlierDeployOf,
   erateOf,
   firstSignInWords,
   identityKeyLineOf,
@@ -520,7 +522,7 @@ test("a mind of the earlier stack is named as such, and no path of the command d
   };
   const read = at("const deployed = await deployedMind(cf, account.id, stageName);");
   const noDeployConfig = at("if (deployed && !deployed.deployConfig)");
-  const ask = at("let holdings =\n      pick.zone && !deployed");
+  const ask = at("let holdings = pick.zone\n      ? await holdingsToErase(");
   const arrivedMind = at("if (arrived.stageName)");
   const arrivedErase = at("holdings = await holdingsToErase(arrived.uses");
   expect(read).toBeLessThan(noDeployConfig);
@@ -586,3 +588,180 @@ test("each closing command is one line with the whole address, however long the 
   expect(command).not.toContain("p.note(");
   expect(command).toContain("for (const line of closing.lines) console.log(`│  ${line}`);");
 });
+
+const store = "/workers/scripts/iterate-ada-labs-com-state/settings";
+const begun = {
+  mindId: "cd".repeat(32),
+  controlPlaneHostname: "iterate.ada-labs.com",
+  ownerEmails: ["ada@example.org"],
+  topology: "full-cloudflare",
+  alchemy: { stageName: "ada-labs-com" },
+  cloudflare: { accountId: "0".repeat(32), zones: ["ada-labs.com"] },
+};
+type Cf = Parameters<typeof earlierDeployOf>[0];
+const unused = { domain: "ada-labs.com", uses: [] };
+
+test("an account with no state store of the stage has no earlier deploy: the run is a new mind's", async () => {
+  const asked: string[] = [];
+  expect(
+    await earlierDeployOf(
+      accountWith({}, asked) as Cf,
+      "account",
+      "ada-labs-com",
+      unused,
+      configFileOf(begun),
+    ),
+  ).toBeUndefined();
+  // the store and the stack's other Workers; the boundary was read before (deployedMind)
+  expect(asked).toEqual(
+    ["state", "telemetry", "auth", "secrets", "mind"].map(
+      (part) => `GET /accounts/account/workers/scripts/iterate-ada-labs-com-${part}/settings`,
+    ),
+  );
+});
+
+test("the store with this stage's config on this computer goes on with that config: the same id, owners and hostname, a flag replaces one, and the deploy adopts", async () => {
+  const accountId = "0".repeat(32);
+  const file = configFileOf({ ...begun, cloudflare: { ...begun.cloudflare, containerImage: "x" } });
+  // a half-made stack, or one destroyed here and deployed again: the config decides
+  const stacks: Record<string, number>[] = [
+    { [store]: 200, "-auth/settings": 200 },
+    { [store]: 200 },
+  ];
+  for (const found of stacks) {
+    const earlier = await earlierDeployOf(
+      accountWith(found) as Cf,
+      accountId,
+      "ada-labs-com",
+      { domain: "ada-labs.com", uses: ["the MX record ada-labs.com"] },
+      file,
+    );
+    expect(earlier?.mind).toMatchObject({ mindId: "cd".repeat(32), stageName: "ada-labs-com" });
+  }
+  const { mind } =
+    (await earlierDeployOf(
+      accountWith({ [store]: 200 }) as Cf,
+      accountId,
+      "ada-labs-com",
+      unused,
+      file,
+    )) || {};
+  // what deployMind writes from it: the whole config again, so the rerun plans no other mind
+  expect(deployConfigOf({ accountId, domain: "ada-labs.com", deployed: mind })).toEqual({
+    ...begun,
+    cloudflare: { ...begun.cloudflare, containerImage: "x" },
+  });
+  expect(
+    deployConfigOf({
+      accountId,
+      domain: "ada-labs.com",
+      owner: "grace@example.org",
+      deployed: mind,
+    }),
+  ).toMatchObject({ mindId: "cd".repeat(32), ownerEmails: ["grace@example.org"] });
+  // its deploy adopts what an earlier one made and its state does not hold, and so does a new mind
+  // beside a leftover store (a stack that stopped before its first Worker reads the same); no other
+  expect(deployArgsOf("ada-labs-com", true)).toEqual([
+    "run",
+    "deploy",
+    "--stage",
+    "ada-labs-com",
+    "--yes",
+    "--adopt",
+  ]);
+  expect(deployArgsOf("ada-labs-com")).not.toContain("--adopt");
+  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
+  expect(command.match(/adopt: .*/g)).toEqual(["adopt: Boolean(earlier),"]);
+  expect(command).toContain(
+    'This computer holds the config of an earlier deploy of this mind (${configFile.replace(homedir(), "~")}), and the account holds its stack\'s state store: going on with that config. Its owners: ',
+  );
+});
+
+test("the store alone, with no config here, on a zone that is not in use, is a destroy's leftover: a new mind, with a new identity", async () => {
+  const earlier = await earlierDeployOf(
+    accountWith({ [store]: 200 }) as Cf,
+    "0".repeat(32),
+    "ada-labs-com",
+    unused,
+    configFileOf(),
+  );
+  expect(earlier).toEqual({ leftover: "iterate-ada-labs-com-state" });
+  // a new mind: no config of the earlier one, and an identity made now, never the one this
+  // computer may hold for the same hostname
+  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
+  expect(command).toContain("const unfinished = earlier?.mind;");
+  expect(command).toContain(
+    "(await identityOfNewMind(controlPlaneHostname, Boolean(earlier?.leftover)))",
+  );
+  expect(command).toContain(
+    "const earlier = fresh ? undefined : await identityMadeFor(controlPlaneHostname, IDENTITIES);",
+  );
+  expect(command).toContain(
+    "the state store that a destroy of a mind at ${domain} leaves, and nothing else of that mind: deploying a new mind there, with a new identity.",
+  );
+});
+
+test("the store with more of the stack and no config here stops the run with the two ways on, whatever the flags", async () => {
+  const accountId = "0".repeat(32);
+  const words =
+    /^The account holds the state store of a mind's stack at ada-labs\.com, the Worker iterate-ada-labs-com-state, and more of that stack \(([^)]+)\), and no mind answers there yet: a deploy of it stopped before its end\.[^]*Nothing was changed\. Two ways on:\n- Run the command on the computer that began the deploy: it goes on with it\.\n- Or erase the half-made stack: `pnpm run destroy --stage ada-labs-com --yes` in core\/alchemy with a config of that stage and account \(iterate deploy's README, "Erase a mind"\)\. The command then deploys a new mind there\. --erase-records erases no record of a half-made stack\.$/;
+  const stop = (found: Record<string, number>, uses: string[], file: string) =>
+    earlierDeployOf(
+      accountWith(found) as Cf,
+      accountId,
+      "ada-labs-com",
+      { domain: "ada-labs.com", uses },
+      file,
+    );
+  // a Worker of the stack; the zone in use; and either with a config of another account, of
+  // another domain, or with no mind id
+  await expect(
+    stop({ [store]: 200, "-telemetry/settings": 200 }, [], configFileOf()),
+  ).rejects.toThrow(words);
+  await expect(
+    stop({ [store]: 200 }, ["the MX record ada-labs.com"], configFileOf()),
+  ).rejects.toThrow(/more of that stack \(the MX record ada-labs\.com\)/);
+  for (const config of [
+    { ...begun, cloudflare: { ...begun.cloudflare, accountId: "1".repeat(32) } },
+    { ...begun, cloudflare: { ...begun.cloudflare, zones: ["ada.example"] } },
+    { ...begun, mindId: undefined },
+  ])
+    await expect(
+      stop({ [store]: 200, "-mind/settings": 200 }, [], configFileOf(config)),
+    ).rejects.toThrow(/more of that stack \(iterate-ada-labs-com-mind\)/);
+  // the command reads this before the zone's question, which then asks nothing and erases nothing
+  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
+  expect(command.indexOf("await earlierDeployOf(")).toBeGreaterThan(0);
+  expect(command.indexOf("await earlierDeployOf(")).toBeLessThan(
+    command.indexOf("let holdings = pick.zone\n      ? await holdingsToErase("),
+  );
+  expect(command).toContain("if (mind || uses.length === 0) return undefined;");
+  // a read that Cloudflare refuses says so, and decides nothing
+  await expect(stop({ "-auth/settings": 500 }, [], configFileOf(begun))).rejects.toThrow(
+    "Cloudflare did not answer whether the account holds the Worker iterate-ada-labs-com-auth (500: refused). Nothing was changed. Run the command again.",
+  );
+});
+
+test("a deploy that failed says that a run on this computer goes on with it", () => {
+  const command = readFileSync(new URL("./deploy.ts", import.meta.url).pathname, "utf8");
+  // the config file that the read takes is the one that the deploy writes
+  expect(command.match(/join\(work, "config\.json"\)/g)).toHaveLength(1);
+  expect(command).toContain(
+    "A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.",
+  );
+});
+
+/** An account's answer for the settings of the Worker at each path in `found`, a 404 elsewhere. */
+const accountWith =
+  (found: Record<string, number>, asked: string[] = []) =>
+  async (method: string, path: string) => {
+    asked.push(`${method} ${path}`);
+    const status = Object.entries(found).find(([end]) => path.endsWith(end))?.[1] ?? 404;
+    return { status, result: { bindings: [] }, total: 0, error: status === 200 ? "" : "refused" };
+  };
+
+const configFileOf = (config?: object) => {
+  const file = join(mkdtempSync(join(tmpdir(), "deploy-")), "config.json");
+  if (config) writeFileSync(file, JSON.stringify(config));
+  return file;
+};
