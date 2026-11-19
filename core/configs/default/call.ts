@@ -171,19 +171,19 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
   }
 
   /** Come in (again: fresh TURN credentials). `page`: this page's own row on the context. */
-  join(page: unknown) {
-    return this.#call.join(this.onBehalfOf(), page);
+  join(page: unknown, input?: unknown) {
+    return this.#call.join(this.onBehalfOf(), page, input);
   }
   /** One step of the SFU's signalling for this page. */
-  signal(page: unknown, step: unknown) {
-    return this.#call.signal(this.onBehalfOf(), page, step);
+  signal(page: unknown, step: unknown, admission?: unknown) {
+    return this.#call.signal(this.onBehalfOf(), page, step, admission);
   }
   /** Out of the call. */
-  leave(page: unknown) {
-    return this.#call.leave(this.onBehalfOf(), page);
+  leave(page: unknown, admission?: unknown) {
+    return this.#call.leave(this.onBehalfOf(), page, admission);
   }
   /** The voice agent: `{ start: sdpOffer }` (a member, from the host page), or `{ stop: why }`. */
-  voiceAgent(page: unknown, act: unknown) {
-    return this.#call.voiceAgent(this.onBehalfOf(), page, act);
+  voiceAgent(page: unknown, act: unknown, admission?: unknown) {
+    return this.#call.voiceAgent(this.onBehalfOf(), page, act, admission);
   }
 }

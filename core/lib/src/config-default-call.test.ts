@@ -4,7 +4,7 @@
 // as Cloudflare and OpenAI would. And the share links' fold (share.ts).
 /// <reference path="../../configs/default/files.d.ts" />
 import { existsSync, readFileSync } from "node:fs";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { CALL_FACET, CallDurableObject, noteEvent } from "../../configs/default/call.ts";
 import { Call, claimedName, type Asked } from "../../configs/default/call/rules.ts";
 import {
@@ -29,6 +29,7 @@ test("a member joins with their own page; a page that is not theirs, or code tha
       { urls: ["turns:turn.example:443?transport=tcp"], username: "u", credential: "c" },
     ],
     ttlS: 14_400,
+    admission: expect.any(String),
   });
   expect(room.sent.at(-1)).toMatchObject({
     authorization: 'Bearer getSecret("/secrets/cloudflare-turn", { field: "apiToken" })',
@@ -289,6 +290,161 @@ test("a voice agent session that OpenAI made is hung up when its host left meanw
   });
 });
 
+test("a late answer of an earlier claim on the same page leaves the new voice agent alone, and its own session is hung up", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner");
+  const session = (id: string) => ({ transport: { sdp: "answer" }, session: { id } });
+  room.openai = { status: 201, body: session("sess_old") };
+  let release = () => {};
+  room.openaiHeld = new Promise((resolve) => (release = resolve));
+  const first = room.call.voiceAgent(owner, "page-owner", { start: "offer" });
+  await vi.waitFor(() => expect(room.sent.at(-1)?.url).toMatch(/api\.openai\.com/));
+  await room.call.leave(owner, "page-owner");
+  await room.call.join(owner, "page-owner");
+  room.openai = { status: 201, body: session("sess_new") };
+  expect(await room.call.voiceAgent(owner, "page-owner", { start: "offer" })).toEqual({
+    sdp: "answer",
+  });
+  room.openai = { status: 201, body: session("sess_old") };
+  release();
+  expect(await first).toEqual({ error: "The voice agent was sent away." });
+  expect(room.call.live().voiceAgent).not.toBeNull();
+  await room.call.voiceAgent(owner, "page-owner", { stop: "done" });
+  const hangups = room.sent.map(({ url }) => url).filter((url) => url.endsWith("/hangup"));
+  expect(hangups.toSorted()).toEqual([
+    "https://api.openai.com/v1/live/sessions/sess_new/hangup",
+    "https://api.openai.com/v1/live/sessions/sess_old/hangup",
+  ]);
+});
+
+test("admissions: an earlier admission's leave, offer and voice agent never touch the page's newer admission", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  const first = await room.call.join(owner, "page-owner", { admit: "a-1" });
+  const second = await room.call.join(owner, "page-owner", { admit: "a-2" });
+  expect(second).not.toMatchObject({ admission: first.admission });
+  // an earlier admission's leave removes nothing
+  await room.call.leave(owner, "page-owner", first.admission);
+  expect(Object.keys(room.call.live().inCall)).toEqual(["page-owner"]);
+  // an earlier admission's offer is refused
+  await expect(
+    room.call.signal(owner, "page-owner", { publish: "mic", sdp: "o", mid: "0" }, first.admission),
+  ).rejects.toThrow("This page's call ended.");
+  // an earlier admission's voice agent start claims nothing
+  await expect(
+    room.call.voiceAgent(owner, "page-owner", { start: "offer" }, first.admission),
+  ).rejects.toThrow("This page's call ended.");
+  expect(room.call.live().voiceAgent).toBeNull();
+  // the current admission's own work goes on
+  expect(
+    await room.call.signal(
+      owner,
+      "page-owner",
+      { publish: "mic", sdp: "o", mid: "0" },
+      second.admission,
+    ),
+  ).toMatchObject({ sdp: "answer" });
+  await room.call.leave(owner, "page-owner", second.admission);
+  expect(room.call.live()).toMatchObject({ inCall: {} });
+});
+
+test("admissions: a newer admission's join while an earlier one's offer waits for its session keeps that session and its tracks out", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  const first = await room.call.join(owner, "page-owner", { admit: "a-1" });
+  let release = () => {};
+  room.sessionHeld = new Promise((resolve) => (release = resolve));
+  const offering = room.call.signal(
+    owner,
+    "page-owner",
+    { publish: "mic", sdp: "o", mid: "0" },
+    first.admission,
+  );
+  await vi.waitFor(() => expect(room.sent.at(-1)?.url).toMatch(/\/sessions\/new$/));
+  await room.call.join(owner, "page-owner", { admit: "a-2" });
+  release();
+  await expect(offering).rejects.toThrow("This page's call ended.");
+  expect(room.call.live().inCall["page-owner"]).toMatchObject({ tracks: {} });
+  // the session the earlier offer made is closed, not kept for the newer admission
+  expect(room.sent.map(({ url }) => url)).toContain(
+    `https://rtc.live.cloudflare.com/v1/apps/${ID}/sessions/session1abcdef`,
+  );
+  const second = await room.call.signal(
+    owner,
+    "page-owner",
+    { publish: "mic", sdp: "o", mid: "0" },
+    "a-2",
+  );
+  expect(second).toMatchObject({ sdp: "answer" });
+  expect(room.sent.at(-2)?.url).toMatch(/\/sessions\/new$/);
+});
+
+test("admissions: a TURN refresh of an admission that left admits nobody", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  const { admission } = await room.call.join(owner, "page-owner", { admit: crypto.randomUUID() });
+  expect(await room.call.join(owner, "page-owner", { admission })).toMatchObject({ admission });
+  await room.call.leave(owner, "page-owner", admission);
+  // a refresh of an admission that left puts the page back in no call
+  await expect(room.call.join(owner, "page-owner", { admission })).rejects.toThrow(
+    "This page's call ended.",
+  );
+  expect(room.call.live()).toMatchObject({ inCall: {} });
+});
+
+test("admissions: a voice agent whose host left while the call checked its setup starts no paid session", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  const { admission } = await room.call.join(owner, "page-owner", { admit: crypto.randomUUID() });
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_x" } } };
+  // the setup read waits on the stored secrets: the leave comes in while it does
+  const setup = room.call.setup.bind(room.call);
+  let left: Promise<void> | undefined;
+  room.call.setup = async () => {
+    left ||= room.call.leave(owner, "page-owner", admission);
+    await left;
+    return setup();
+  };
+  expect(await room.call.voiceAgent(owner, "page-owner", { start: "offer" }, admission)).toEqual({
+    error: "This page's call ended.",
+  });
+  expect({
+    agent: room.call.live().voiceAgent,
+    openai: room.sent.some(({ url }) => url.includes("api.openai.com")),
+  }).toEqual({ agent: null, openai: false });
+});
+
+test("admissions: a new admission of a voice agent's host ends that agent and closes the earlier sessions", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  const { admission } = await room.call.join(owner, "page-owner", { admit: crypto.randomUUID() });
+  await room.call.signal(owner, "page-owner", { publish: "mic", sdp: "o", mid: "0" }, admission);
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_h" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer" }, admission);
+  await room.call.join(owner, "page-owner", { admit: crypto.randomUUID() });
+  expect({
+    agent: room.call.live().voiceAgent,
+    tracks: room.call.live().inCall["page-owner"]?.tracks,
+  }).toMatchObject({ agent: null, tracks: {} });
+  expect(room.sent.map(({ url }) => url)).toContain(
+    "https://api.openai.com/v1/live/sessions/sess_h/hangup",
+  );
+});
+
+test("admissions: a kit from before admissions keeps the call's earlier behaviour", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  const { admission } = await room.call.join(owner, "page-owner");
+  // its TURN refresh is a bare join: the same admission, and the voice agent stays
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_o" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer" });
+  expect(await room.call.join(owner, "page-owner")).toMatchObject({ admission });
+  expect(room.call.live().voiceAgent).not.toBeNull();
+  await room.call.leave(owner, "page-owner");
+  expect(room.call.live()).toMatchObject({ inCall: {} });
+});
+
 test("a fresh call reads its setup at once, so a page can join before anyone has", async () => {
   const room = fakeCall();
   // unknown, and asked for, at the first look
@@ -310,7 +466,11 @@ test("a call outside the mind that does not answer fails within its bound, and t
 test("a mind with none of the secrets says so, and a join still works with no relay", async () => {
   const room = fakeCall({ secrets: false });
   room.held.set("page-owner", "user_owner");
-  expect(await room.call.join(owner, "page-owner")).toEqual({ iceServers: [], ttlS: 14_400 });
+  expect(await room.call.join(owner, "page-owner")).toEqual({
+    iceServers: [],
+    ttlS: 14_400,
+    admission: expect.any(String),
+  });
   expect(room.call.live()).toMatchObject({ setup: { sfu: false, turn: false, voice: false } });
   await expect(
     room.call.signal(owner, "page-owner", { publish: "mic", sdp: "o", mid: "0" }),
@@ -601,6 +761,10 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
     schedules: [] as number[],
     sent: [] as { url: string; authorization: string | null; body: unknown }[],
     openai: { status: 201, body: {} as unknown },
+    /** OpenAI's next answer to a start waits for this. */
+    openaiHeld: null as Promise<void> | null,
+    /** The SFU's next new session waits for this. */
+    sessionHeld: null as Promise<void> | null,
     hangup: 200,
     /** Cloudflare answers nothing. */
     hang: false,
@@ -641,6 +805,11 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
         const { pathname, hostname } = new URL(request.url);
         if (room.hang && hostname === "rtc.live.cloudflare.com")
           return new Promise<Response>(() => {});
+        if (hostname === "api.openai.com" && !pathname.endsWith("/hangup")) {
+          const held = room.openaiHeld;
+          room.openaiHeld = null;
+          await held;
+        }
         if (hostname === "api.openai.com")
           return pathname.endsWith("/hangup")
             ? new Response("{}", { status: room.hangup })
@@ -655,6 +824,11 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
               },
             ],
           });
+        if (pathname.endsWith("/sessions/new")) {
+          const held = room.sessionHeld;
+          room.sessionHeld = null;
+          await held;
+        }
         if (pathname.endsWith("/sessions/new"))
           return Response.json({ sessionId: `session${(sessions += 1)}abcdef` });
         if (request.method === "GET")

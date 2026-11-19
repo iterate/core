@@ -90,7 +90,23 @@ const Row = z.object({
   pub: z.string().optional(),
   sub: z.string().optional(),
   tracks: z.partialRecord(z.enum(KINDS), Track),
+  /** This page's admission: each join's own id. Work of an earlier admission of the same row
+   *  (its leave, its offers, its voice agent) is refused, so it never touches this one. */
+  admission: z.string().optional(),
 });
+/** An admission's id, as a page sends it back. A call with no id (a kit from before admissions)
+ *  keeps the earlier behaviour until every pin has moved. */
+const Admission = z.string().min(1).max(64).optional();
+const GONE = "This page's call ended.";
+/** The row is there, and `admission` (when the page sent one) is its current one. */
+const isCurrent = (row: { admission?: string } | undefined, admission: string | undefined) =>
+  Boolean(row) && (!admission || row!.admission === admission);
+const JoinInput = z
+  .union([
+    z.object({ admit: z.string().min(1).max(64) }),
+    z.object({ admission: z.string().min(1).max(64) }),
+  ])
+  .optional();
 /** The call as it is stored: parsed at each load, so a wrong shape starts a fresh call rather
  *  than throwing in every change and every live state. */
 const CallData = z.object({
@@ -102,6 +118,10 @@ const CallData = z.object({
       host: Who,
       since: z.number(),
       providerSession: z.string().optional(),
+      /** This claim's own id: a late answer of an earlier claim on the same page touches no other. */
+      claim: z.string().optional(),
+      /** The host's admission it was claimed in: a new admission of the host's row ends it. */
+      admission: z.string().optional(),
     })
     .nullable(),
   hangups: z.array(
@@ -204,12 +224,36 @@ export class Call {
 
   // ── what a page calls ──
 
-  /** Come in, or again (fresh TURN credentials). Answers the ICE servers and how long they last:
-   *  a member's 4 hours, a guest's 15 minutes, a guest's session. */
-  async join(asked: Asked, page: unknown) {
+  /** Come in. `{ admit: id }`: a new admission of this page, by the id the page chose (so the
+   *  page knows it also when the answer never comes); the earlier admission's work is refused
+   *  from here. `{ admission }`: fresh TURN credentials for that
+   *  admission while it is the row's, which admits nobody. Nothing: a kit from before admissions,
+   *  as before (a join again keeps the row's admission). Answers the ICE servers, how long they
+   *  last (a member's 4 hours, a guest's 15 minutes, a guest's session) and the admission. */
+  async join(asked: Asked, page: unknown, input?: unknown) {
+    const parsed = JoinInput.safeParse(input);
+    if (!parsed.success) refuse("A join takes nothing, { admit: id } or { admission: id }.");
+    const refresh = parsed.data && "admission" in parsed.data ? parsed.data.admission : undefined;
+    const admit = parsed.data && "admit" in parsed.data ? parsed.data.admit : undefined;
     const { who, member, own } = await this.#admit(asked, page);
+    let admission = refresh || admit || crypto.randomUUID();
+    const closes: string[] = [];
     await this.#locked((data, after) => {
+      if (refresh) {
+        if (data.pages[own]?.admission !== refresh) refuse(GONE);
+        Object.assign(data.pages[own]!, { who, member });
+        if (data.ai?.page === own && !member) this.#endAi(data, after, "its host is no member");
+        return;
+      }
       if (Object.hasOwn(data.pages, own)) {
+        if (admit) {
+          // a new admission of the same row: the earlier one's work is refused from here, its
+          // voice agent too
+          const row = data.pages[own]!;
+          closes.push(...[row.pub, row.sub].filter((id): id is string => Boolean(id)));
+          Object.assign(row, { admission, pub: undefined, sub: undefined, tracks: {} });
+          if (data.ai?.page === own) this.#endAi(data, after, "its host joined again");
+        } else admission = data.pages[own]!.admission ?? admission;
         // who and whether a member, from this call's stamp: a member's row is never swept as a
         // guest's, nor a guest's kept as a member's
         Object.assign(data.pages[own]!, { who, member });
@@ -222,29 +266,39 @@ export class Call {
       if (rows.length >= MAX_PAGES) refuse(`This call has ${MAX_PAGES} pages in it, its most.`);
       if (rows.filter((one) => one.who.actor === who.actor).length >= MAX_PAGES_PER_ACTOR)
         refuse(`You are in this call on ${MAX_PAGES_PER_ACTOR} pages. Leave on one first.`);
-      data.pages[own] = { who, member, since: this.#deps.now(), tracks: {} };
+      data.pages[own] = { who, member, since: this.#deps.now(), tracks: {}, admission };
       data.since ??= this.#deps.now();
       after.notes.push([`${nameOf(who)} joined the call.`, { kind: "joined", who }]);
     });
+    const { turnKeyId, appId } = await this.setup();
+    // the earlier admission's SFU sessions: the new one makes its own
+    for (const sessionId of closes)
+      if (appId)
+        await closeSession(this.#out(), appId, sessionId).catch(async (error) => {
+          await this.#deps.audit("call/close-failed", { error: String(error) }).catch(() => {});
+        });
     const ttlS = member ? TURN_TTL_S.member : TURN_TTL_S.guest;
-    const { turnKeyId } = await this.setup();
     let iceServers: unknown[] = [];
     if (turnKeyId)
       iceServers = await turnServers(this.#out(), turnKeyId, ttlS).catch(async (error) => {
         await this.#deps.audit("call/turn-failed", { error: String(error) }).catch(() => {});
         return [];
       });
-    return { iceServers, ttlS };
+    return { iceServers, ttlS, admission };
   }
 
   /** One step of the SFU's signalling for this page. Answers the SFU's description (an answer to
    *  a publish, an offer for a subscribe or a layer) and, for a subscribe, each track's mid. */
-  async signal(asked: Asked, page: unknown, input: unknown) {
+  async signal(asked: Asked, page: unknown, input: unknown, admission?: unknown) {
     const parsed = StepInput.safeParse(input);
     if (!parsed.success) refuse("No such step.");
     const step = parsed.data!;
     const { own } = await this.#admit(asked, page);
-    if (!(await this.#load()).pages[own]) refuse("Join the call first.");
+    this.#current((await this.#load()).pages[own], admission);
+    // checked again at each write and session below: a join of a newer admission may land while
+    // this signal waits on the SFU, and this signal then changes nothing of it
+    const id = Admission.parse(admission);
+    const ours = (row: z.infer<typeof Row> | undefined) => isCurrent(row, id);
     const { appId } = await this.setup();
     if (!appId) refuse("This mind has no Cloudflare Realtime SFU app yet.");
     const call = (method: string, path: string, body?: unknown) =>
@@ -260,14 +314,16 @@ export class Call {
       const kind = step.publish;
       if (kind === "ai" && this.#data?.ai?.page !== own)
         refuse("Only the voice agent's host publishes its voice.");
-      const sessionId = await this.#session(own, "pub");
+      const sessionId = await this.#session(own, "pub", id);
       const made = await call("POST", `/sessions/${sessionId}/tracks/new`, {
         sessionDescription: { type: "offer", sdp: step.sdp },
         tracks: [{ location: "local", mid: step.mid, trackName: kind }],
       });
+      let kept = false;
       await this.#locked((data, after) => {
         const row = data.pages[own];
-        if (row?.pub !== sessionId) return;
+        if (!ours(row) || row?.pub !== sessionId) return;
+        kept = true;
         const again = Boolean(row.tracks[kind]);
         row.tracks[kind] = { sessionId, trackName: kind, gen: ++data.n };
         if (!again && (kind === "camera" || kind === "screen"))
@@ -276,6 +332,7 @@ export class Call {
             { kind: `${kind}-on`, who: row.who },
           ]);
       });
+      if (!kept) refuse(GONE);
       return { sdp: made.sessionDescription?.sdp };
     }
     if ("unpublish" in step) {
@@ -283,7 +340,7 @@ export class Call {
       let sessionId: string | undefined;
       await this.#locked((data, after) => {
         const row = data.pages[own];
-        if (!row?.tracks[kind]) return;
+        if (!ours(row) || !row?.tracks[kind]) return;
         sessionId = row.tracks[kind].sessionId;
         delete row.tracks[kind];
         if (kind === "camera" || kind === "screen")
@@ -305,7 +362,7 @@ export class Call {
         return found ? [{ track, ...found }] : [];
       });
       if (!tracks.length) return { tracks: [] };
-      const sessionId = await this.#session(own, "sub");
+      const sessionId = await this.#session(own, "sub", id);
       const layers = step.layers || {};
       const made = await call("POST", `/sessions/${sessionId}/tracks/new`, {
         tracks: tracks.map(({ track, ...remote }) => ({
@@ -325,6 +382,7 @@ export class Call {
         })),
       };
     }
+    if (!ours(this.#data?.pages[own])) refuse(GONE);
     const sub = this.#data?.pages[own]?.sub;
     if ("layer" in step) {
       const found = this.#trackOf(step.layer, own);
@@ -354,7 +412,7 @@ export class Call {
     let old: string | undefined;
     await this.#locked((data) => {
       const row = data.pages[own];
-      if (!row) return;
+      if (!row || !ours(row)) return;
       if (step.reset === "pub") {
         old = row.pub;
         row.pub = undefined;
@@ -369,23 +427,26 @@ export class Call {
   }
 
   /** Out of the call: the page's SFU sessions close. */
-  async leave(asked: Asked, page: unknown) {
+  async leave(asked: Asked, page: unknown, admission?: unknown) {
     const actor = asked?.principal?.actor;
     const own = Page.safeParse(page);
-    if (!actor || !own.success) return;
+    const id = Admission.safeParse(admission);
+    if (!actor || !own.success || !id.success) return;
     const pages = (await this.#load()).pages;
     if (!Object.hasOwn(pages, own.data) || pages[own.data]!.who.actor !== actor) return;
-    await this.#remove(own.data, "left");
+    // an earlier admission's leave: the page is in the call again, and stays
+    if (id.data && pages[own.data]!.admission !== id.data) return;
+    await this.#remove(own.data, "left", id.data);
   }
 
   /** The voice agent: start it with the host page's SDP offer (a member alone), or send it away.
    *  An expected refusal is an answer, not an error: `{ error, credit? , noKey? }`. */
-  async voiceAgent(asked: Asked, page: unknown, input: unknown) {
+  async voiceAgent(asked: Asked, page: unknown, input: unknown, admission?: unknown) {
     const parsed = ActInput.safeParse(input);
     if (!parsed.success) refuse("The voice agent takes { start: an SDP offer } or { stop }.");
     const act = parsed.data!;
     const { who, member, own } = await this.#admit(asked, page);
-    if (!(await this.#load()).pages[own]) refuse("Join the call first.");
+    this.#current((await this.#load()).pages[own], admission);
     if (!member) refuse("Only a member can invite the voice agent.");
     if ("stop" in act) {
       await this.#locked((data, after) => this.#endAi(data, after, `${nameOf(who)} sent it away`));
@@ -395,15 +456,26 @@ export class Call {
       return { error: "This mind has no OpenAI key for the voice agent.", noKey: true };
     let claimed = false;
     let busy = "";
+    const claim = crypto.randomUUID();
+    const id = Admission.parse(admission);
+    let gone = false;
     await this.#locked((data, after) => {
+      // the host's admission, still the row's: one that left while the call checked its setup
+      // claims nothing, so no paid session starts for it
+      const row = data.pages[own];
+      if (!row || (id && row.admission !== id)) {
+        gone = true;
+        return;
+      }
       if (data.ai) {
         busy = data.ai.host.name;
         return;
       }
-      data.ai = { page: own, host: who, since: this.#deps.now() };
+      data.ai = { page: own, host: who, since: this.#deps.now(), claim, admission: row.admission };
       claimed = true;
       after.notes.push(["The voice agent joined the call.", { kind: "voice-agent-joined", who }]);
     });
+    if (gone) return { error: GONE };
     if (!claimed) return { error: `The voice agent is in the call, with ${busy}.` };
     // the session OpenAI made, once it made one: whatever fails after that, it is hung up
     let providerSession = "";
@@ -412,7 +484,9 @@ export class Call {
       providerSession = started.providerSession;
       let kept = false;
       await this.#locked((data) => {
-        if (data.ai?.page !== own) return;
+        // this claim's agent, not a later one of the same page (a leave, a join and a new invite
+        // came while OpenAI answered)
+        if (data.ai?.claim !== claim) return;
         data.ai.providerSession = providerSession;
         kept = true;
       });
@@ -425,7 +499,7 @@ export class Call {
       const why = error instanceof Error ? error.message : String(error);
       await this.#deps.audit("call/voice-agent-failed", { error: why }).catch(() => {});
       await this.#locked((data, after) => {
-        if (data.ai?.page === own) this.#endAi(data, after, "it could not start");
+        if (data.ai?.claim === claim) this.#endAi(data, after, "it could not start");
         if (providerSession) this.#owe(data, providerSession);
       });
       const credit = error instanceof VoiceRefused && error.status === 402;
@@ -580,7 +654,10 @@ export class Call {
   }
 
   /** The page's SFU session for sending or receiving, made on first use. */
-  async #session(page: string, which: "pub" | "sub"): Promise<string> {
+  /** The page's session `which`, made on first use, for `admission` (when the page sent one) while
+   *  it is the row's: one made for an admission that a newer one replaced meanwhile is closed. */
+  async #session(page: string, which: "pub" | "sub", admission?: string): Promise<string> {
+    if (!isCurrent(this.#data?.pages[page], admission)) refuse(GONE);
     const had = this.#data?.pages[page]?.[which];
     if (had) return had;
     const { appId } = await this.setup();
@@ -590,22 +667,30 @@ export class Call {
     let kept = "";
     await this.#locked((data) => {
       const row = data.pages[page];
-      if (!row) return;
+      if (!row || !isCurrent(row, admission)) return;
       row[which] ??= sessionId;
       kept = row[which]!;
     });
-    // left meanwhile, or another call made one first: this one is closed
+    // left meanwhile, a newer admission came, or another call made one first: this one is closed
     if (kept !== sessionId) await closeSession(this.#out(), appId!, sessionId).catch(() => {});
-    return kept || refuse("Join the call first.");
+    return kept || refuse(GONE);
+  }
+
+  /** The page's row, when `admission` (if the page sent one) is its current one; else refused. */
+  #current(row: z.infer<typeof Row> | undefined, admission: unknown) {
+    if (!row) refuse("Join the call first.");
+    const id = Admission.safeParse(admission);
+    if (!id.success || !isCurrent(row, id.data)) refuse(GONE);
   }
 
   /** A page out of the call, for `how`: its sessions close, and the voice agent and the call end
    *  with it when they must. */
-  async #remove(page: string, how: "left" | "gone" | "out") {
+  async #remove(page: string, how: "left" | "gone" | "out", admission?: string) {
     const closes: string[] = [];
     await this.#locked((data, after) => {
       const row = data.pages[page];
-      if (!row) return;
+      // a newer admission came in while this leave waited for the lock: it stays
+      if (!row || (admission && row.admission !== admission)) return;
       delete data.pages[page];
       closes.push(...[row.pub, row.sub].filter((id): id is string => Boolean(id)));
       const words = {
