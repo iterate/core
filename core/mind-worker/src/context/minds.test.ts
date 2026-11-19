@@ -186,6 +186,9 @@ function minds(
           signature: { format: "p256" as const, key: "k", sig: "s" },
         };
       },
+      fetchForMind: async () => {
+        throw new Error("no delivery sends by fetchForMind");
+      },
     }),
   });
   return { root, signed, posted };

@@ -34,7 +34,8 @@ export async function mindSignerOf(
   if (!from) return null;
   if (!(await stackKeyIsListed(env))) return NOT_LISTED;
   const published = await publishedMindOf(from, (request) => fetch(request));
-  if ("why" in published) return { refused: `${from} gave no keys: ${published.why}` };
+  // `from` is unverified here: 80 characters of it, as in the log line; a `why` names a hostname
+  if ("why" in published) return { refused: `${from.slice(0, 80)} gave no keys: ${published.why}` };
   // A key's id is the hash of its public key, computed here: the log lists no id of its own.
   for (const key of published.current.workingKeys) {
     if (key.purpose !== "statements") continue;

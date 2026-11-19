@@ -5,10 +5,21 @@ import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { identityKeyIdOf } from "iterate/mind-identity";
-import { fromBase64url, type StackKeyDocument, verifySignature } from "iterate/signed";
+import {
+  type Envelope,
+  fromBase64url,
+  MIND_FETCH_STATEMENT_TYPE,
+  signedMlDsa65,
+  signedP256,
+  type StackKeyDocument,
+  statementHeaderOf,
+  statementText,
+  verifySignature,
+} from "iterate/signed";
 import { expect, test, vi } from "vitest";
 import { newIdentityLog } from "../../lib/src/test-support/identity-log.ts";
 import { identityIntakeResponse, identityLogResponse } from "./identity.ts";
+import { mindOfSignedRequest } from "./mind-fetch.ts";
 import { signedByStack, stackKeyResponse } from "./stack-key.ts";
 import { statementsResponse } from "./statements.ts";
 import { sqliteStack, stackKeyPair } from "./test-support.ts";
@@ -161,6 +172,245 @@ test("a row replaced under a warm cache (a new database under the same binding) 
   expect(await verifySignature(signed, a.publicKey, { origin: "", rpId: "" })).toHaveProperty(
     "refused",
   );
+});
+
+test("a mind's signed request: D signs a GET for E's URL, E's auth Worker answers D by the id its log proves, with no rule, and answers the same statement again", async () => {
+  const [d, e] = [await mindAt("mind-d.net"), await mindAt("mind-e.net")];
+  for (const mind of [d, e]) {
+    await mind.post(mind.log.genesis);
+    await mind.listsItsKey();
+  }
+  let reads = 0;
+  vi.stubGlobal("fetch", async (request: Request) => {
+    const url = new URL(request.url);
+    reads += 1;
+    if (url.hostname !== "mind-d.net") return new Response(null, { status: 404 });
+    return identityLogResponse(d.env, {
+      hostname: url.hostname,
+      after: url.searchParams.get("after"),
+    });
+  });
+  const url = "https://cloud.mind-e.net/secret-proxy/api.openai.com/v1/responses?x=1";
+  const signed = (fields: Partial<Parameters<typeof signedByStack>[1]> = {}) =>
+    signedByStack(d.env, {
+      mind: "mind-e.net",
+      path: "/",
+      type: MIND_FETCH_STATEMENT_TYPE,
+      payload: { method: "GET", url },
+      expiresInSeconds: 300,
+      ...fields,
+    });
+  const check = async (envelope: Envelope, asked = { method: "get", url }) =>
+    mindOfSignedRequest(e.env, { statement: statementHeaderOf(envelope), ...asked });
+  const good = await signed();
+  const answer = await check(good);
+  expect(answer).toEqual({
+    principal: { actor: d.log.mind, kind: "mind", hostname: "mind-d.net" },
+    expiresAt: Math.floor(JSON.parse(good.statement).expires / 1000),
+  });
+  // e has no mind_melds row: who asks is not what they may do
+  expect(e.db.prepare(`select count(*) as rows from mind_melds`).all()).toEqual([{ rows: 0 }]);
+  // the same statement again, as a sender that reuses it sends it: the same answer, with no log
+  // read and no row of the statements table; another method or URL is still refused
+  const readsBefore = reads;
+  expect(await check(good)).toEqual(answer);
+  expect(await check(good, { method: "POST", url })).toEqual({
+    refused: "the statement is for GET, not POST",
+  });
+  expect(await check(good, { method: "GET", url: `${url}&y=2` })).toEqual({
+    refused: "the statement is for another URL",
+  });
+  expect(reads).toBe(readsBefore);
+  expect(e.db.prepare(`select count(*) as rows from statements`).all()).toEqual([{ rows: 0 }]);
+  expect(await check(await signed(), { method: "POST", url })).toEqual({
+    refused: "the statement is for GET, not POST",
+  });
+  expect(await check(await signed(), { method: "GET", url: `${url}&y=2` })).toEqual({
+    refused: "the statement is for another URL",
+  });
+  expect(await check(await signed({ type: "events.iterate.com/test/note-added" }))).toEqual({
+    refused: `the statement is no ${MIND_FETCH_STATEMENT_TYPE}`,
+  });
+  expect(await check(await signed({ mind: "mind-f.net" }))).toEqual({
+    refused: "the statement is for another mind",
+  });
+  expect(await check(await signed({ path: "/x" }))).toEqual({
+    refused: 'a signed request\'s statement has the path "/"',
+  });
+  expect(await check(await signed({ expiresInSeconds: 600 }))).toEqual({
+    refused:
+      "a signed request's statement starts before it ends, now, and lives five minutes at most",
+  });
+  expect(await check(await signed({ payload: { method: "GET", url, more: 1 } }))).toEqual({
+    refused: "the statement's payload is { method, url }",
+  });
+  const changed = await signed();
+  const forged = { ...changed, statement: changed.statement.replace('"GET"', '"PUT"') };
+  expect(await check(forged, { method: "PUT", url })).toEqual({
+    refused: "the signature is not this key's",
+  });
+  expect(
+    await mindOfSignedRequest(e.env, { statement: "not a statement", method: "GET", url }),
+  ).toEqual({ refused: "iterate-auth-statement holds no signed statement" });
+  const ended = await signed();
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now + 301_000);
+  expect(await check(ended)).toEqual({ refused: "the statement has expired" });
+  // a statement answered once is never answered past its end
+  expect(await check(good)).toEqual({ refused: "the statement has expired" });
+  clock.mockRestore();
+  // a statement that E's own stack signed for E: a mind is no caller of itself
+  const own = await signedByStack(e.env, {
+    path: "/",
+    type: MIND_FETCH_STATEMENT_TYPE,
+    payload: { method: "GET", url },
+  });
+  expect(await check(own)).toEqual({
+    refused: "the stack's own key signs for others, not for this stack",
+  });
+  // refused on its text before any log is read: an `at` an hour ahead, a URL that is no URL,
+  // another URL; whatever key signed it
+  const before = reads;
+  const stranger = await stackKeyPair();
+  const at = Date.now() + 3_600_000;
+  const ahead = await signedMlDsa65(
+    statementText({
+      mind: "mind-e.net",
+      from: "mind-d.net",
+      path: "/",
+      type: MIND_FETCH_STATEMENT_TYPE,
+      payload: { method: "GET", url },
+      at,
+      expires: Date.now() + 60_000,
+    }),
+    stranger.privateKey,
+    stranger.key,
+  );
+  expect(await check(ahead)).toEqual({
+    refused:
+      "a signed request's statement starts before it ends, now, and lives five minutes at most",
+  });
+  expect(
+    await mindOfSignedRequest(e.env, {
+      statement: statementHeaderOf(await signed()),
+      method: "GET",
+      url: "relative",
+    }),
+  ).toEqual({ refused: "the request's URL is no absolute URL" });
+  expect(await check(await signed(), { method: "GET", url: "https://elsewhere.example/" })).toEqual(
+    { refused: "the statement is for another URL" },
+  );
+  // a format that no working key signs
+  const p256 = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+    "sign",
+    "verify",
+  ])) as CryptoKeyPair;
+  const otherFormat = await signedP256(
+    statementText({
+      mind: "mind-e.net",
+      from: "mind-d.net",
+      path: "/",
+      type: MIND_FETCH_STATEMENT_TYPE,
+      payload: { method: "GET", url },
+      at: Date.now(),
+      expires: Date.now() + 60_000,
+    }),
+    p256.privateKey,
+    "a-p256-key",
+  );
+  expect(await check(otherFormat)).toEqual({
+    refused: "a mind's signed request is signed with its working key, ML-DSA-65",
+  });
+  expect(reads).toBe(before);
+});
+
+test("a mind's signed request that ends while its sender's log is read is not stamped", async () => {
+  const [g, h] = [await mindAt("mind-g.net"), await mindAt("mind-h.net")];
+  for (const mind of [g, h]) {
+    await mind.post(mind.log.genesis);
+    await mind.listsItsKey();
+  }
+  const started = Date.now();
+  vi.stubGlobal("fetch", async (request: Request) => {
+    // the log read takes two seconds by this clock
+    vi.spyOn(Date, "now").mockReturnValue(started + 2_000);
+    const url = new URL(request.url);
+    return identityLogResponse(g.env, {
+      hostname: url.hostname,
+      after: url.searchParams.get("after"),
+    });
+  });
+  const url = "https://mind-h.net/x";
+  const signed = await signedByStack(g.env, {
+    mind: "mind-h.net",
+    path: "/",
+    type: MIND_FETCH_STATEMENT_TYPE,
+    payload: { method: "GET", url },
+    expiresInSeconds: 1,
+  });
+  try {
+    expect(
+      await mindOfSignedRequest(h.env, {
+        statement: statementHeaderOf(signed),
+        method: "GET",
+        url,
+      }),
+    ).toEqual({ refused: "the statement has expired" });
+  } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+  expect(h.db.prepare(`select count(*) as rows from statements`).all()).toEqual([{ rows: 0 }]);
+});
+
+test("a mind is no caller of itself: a statement from this mind under a second working key of its own is refused before its log is read", async () => {
+  const k = await mindAt("mind-k.net");
+  await k.post(k.log.genesis);
+  const { publicKey } = await k.published();
+  const second = await stackKeyPair("second");
+  const listing = (key: string, label: string) => ({
+    signs: "raw" as const,
+    algorithm: "ML-DSA-65" as const,
+    publicKey: key,
+    label,
+    purpose: "statements",
+  });
+  expect(
+    await k.post(
+      await k.log.next(k.log.genesis, {
+        workingKeys: [listing(publicKey, "stack"), listing(second.publicKey, "second")],
+      }),
+    ),
+  ).toBe(200);
+  vi.stubGlobal("fetch", async (request: Request) => {
+    const url = new URL(request.url);
+    return identityLogResponse(k.env, {
+      hostname: url.hostname,
+      after: url.searchParams.get("after"),
+    });
+  });
+  const url = "https://mind-k.net/x";
+  const now = Date.now();
+  const own = await signedMlDsa65(
+    statementText({
+      mind: "mind-k.net",
+      from: "mind-k.net",
+      path: "/",
+      type: MIND_FETCH_STATEMENT_TYPE,
+      payload: { method: "GET", url },
+      at: now,
+      expires: now + 60_000,
+    }),
+    second.privateKey,
+    second.key,
+  );
+  try {
+    expect(
+      await mindOfSignedRequest(k.env, { statement: statementHeaderOf(own), method: "GET", url }),
+    ).toEqual({ refused: "a mind is no caller of itself: the statement is from this mind" });
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 test("migration 0018 takes the P-256 key of 0004 away, and the table keeps a seed", () => {

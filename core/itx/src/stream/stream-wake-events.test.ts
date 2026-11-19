@@ -87,6 +87,21 @@ test.for([
   expect({ woke: woken.wakeRecorded(), rows: rowsOf(woken) }).toEqual({ woke: true, rows: [] });
 });
 
+test("a pause hides no record of a request sent as the mind: paused, the record lands, an ordinary event does not, and after the resume the record is in the log", () => {
+  const db = new DatabaseSync(":memory:");
+  const stream = open(db, []);
+  wake(stream);
+  stream.append({ type: "events.iterate.com/itx/paused", payload: { reason: "code paused it" } });
+  expect(() => stream.append({ type: "demo/noted", payload: {} })).toThrow("stream paused");
+  const record = {
+    type: "events.iterate.com/itx/signed-request-sent",
+    payload: { peer: "peer.example", outcome: { status: 200 } },
+  };
+  stream.append(record);
+  stream.append({ type: "events.iterate.com/itx/resumed", payload: {} });
+  expect(stream.read(0, 500).events.map(({ type }) => type)).toContain(record.type);
+});
+
 test("a host whose list of wake events throws does not fail the wake", () => {
   const db = new DatabaseSync(":memory:");
   const woken = new Stream({

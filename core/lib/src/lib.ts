@@ -457,12 +457,18 @@ export function isSameOriginBrowserRequest(request: Pick<Request, "url" | "heade
   }
 }
 
+/** A cookie pair or name without the space and tab that a `Cookie` header allows around it, and
+ *  nothing else: `trim()` also takes a non-breaking or other Unicode space, which makes another
+ *  name on the wire read as a protected one. */
+export const cookieTrimmed = (text: string) => text.replace(/^[ \t]+|[ \t]+$/g, "");
+
 /** The value of the cookie `name` in a `Cookie` header, or null. */
 export function cookieValueOf(cookieHeader: string | null, name: string): string | null {
   for (const part of (cookieHeader || "").split(";")) {
     const separator = part.indexOf("=");
     if (separator < 0) continue;
-    if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+    if (cookieTrimmed(part.slice(0, separator)) === name)
+      return cookieTrimmed(part.slice(separator + 1));
   }
   return null;
 }

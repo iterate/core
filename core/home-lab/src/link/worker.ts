@@ -6,6 +6,7 @@ import { mindConfigOf, zoneOf } from "iterate/mind-config";
 import { reservedPathOf } from "iterate/mind-identity-log";
 import { withFacts } from "iterate/facts";
 import { secretPathsReferenced } from "iterate/secret-placeholder";
+import { ITERATE_STATEMENT_HEADER } from "iterate/signed";
 import type { ControlPlaneApi } from "iterate/api";
 import {
   type ControlPlaneSession,
@@ -13,6 +14,7 @@ import {
   MIND_TAKEN_OVER_CLOSE_CODE,
   type MindTarget,
 } from "iterate/workers";
+import { localEntranceRequest } from "./local-entrance.ts";
 import { isOwnHost } from "./own-host.ts";
 import { forwardEveryMethod, relayTo } from "./relay.ts";
 
@@ -64,18 +66,18 @@ export default {
     // THE MIND'S CODE NEVER ANSWERS THE TWO RESERVED PATHS (iterate/mind-identity-log
     // `reservedPathOf`), at this entrance as at the boundary's: here nothing else answers them.
     if (reservedPathOf(url.pathname)) return new Response("Not found\n", { status: 404 });
-    // only the boundary may stamp a caller
-    const headers = new Headers(
-      [...request.headers].filter(([name]) => !name.startsWith("x-itx-")),
-    );
-    return env.MIND.fetch(new Request(url, new Request(request, { headers })));
+    return env.MIND.fetch(localEntranceRequest(request, url));
   },
 } satisfies ExportedHandler<LinkEnv>;
 
 /** Every call goes to the session's door, but a `fetch` that names no secret leaves from here:
  *  through the link a large download is several times slower. */
 export class Door extends WorkerEntrypoint<LinkEnv> {
-  override async fetch(request: Request): Promise<Response> {
+  override async fetch(incoming: Request): Promise<Response> {
+    // a mind's signed statement is the platform's alone: none that code wrote goes out
+    const headers = new Headers(incoming.headers);
+    headers.delete(ITERATE_STATEMENT_HEADER);
+    const request = new Request(incoming, { headers });
     // The Link's `fetch`, not a stub's: workerd carries a WebSocket answer on the fetch channel only.
     if (secretPathsReferenced(request).length > 0) return linkOf(this.env).fetch(request);
     // a hostname of one of the mind's zones is the stack's boundary: any other is outside it

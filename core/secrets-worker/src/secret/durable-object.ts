@@ -1,12 +1,25 @@
 // The authority over one secret. The mind's `/secrets/<name>` context is its record, which the
 // mind's own code can withhold from or forge into, so nothing here reads it.
 import { DurableObject } from "cloudflare:workers";
-import type { CloudClientName, SecretMaterial, SecretOperation, SecretRefresh } from "iterate/api";
-import { codedError, ITERATE_CAUSE_HEADER, leavingTheStack } from "iterate/lib";
+import type {
+  CloudClientName,
+  SecretMaterial,
+  SecretOperation,
+  SecretProxy,
+  SecretRefresh,
+} from "iterate/api";
+import {
+  codedError,
+  errorCode,
+  ITERATE_CAUSE_HEADER,
+  leavingTheStack,
+  reportIssue,
+} from "iterate/lib";
 import { type Facts, withFacts } from "iterate/facts";
 import { controlPlaneOriginOf, zoneOf } from "iterate/mind-config";
 import {
   assertSecretPath,
+  headerNamesASecret,
   SECRET_OAUTH_CALLBACK_PATH,
   SECRET_HELD_HEADER,
   SECRET_USE_HEADER,
@@ -23,7 +36,12 @@ import type {
   SecretVerbs,
 } from "iterate/workers";
 import { z } from "zod";
-import type { Envelope } from "iterate/signed";
+import {
+  ITERATE_STATEMENT_HEADER,
+  mindFetchStatements,
+  signedRequestHeaders,
+  type Envelope,
+} from "iterate/signed";
 import type { PageCaller } from "../callback-page.ts";
 import { askOf, brokered, cloudClientOf, cloudPinRefusal } from "../cloud-client.ts";
 import { configOf, type Env } from "../env.ts";
@@ -54,6 +72,9 @@ import {
   isRecord,
   normalizeSecretRecord,
   originPinned,
+  type ProxiedSecretRecord,
+  proxiedSecretRecordOf,
+  secretProxyOf,
   originsOf,
   pinRefusal,
   publicFieldsOf,
@@ -119,7 +140,7 @@ const STACK_NONCE = "stack";
 const OPERATIONS_PER_MINUTE = 300;
 const FALSE_VERIFICATIONS_PER_MINUTE = 20;
 
-const useOf = ({ placement, operations, lendTo, statementPaths }: SealedCell): SecretUse => ({
+const useOf = ({ placement, operations, lendTo, statementPaths }: SecretUse): SecretUse => ({
   placement,
   operations,
   lendTo,
@@ -282,6 +303,9 @@ export type CollectionForm = Pick<
 class RefreshFailedRefusal extends SecretRefused {}
 
 export class SecretDurableObject extends DurableObject<Env> {
+  // a warm use by proxy awaits nothing but its dispatch: the opened proxy and the statements
+  #proxyOpened: { nonce: string; proxy: SecretProxy } | undefined;
+  #statements = mindFetchStatements(64);
   // Single-flight per cell: callers who 401 together share one mint. A caller holding a newer cell
   // queues behind the running one.
   #refreshing: { nonce: string; promise: Promise<SecretFact[]> } | undefined;
@@ -357,8 +381,13 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (!isRecord(input))
       throw codedError(
         "INVALID_INPUT",
-        "secrets.set: pass { material, urls, refresh?, public?, placement?, operations?, lendTo? }",
+        "secrets.set: pass { material, urls, refresh?, public?, placement?, operations?, lendTo? }, or { material: null, urls, proxy }",
       );
+    if (input.proxy !== undefined)
+      return {
+        result: { path },
+        facts: [{ path, events: [await this.#write(path, proxiedSecretRecordOf(input), {})] }],
+      };
     const record = normalizeSecretRecord(input.material, {
       urls: input.urls,
       refresh: input.refresh,
@@ -416,6 +445,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       cloudOrigin: cloud?.origin,
       public: current.public,
       ...useOf(cell),
+      ...(cell.byProxy && (await this.#proxyDescribed(path, current))),
     };
   }
 
@@ -453,8 +483,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       );
     this.ctx.storage.kv.put("imported-nonces", [...imported, nonce]);
     const versionBefore = this.#version();
+    let refusedProxy = false;
     try {
-      let record: SecretRecord;
+      let record: SecretRecord | ProxiedSecretRecord;
       let publicFields: Record<string, string> | undefined;
       try {
         record = await this.#recordOf(path, sealed.cell);
@@ -463,6 +494,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         // changed copy can then neither say another value, nor name a secret field to make it
         // public: it would have to know that field's value.
         if (sealed.public) {
+          if ("proxy" in record) throw new Error("a secret by proxy has no public fields");
           const given = Object.entries(sealed.public);
           publicFields = publicFieldsOf(
             record.material,
@@ -477,7 +509,11 @@ export class SecretDurableObject extends DurableObject<Env> {
           `secrets.importSealed: the cell for ${path} does not open under this stack's at-rest key, or its public fields are not those of its material`,
         );
       }
-      const fact = await this.#write(path, record, { imported: true, public: publicFields });
+      const fact = await this.#write(path, record, {
+        imported: true,
+        public: publicFields,
+        refusedProxy: () => (refusedProxy = true),
+      });
       return { result: { path }, facts: [{ path, events: [fact] }] };
     } catch (error) {
       // A CELL WHOSE VALUE IS NOT STORED WAS NOT IMPORTED, and its nonce is free again: it did
@@ -486,7 +522,8 @@ export class SecretDurableObject extends DurableObject<Env> {
       // damaged copy tried first nor a write that failed may shut the cell out for good. The
       // guard reads what the object holds now, not what this import stored: a set that lands
       // while a failing import is in flight keeps the nonce of a cell that was not imported.
-      if ((this.#current()?.cell.version ?? 0) <= versionBefore)
+      // A proxy refused over a set or a rule stored nothing, whatever the version says.
+      if ((this.#current()?.cell.version ?? 0) <= versionBefore || refusedProxy)
         this.ctx.storage.kv.put(
           "imported-nonces",
           (this.ctx.storage.kv.get<string[]>("imported-nonces") || []).filter(
@@ -536,17 +573,24 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #write(
     path: string,
-    record: SecretRecord,
+    record: SecretRecord | ProxiedSecretRecord,
     {
       public: publicFields,
       imported,
       by,
       empty,
-    }: { public?: Record<string, string>; imported?: true; by?: PageCaller; empty?: true },
+      refusedProxy,
+    }: {
+      public?: Record<string, string>;
+      imported?: true;
+      by?: PageCaller;
+      empty?: true;
+      refusedProxy?: () => void;
+    },
   ): Promise<SecretFact> {
     // A SECRET MADE TO SIGN HOLDS A P-256 KEY AND NOTHING ELSE, and says its public half, however
     // it was made: a key generated here, collected from a person, set or imported.
-    if (record.operations.includes("signStatement")) {
+    if ("material" in record && record.operations.includes("signStatement")) {
       if (record.refresh)
         throw codedError("INVALID_INPUT", `secrets: ${path} is made to sign, so it has no refresh`);
       const { publicKey, keyId, material } = await signingKeyOf(record.material).catch(
@@ -560,9 +604,28 @@ export class SecretDurableObject extends DurableObject<Env> {
       publicFields = { publicKey, keyId };
     }
     // `empty`: no write since the last delete, one still in flight included. Read with the version
-    // below and no await between, so no write can come in after the check.
-    if (empty && this.#version() > (this.ctx.storage.kv.get<number>("deleted-through") ?? 0))
-      throw codedError("INVALID_INPUT", `secrets: ${path} holds a value; delete it first`);
+    // below and no await between, so no write can come in after the check. A proxy is set only
+    // so; a later value's set takes the higher version, so the owner's own key always wins.
+    // a rule outlives a delete, and no rule holds a proxy: every use would be refused
+    if ("proxy" in record && this.#rule()) {
+      refusedProxy?.();
+      throw codedError(
+        "INVALID_INPUT",
+        `secrets.set with proxy: ${path} has an approval rule, which no use by proxy can pass; clear the rule first`,
+      );
+    }
+    if (
+      (empty || "proxy" in record) &&
+      this.#version() > (this.ctx.storage.kv.get<number>("deleted-through") ?? 0)
+    ) {
+      if ("proxy" in record) refusedProxy?.();
+      throw codedError(
+        "INVALID_INPUT",
+        "proxy" in record
+          ? `secrets.set with proxy: ${path} is set or being set; delete it first`
+          : `secrets: ${path} holds a value; delete it first`,
+      );
+    }
     // reserved before the seal awaits, so two writes in flight never share a version
     const version = this.#version() + 1;
     this.ctx.storage.kv.put("version", version);
@@ -581,7 +644,14 @@ export class SecretDurableObject extends DurableObject<Env> {
     const current = this.#current();
     if (!current || current.cell.version < version)
       this.ctx.storage.kv.put<Current>("current", { cell, public: publicFields });
-    console.info({ event: "secret.set", path, version, urls: record.urls, imported });
+    console.info({
+      event: "secret.set",
+      path,
+      version,
+      urls: record.urls,
+      imported,
+      proxy: "proxy" in record ? record.proxy.url : undefined,
+    });
     await this.keepListed(path);
     const fact = await this.#setFact(path, record, publicFields, imported, by);
     // As above, after the last await: a delete that came in while the list was written is the
@@ -608,7 +678,7 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   async #setFact(
     path: string,
-    record: Omit<SecretRecord, "material">,
+    record: Omit<SecretRecord, "material"> | ProxiedSecretRecord,
     publicFields: Record<string, string> | undefined,
     imported?: true,
     by?: PageCaller,
@@ -628,13 +698,22 @@ export class SecretDurableObject extends DurableObject<Env> {
         lendTo: record.lendTo,
         statementPaths: record.statementPaths,
         by: by ? { userId: by.userId, email: by.email } : undefined,
+        proxy: "proxy" in record ? record.proxy : undefined,
       },
     };
   }
 
-  async #sealCell(path: string, record: SecretRecord, version: number): Promise<SealedCell> {
+  async #sealCell(
+    path: string,
+    record: SecretRecord | ProxiedSecretRecord,
+    version: number,
+  ): Promise<SealedCell> {
     const nonce = crypto.randomUUID();
-    const { material: clear, urls, refresh, ...use } = record;
+    const { urls, refresh, ...rest } = record;
+    const { clear, use } =
+      "proxy" in rest
+        ? { clear: rest.proxy, use: { ...useOf(rest), byProxy: true as const } }
+        : { clear: rest.material, use: useOf(rest) };
     const material = await encryptSecretMaterial(
       clear,
       { context: path, urls, refresh, version, nonce, use },
@@ -644,7 +723,7 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   /** A cell of this path, opened with this stack's key: it opens only as what it was sealed as. */
-  async #recordOf(path: string, cell: SealedCell): Promise<SecretRecord> {
+  async #recordOf(path: string, cell: SealedCell): Promise<SecretRecord | ProxiedSecretRecord> {
     const material = await decryptSecretMaterial(
       cell.material,
       {
@@ -653,23 +732,51 @@ export class SecretDurableObject extends DurableObject<Env> {
         refresh: cell.refresh,
         version: cell.version,
         nonce: cell.nonce,
-        use: useOf(cell),
+        use: { ...useOf(cell), byProxy: cell.byProxy },
       },
       this.#key(),
     );
+    if (cell.byProxy)
+      return { proxy: secretProxyOf(material), urls: cell.urls, refresh: null, ...useOf(cell) };
     return { material, urls: cell.urls, refresh: cell.refresh, ...useOf(cell) };
   }
 
   async #open(path: string, current: Current): Promise<SecretRecord> {
+    if (current.cell.byProxy)
+      throw new SecretRefused(`secrets: ${path} goes by proxy and holds no value here`);
+    const record = await this.#opened(path, current);
+    if ("proxy" in record) throw new SecretRefused(unopened(path));
+    return record;
+  }
+
+  // one cell that does not open fails no list and no daily refresh
+  async #proxyDescribed(path: string, current: Current) {
+    try {
+      return { proxy: await this.#openProxy(path, current) };
+    } catch {
+      return {
+        byProxy: true as const,
+        unreadable: `${path} goes by proxy, and its cell does not open under this stack's at-rest key: set it again`,
+      };
+    }
+  }
+
+  async #openProxy(path: string, current: Current): Promise<SecretProxy> {
+    if (this.#proxyOpened?.nonce === current.cell.nonce) return this.#proxyOpened.proxy;
+    const record = await this.#opened(path, current);
+    if (!("proxy" in record)) throw new SecretRefused(unopened(path));
+    this.#proxyOpened = { nonce: current.cell.nonce, proxy: record.proxy };
+    return record.proxy;
+  }
+
+  async #opened(path: string, current: Current) {
     const { cell } = current;
     try {
       if (cell.context !== path || cell.version > this.#version())
         throw new Error("not this secret's current cell");
       return await this.#recordOf(path, cell);
     } catch {
-      throw new SecretRefused(
-        `itx.fetch: the stored material of ${path} cannot be opened (another key, or another secret's record) — set the secret again`,
-      );
+      throw new SecretRefused(unopened(path));
     }
   }
 
@@ -858,18 +965,20 @@ export class SecretDurableObject extends DurableObject<Env> {
       );
     const { lendTo } = useOf(current.cell);
     const refreshOnly = refreshOnlyFieldRefusal(current.cell.refresh, path, input.field);
-    const refusal = refreshOnly
-      ? `secrets: ${refreshOnly}`
-      : this.#rule()
-        ? // a secret that waits for approval is spent with one alone
-          `secrets: ${path} has an approval rule, so it is lent to no other secret's token request`
-        : current.cell.operations?.includes("signStatement")
-          ? `secrets: ${path} is a signing key, so it is lent to no other secret`
-          : lendTo && !lendTo.includes(borrower)
-            ? lendRefusal(path, borrower, lendTo)
-            : !originPinned(origin, current.cell.urls)
-              ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
-              : null;
+    const refusal = current.cell.byProxy
+      ? `secrets: ${path} goes by proxy and holds no value, so it is lent to no other secret`
+      : refreshOnly
+        ? `secrets: ${refreshOnly}`
+        : this.#rule()
+          ? // a secret that waits for approval is spent with one alone
+            `secrets: ${path} has an approval rule, so it is lent to no other secret's token request`
+          : current.cell.operations?.includes("signStatement")
+            ? `secrets: ${path} is a signing key, so it is lent to no other secret`
+            : lendTo && !lendTo.includes(borrower)
+              ? lendRefusal(path, borrower, lendTo)
+              : !originPinned(origin, current.cell.urls)
+                ? `secrets: the secret ${path} is pinned to ${current.cell.urls.join(", ")}, not ${origin} — so it is never sent there as a client secret`
+                : null;
     const outcome = refusal ? "refused" : "answered";
     console.info({ event: "secret.operated", path, verb: "clientSecretFor", borrower, outcome });
     if (refusal)
@@ -1380,6 +1489,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (!parsed.success)
       throw codedError("INVALID_INPUT", parsed.error.issues.map((i) => i.message).join("; "));
     const rule = parsed.data;
+    if (this.#current()?.cell.byProxy) throw codedError("INVALID_INPUT", proxyHoldsNoRule(path));
     if (!isTightening(this.#rule(), rule))
       throw codedError(
         "FORBIDDEN",
@@ -1433,6 +1543,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (parsed && !parsed.success)
         return refuse(parsed.error.issues.map((issue) => issue.message).join("; "));
       const rule = parsed?.data || null;
+      if (rule && this.#current()?.cell.byProxy) return refuse(proxyHoldsNoRule(path));
       this.#setRule(path, rule);
       if (rule) await this.env.APPROVALS.getByName(INDEX).add(path);
       return answer({ type: RULE_CONFIGURED, payload: { rule, signer, signed: envelope } });
@@ -1623,8 +1734,16 @@ export class SecretDurableObject extends DurableObject<Env> {
     // read below, and only for a rule that names strings of the body
     let body: string | null = null;
     const upgrades = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+    let proxied: string | undefined;
+    // cancelled on a refusal: workerd reports a body a Durable Object left unread
+    let unread: Request | undefined;
     // The pin is checked at every read: after a refresh it may have moved.
-    const read = async () => {
+    const read = async (): Promise<
+      | { nonce: string; record: SecretRecord }
+      | { nonce: string; proxy: SecretProxy; proxied: string }
+      | null
+    > => {
+      proxied = undefined;
       // a secret that the stack made is the config's, and one that it did not make is not set
       const current = stack ? undefined : this.#current();
       const held = stack
@@ -1640,6 +1759,26 @@ export class SecretDurableObject extends DurableObject<Env> {
           };
       if (!held) return null;
       if (!originPinned(request.url, held.urls)) throw pinRefusal(path, request.url, held.urls);
+      // only a stored cell goes by proxy: a secret that the stack made never does
+      if (current?.cell.byProxy) {
+        if (secretPathsIn(request.url).length)
+          throw new SecretRefused(
+            `itx.fetch: ${path} goes by proxy, so its placeholder sits in a header alone: in the URL it would go to the proxy`,
+          );
+        const target = new URL(request.url);
+        if (target.hostname.split(".").some((label) => label === "" || label === ".."))
+          throw new SecretRefused(
+            `itx.fetch: ${path} goes by proxy, and ${target.hostname} is no host to send it to`,
+          );
+        // `proxiedUrlOf` cuts the href at the origin's length, and the origin leaves out userinfo
+        if (target.username || target.password)
+          throw new SecretRefused(
+            `itx.fetch: ${path} goes by proxy, and a use by proxy takes no credentials in its URL: send them in a header`,
+          );
+        const proxy = await this.#openProxy(path, current);
+        proxied = proxiedUrlOf(proxy, target);
+        return { nonce: current.cell.nonce, proxy, proxied };
+      }
       const record = await held.open();
       if (record.operations.includes("signStatement"))
         throw new SecretRefused(
@@ -1651,6 +1790,12 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new SecretRefused(placementRefusal(path));
       return { nonce: held.nonce, record };
     };
+    const readValue = async () => {
+      const stored = await read();
+      if (stored && "proxy" in stored)
+        throw new SecretRefused(`itx.fetch: ${path} went by proxy while it was being sent`);
+      return stored;
+    };
     const usedFact = (status: number): SecretFact => ({
       type: "events.iterate.com/secret/used",
       payload: {
@@ -1658,11 +1803,19 @@ export class SecretDurableObject extends DurableObject<Env> {
         url: request.url,
         status,
         ...(held && { digest: held.digest }),
+        proxy: proxied,
       },
     });
-    const send = async (outbound: Request, retried: boolean) => {
+    // `nonce`: a use by proxy leaves only for the cell it read
+    const send = async (outbound: Request, retried: boolean, nonce?: string) => {
       // No await from here to the dispatch: a rule set while this request was being prepared (a
       // refresh can take seconds) holds it too.
+      if (nonce && this.#current()?.cell.nonce !== nonce)
+        throw new HeldAnswer(
+          409,
+          "refused",
+          `itx.fetch: ${path} was set again while this request was being signed for its proxy; send it again`,
+        );
       const ruleNow = this.#rule();
       if (
         !held &&
@@ -1684,17 +1837,21 @@ export class SecretDurableObject extends DurableObject<Env> {
         url: request.url,
         retried,
         ...(held && { digest: held.digest }),
+        proxy: proxied,
       });
-      const response = await dispatch(outbound);
+      const response = await dispatch(outbound, nonce ? "the secret proxy" : undefined);
       facts.push(usedFact(response.status));
       return response;
     };
     try {
+      unread = request;
       let ask = askFor(request);
       // an ask goes to the Cloud, outside the secret's pinned hosts: no value is read for it
       let stored = ask ? null : await read();
       // A wait call is held whatever the rule says now: what it may send is the stored text alone.
       const rule = this.#rule();
+      if (stored && "proxy" in stored && (rule || waitFor))
+        throw new SecretRefused(`itx.fetch: ${proxyHoldsNoRule(path)}`);
       if (rule && upgrades)
         throw new SecretRefused(
           `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`,
@@ -1713,14 +1870,22 @@ export class SecretDurableObject extends DurableObject<Env> {
         const approved = await this.#hold(path, request, waitFor, facts);
         held = { digest: approved.digest, release: approved.release };
         request = approved.request;
+        unread = request;
         ask = askFor(request);
         stored = ask ? null : await read();
+        if (stored && "proxy" in stored)
+          throw new SecretRefused(`itx.fetch: ${proxyHoldsNoRule(path)}`);
+      }
+      if (stored && "proxy" in stored) {
+        unread = await this.#byProxy(request, stored.proxy, stored.proxied, upgrades);
+        substituted.add(unread.headers.get(ITERATE_STATEMENT_HEADER) ?? "");
+        return answered(await send(unread, false, stored.nonce));
       }
       if (ask) {
         // every header that names the secret is taken off: the Cloud gets no placeholder
         const bare = new Headers(request.headers);
         for (const [name, value] of request.headers)
-          if (secretPathsIn(value).length) bare.delete(name);
+          if (headerNamesASecret(value)) bare.delete(name);
         // no await from the mark to the dispatch, as in `send`
         held?.release?.();
         if (held) held.release = undefined;
@@ -1735,21 +1900,22 @@ export class SecretDurableObject extends DurableObject<Env> {
         facts.push(usedFact(response.status));
         return answered(response);
       }
+      let valued = stored;
       // Refused here too, not only at egress: this object is the boundary that holds the bytes.
       const resolve = (named: string, field: string | undefined) => {
         if (named !== path)
           throw new SecretRefused(
             `itx.fetch: getSecret(${JSON.stringify(named)}) does not belong to the secret ${path}`,
           );
-        const refreshOnly = stored && refreshOnlyFieldRefusal(stored.record.refresh, path, field);
+        const refreshOnly = valued && refreshOnlyFieldRefusal(valued.record.refresh, path, field);
         if (refreshOnly) throw new SecretRefused(`itx.fetch: ${refreshOnly}`);
-        return stored?.record.material || null;
+        return valued?.record.material || null;
       };
       // The cast: workers-types' Request<Cf> against the bare Request the pure half takes.
-      const retry = stored?.record.refresh ? (request.clone() as unknown as Request) : null;
+      const retry = valued?.record.refresh ? (request.clone() as unknown as Request) : null;
       const refreshed = async () => {
         try {
-          facts.push(...(await this.#refresh(path, stored!.nonce)));
+          facts.push(...(await this.#refresh(path, valued!.nonce)));
           return null;
         } catch (cause) {
           if (cause instanceof RefreshFailed) {
@@ -1764,13 +1930,13 @@ export class SecretDurableObject extends DurableObject<Env> {
       // refresh that fails is in the facts, and the request goes once with what the secret holds:
       // its answer starts no second refresh.
       let refreshFailed = false;
-      if (retry && stored && accessTokenEnded(stored.record.material)) {
+      if (retry && valued && accessTokenEnded(valued.record.material)) {
         refreshFailed = Boolean(await refreshed());
-        stored = await read();
+        valued = await readValue();
       }
       // At most two attempts: a mintable miss or a 401 from the pinned host mints, then one retry.
       for (let attempt = 0; ; attempt += 1) {
-        const last = attempt > 0 || !retry || !stored || refreshFailed;
+        const last = attempt > 0 || !retry || !valued || refreshFailed;
         let outbound: Request;
         try {
           outbound = await substituteMindSecrets(attempt ? retry! : request, resolve, substituted);
@@ -1781,13 +1947,13 @@ export class SecretDurableObject extends DurableObject<Env> {
             throw new RefreshFailedRefusal(
               `${error.message}; the refresh failed: ${failed.message}`,
             );
-          stored = await read();
+          valued = await readValue();
           continue;
         }
         const response = await send(outbound, attempt > 0);
         if (response.status !== 401 || last || (await refreshed())) return answered(response);
         await response.body?.cancel();
-        stored = await read();
+        valued = await readValue();
       }
     } catch (error) {
       if (!(error instanceof SecretRefused) && !(error instanceof HeldAnswer)) throw error;
@@ -1799,12 +1965,14 @@ export class SecretDurableObject extends DurableObject<Env> {
             : 403;
       // only a use that was dispatched names the digest of the request that waited
       held = undefined;
+      if (unread && !unread.bodyUsed) await unread.body?.cancel().catch(() => {});
       console.info({
         event: "secret.used",
         path,
         method: request.method,
         url: request.url,
         status,
+        proxy: proxied,
       });
       facts.push(usedFact(status));
       const kind = error instanceof HeldAnswer ? error.kind : "refused";
@@ -1815,6 +1983,57 @@ export class SecretDurableObject extends DurableObject<Env> {
         kind,
       );
     }
+  }
+
+  #statementFor(mind: string, method: string, proxied: string): Promise<string> {
+    // any fault of the stack's in signing, the auth Worker's RPC included, is a 503, reported
+    const unsigned = (error: unknown) => {
+      reportIssue("secret-proxy.statement-unsigned", error, { mind });
+      return new HeldAnswer(
+        503,
+        "refused",
+        `itx.fetch: the request to the secret proxy of ${mind} could not be signed now: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    };
+    const sign = (input: Parameters<Env["AUTH"]["sign"]>[0]) =>
+      this.env.AUTH.sign(input).catch((error: unknown) => {
+        throw unsigned(error);
+      });
+    const from = configOf(this.env).controlPlaneHostname;
+    return this.#statements(sign, { from, mind, method, url: proxied }).catch((error: unknown) => {
+      if (error instanceof HeldAnswer) throw error;
+      // the memo's length check alone is a 414
+      if (errorCode(error) === "INVALID_INPUT")
+        throw new HeldAnswer(
+          414,
+          "refused",
+          error instanceof Error ? error.message : String(error),
+        );
+      throw unsigned(error);
+    });
+  }
+
+  /** A use by proxy as it goes to the proxy: no header that names a secret, the statement added,
+   *  the body streamed unread (nothing signs it). */
+  async #byProxy(request: Request, proxy: SecretProxy, proxied: string, upgrades: boolean) {
+    const headers = signedRequestHeaders(request.headers);
+    for (const [name, value] of request.headers)
+      if (headerNamesASecret(value)) headers.delete(name);
+    headers.set(
+      ITERATE_STATEMENT_HEADER,
+      await this.#statementFor(proxy.mind, request.method, proxied),
+    );
+    // workerd refuses a body on a GET or a HEAD (as iterate-context-durable-object.ts rebuilds one)
+    const bodyless = request.method === "GET" || request.method === "HEAD";
+    return new Request(proxied, {
+      method: request.method,
+      headers,
+      body: bodyless ? null : request.body,
+      // not for an upgrade, whose socket outlives the request that opened it
+      signal: upgrades ? undefined : request.signal,
+      // Node (undici) needs it for a streamed body; RequestInit does not declare it
+      duplex: "half",
+    } as RequestInit);
   }
 
   #refresh(path: string, nonce: string): Promise<SecretFact[]> {
@@ -2013,6 +2232,20 @@ const sentBefore = (digest: string) =>
     `itx.fetch: this request (${digest}) was approved and sent once already; identical bytes are sent once`,
   );
 
+// the proxy's URL, then the target's host, path and query (an empty `?` kept)
+const proxiedUrlOf = (proxy: SecretProxy, target: URL) => {
+  const written = new URL(target);
+  written.hash = "";
+  const rest = written.href.slice(written.origin.length);
+  return new URL(`${proxy.url}/${written.host}${rest}`).href;
+};
+
+const proxyHoldsNoRule = (path: string) =>
+  `${path} goes by proxy, so no approval rule holds it here: the mind that holds its key holds its requests`;
+
+const unopened = (path: string) =>
+  `itx.fetch: the stored material of ${path} cannot be opened (another key, or another secret's record) — set the secret again`;
+
 const tooLarge = (path: string) =>
   `itx.fetch: a request with ${path} waits for approval, and its body may be at most ${HELD_BODY_LIMIT / 1024 / 1024} MiB`;
 
@@ -2059,7 +2292,7 @@ const UPSTREAM_ANSWER_MS = 50_000;
 
 // No redirect is followed: it would carry a substituted secret to another origin. The runtime's own
 // error quotes the URL, which may carry the secret. No abort signal: an upgrade's socket outlives it.
-const dispatch = async (request: Request): Promise<Response> => {
+const dispatch = async (request: Request, place = "the pinned host"): Promise<Response> => {
   const { origin } = new URL(request.url);
   let overdue: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -2070,7 +2303,7 @@ const dispatch = async (request: Request): Promise<Response> => {
           () =>
             answer(
               new Response(
-                `itx.fetch: the pinned host ${origin} sent no answer within ${String(UPSTREAM_ANSWER_MS / 1000)} s\n`,
+                `itx.fetch: ${place} ${origin} sent no answer within ${String(UPSTREAM_ANSWER_MS / 1000)} s\n`,
                 { status: 504 },
               ),
             ),
@@ -2079,7 +2312,11 @@ const dispatch = async (request: Request): Promise<Response> => {
       }),
     ]);
   } catch {
-    throw new SecretRefused(`itx.fetch: the pinned host ${origin} could not be reached`);
+    const unreachable = `itx.fetch: ${place} ${origin} could not be reached`;
+    // a proxy's failure is a gateway's
+    throw place === "the pinned host"
+      ? new SecretRefused(unreachable)
+      : new HeldAnswer(502, "refused", unreachable);
   } finally {
     clearTimeout(overdue);
   }

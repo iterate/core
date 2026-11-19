@@ -48,7 +48,8 @@ const BUILT_IN_ROOT_DESCRIPTIONS = {
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
   cd: "any context of the mind, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./child').append({ type, payload })`; a jail's bare null refuses what reaches in. A parent's rows bind no child: code at a context is held only by that context's own bare `itx => null`",
-  fetch: "the internet through the mind's egress: `itx.fetch(new Request(url))`",
+  fetch:
+    "the internet through the mind's egress: `itx.fetch(new Request(url, { method, headers, body }))`; the method, headers and body go into the Request, and the only second argument is `{ signFor: '<another mind's control-plane hostname>' }`, which sends it signed as this mind",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
   contexts:

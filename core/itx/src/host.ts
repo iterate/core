@@ -36,8 +36,10 @@ export interface ItxHost {
    *  leaves through the egress keeps none of them. The mind Worker says where the control plane
    *  is. */
   loadedCodeRequestHeaders?(): Record<string, string>;
-  /** Every outbound `itx.fetch`, after the kernel stripped its headers and stamped the cause. */
-  egress?(request: Request, from: { path: string }): Promise<Response>;
+  /** Every outbound `itx.fetch`, after the kernel stripped its headers and stamped the cause.
+   *  `signFor`: the host sends the request as this mind's signed request to that other mind
+   *  (the built-in `fetch`'s own second argument alone, ./context/built-ins.ts). */
+  egress?(request: Request, from: { path: string; signFor?: string }): Promise<Response>;
   /** THE GATE FOR ACTS (iterate/acts): with it, a call of a verb that an approval rule names
    *  waits until a member approves it (./context/held-verbs.ts). `verbRules` is asked on every
    *  call a context resolves by its own table, so the host keeps it cheap. A host that does not

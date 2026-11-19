@@ -719,7 +719,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     namedWorker: (source) => this.#namedWorker(source),
     context: (p) =>
       p === this.#durableObjectAddress.path ? this.#localContext : this.#reach.contextOf(p),
-    egress: (request) => this.#egress(request),
+    egress: (request, options) => this.#egress(request, options),
+    afterTheAnswer: (work) => this.ctx.waitUntil(work),
     caller: () => this.#caller,
     invokeAs: (caller, call) => this.#invokeInProcess(call, [], caller),
     // A genuine RpcTarget, so a mid-chain call pipelines: workerd rejects a Proxy (workerd#6873).
@@ -1457,8 +1458,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return readable;
   }
 
-  #egress(request: Request): Promise<Response> {
-    return egress(request, { cause: this.#caller.cause, path: this.#durableObjectAddress.path });
+  #egress(request: Request, options?: { signFor?: string }): Promise<Response> {
+    return egress(request, {
+      cause: this.#caller.cause,
+      path: this.#durableObjectAddress.path,
+      ...options,
+    });
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

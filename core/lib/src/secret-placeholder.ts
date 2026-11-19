@@ -5,6 +5,7 @@
 // the earlier platform (core/os, removed). And the path of the secrets Worker's OAuth callback,
 // which the mind answers as `itx.secrets.oauthCallbackUrl()`. The facts a secret's answer carries
 // ride the one carrier of iterate/facts.
+import { cookieTrimmed } from "./lib.ts";
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and
@@ -57,15 +58,19 @@ export const placeholderOf = (path: string, field: string | undefined, appJwt?: 
 /** The DISTINCT secret paths a request's URL and headers reference — how egress knows which
  *  secret's context a request belongs to (one request, one secret). */
 export function secretPathsReferenced(request: Request): string[] {
-  const paths = new Set<string>();
-  const scan = (value: string) => {
-    if (!value.includes("getSecret(")) return;
-    for (const [, path = ""] of value.matchAll(SECRET_PLACEHOLDER)) paths.add(path);
-  };
-  scan(request.url);
-  for (const [, value] of request.headers) scan(basicCredentialOf(value) ?? value);
+  const paths = new Set(secretPathsIn(request.url));
+  for (const [, value] of request.headers)
+    for (const path of headerSecretPaths(value)) paths.add(path);
   return [...paths];
 }
+
+/** THE SECRET PATHS A HEADER'S VALUE NAMES, as egress reads a header: a `Basic` credential
+ *  decoded, any other value as it is. Empty: the header names no secret. */
+export const headerSecretPaths = (value: string): string[] =>
+  secretPathsIn(basicCredentialOf(value) ?? value);
+
+/** Whether a header's value names a secret, as egress reads it (`headerSecretPaths`). */
+export const headerNamesASecret = (value: string): boolean => headerSecretPaths(value).length > 0;
 
 /** The decoded `user:password` of a `Basic` header value, or null when the value is no Basic
  *  credential (or not base64 of UTF-8). */
@@ -101,3 +106,40 @@ export type VaultAnswerKind = "refused" | "held" | "waiting" | "rejected" | "sen
 /** The digest of a held request to wait on: once approved, the stored request is sent, whatever
  *  this call carries. */
 export const SECRET_HELD_HEADER = "x-itx-secret-held";
+
+/** NO PLACEHOLDER FROM OUTSIDE REACHES A MIND'S CODE IN A HEADER: egress would fill it for an
+ *  app that passed the header on. Every entrance from outside runs it: the boundary's ingress
+ *  and the home lab's local port. A header that names a secret as egress reads it goes; of
+ *  `cookie`, only such pairs (`cookiesNamingNoSecret`). No URL is refused. */
+export function withoutOutsidePlaceholders(request: Request): Request {
+  const named = [...request.headers].filter(([, value]) => headerNamesASecret(value));
+  if (!named.length) return request;
+  const headers = new Headers(request.headers);
+  for (const [name, value] of named) {
+    const kept = name === "cookie" ? cookiesNamingNoSecret(value) : "";
+    if (kept) headers.set(name, kept);
+    else headers.delete(name);
+  }
+  return new Request(request, { headers });
+}
+
+/** A cookie header without the pairs that name a secret, read again as egress reads it. When the
+ *  rest still names one (a placeholder split over pairs, a Basic credential), only the `__Host-`
+ *  pairs stay: no other hostname can plant one for this host, and every cookie the platform sets
+ *  has the prefix, so a planted page never signs a member out. By design, it can make a member's APP cookies drop for a request
+ *  while the planted pairs last; the member stays signed in. "" when nothing is left. */
+function cookiesNamingNoSecret(value: string): string {
+  const pairs = value.split(";").filter((pair) => !secretPathsIn(pair).length);
+  for (const kept of [pairs, pairs.filter(isHostOnlyCookiePair)]) {
+    const text = cookieTrimmed(kept.join(";"));
+    if (!headerNamesASecret(text)) return text;
+  }
+  return "";
+}
+
+/** A pair `__Host-<name>=value`: host-only by the browser's own rule, so no other hostname can
+ *  set it for this one. */
+export const isHostOnlyCookiePair = (pair: string) => {
+  const at = pair.indexOf("=");
+  return at > 0 && cookieTrimmed(pair.slice(0, at)).startsWith("__Host-");
+};

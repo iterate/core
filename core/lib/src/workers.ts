@@ -3,6 +3,7 @@ import type { ActRule, GateAnswer } from "./acts.ts";
 import type {
   ControlPlaneSessionApi,
   SecretOperation,
+  SecretProxy,
   SecretRefresh,
   StackClientName,
 } from "./api.ts";
@@ -90,6 +91,10 @@ export interface Door {
   signForMind(
     input: Parameters<AuthService["sign"]>[0] & { mind: string },
   ): ReturnType<AuthService["sign"]>;
+  /** `request`, signed for the mind `signFor`. Called for the built-in fetch's `signFor`
+   *  (core/itx/src/context/built-ins.ts), which `itx.minds.get(hostname).fetch` asks for; a
+   *  provided mind's Door and the home lab relay it for the mind that they are. */
+  fetchForMind(signFor: string, request: Request): Promise<Response>;
   /** The mind's telemetry, through the telemetry Worker (`TelemetryService`). */
   queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
   sendEvents(events: StreamEvent[]): Promise<void>;
@@ -183,6 +188,16 @@ export interface AuthService {
     about?: string[];
     expiresInSeconds?: number;
   }): Promise<Envelope>;
+  /** WHO SENT A MIND'S SIGNED REQUEST, or why it is refused (core/auth-worker/src/mind-fetch.ts):
+   *  `statement` is its `iterate-auth-statement`, `method` and `url` the request's as it arrived. */
+  mindOfSignedRequest(input: {
+    statement: string;
+    method: string;
+    url: string;
+  }): Promise<
+    | { principal: { actor: string; kind: "mind"; hostname: string }; expiresAt: number }
+    | { refused: string }
+  >;
   /** A statement that waits a day for a member's passkey at `signAt`, a page that needs no
    *  sign-in. Signed, it lands on `path` as `POST /statements` takes it. `from`: the context that
    *  asks, as the page shows it; `next`: where the page goes once signed, a host of the mind.
@@ -259,6 +274,10 @@ export type SecretDescription = {
   /** Why a secret that the stack makes at its deploy is not set: the deploy's words
    *  (core/secrets-worker src/stack-secrets.ts). */
   reason?: string;
+  proxy?: SecretProxy;
+  /** A secret by proxy whose cell does not open: no `proxy` is shown. */
+  byProxy?: true;
+  unreadable?: string;
 };
 
 export type SecretOAuthResult =

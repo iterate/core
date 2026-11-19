@@ -1,4 +1,4 @@
-import { cookieValueOf } from "iterate/lib";
+import { cookieTrimmed, cookieValueOf } from "iterate/lib";
 
 export const HOST_SESSION_COOKIE = "__Host-iterate-session";
 export const FLOW_COOKIE = "__Host-iterate-sign-in";
@@ -6,8 +6,12 @@ export const FLOW_COOKIE = "__Host-iterate-sign-in";
  *  its account chooser, so that a person who signed out can come back as someone else. */
 export const SIGNED_OUT_COOKIE = "__Host-iterate-signed-out";
 
+/** The boundary's own cookie names. Each is a `__Host-` name, as every cookie the platform sets
+ *  is (the test pins these): ./stamp.ts `cookiesNamingNoSecret` rests on that. */
+export const PLATFORM_COOKIE_NAMES = [HOST_SESSION_COOKIE, FLOW_COOKIE, SIGNED_OUT_COOKIE] as const;
+
 const isSessionCookie = (name: string) =>
-  name === HOST_SESSION_COOKIE || name === FLOW_COOKIE || name === SIGNED_OUT_COOKIE;
+  (PLATFORM_COOKIE_NAMES as readonly string[]).includes(name);
 
 export const sessionTokenOf = (request: Request) =>
   cookieValueOf(request.headers.get("cookie"), HOST_SESSION_COOKIE);
@@ -24,13 +28,13 @@ export function flowCookieOf(request: Request): unknown {
 export function appCookiesOf(cookieHeader: string | null): string | null {
   const kept = (cookieHeader || "")
     .split(";")
-    .map((part) => part.trim())
-    .filter((part) => part && !isSessionCookie(part.slice(0, part.indexOf("=")).trim()));
+    .map(cookieTrimmed)
+    .filter((part) => part && !isSessionCookie(cookieTrimmed(part.slice(0, part.indexOf("=")))));
   return kept.length ? kept.join("; ") : null;
 }
 
 export const setsSessionCookie = (setCookie: string) =>
-  isSessionCookie(setCookie.slice(0, setCookie.indexOf("=")).trim());
+  isSessionCookie(cookieTrimmed(setCookie.slice(0, setCookie.indexOf("="))));
 
 // `SameSite=Lax`: the issuer's redirect back is a top-level navigation from another host, and must
 // carry the flow's cookie.

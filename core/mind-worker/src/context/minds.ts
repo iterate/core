@@ -9,7 +9,7 @@ import { hopCaller } from "./hop-caller.ts";
 import { assertDeliveryCaller } from "./webhooks.ts";
 
 export const MINDS_ROOT_DESCRIPTION =
-  "another mind that lets this one in, by its control-plane hostname, as a row's target: `subscribe({ name, target: \"itx.minds.get('<hostname>').deliverEvents\" })` signs each event with this mind's key and adds it on that mind under /minds/<this mind><the event's path>; `.at('<path>').deliverEvents` adds it at that context of the other mind instead, when its rule lets this mind append there (minds.md in the config repo)";
+  "another mind that lets this one in, by its control-plane hostname, as a row's target: `subscribe({ name, target: \"itx.minds.get('<hostname>').deliverEvents\" })` signs each event with this mind's key and adds it on that mind under /minds/<this mind><the event's path>; `.at('<path>').deliverEvents` adds it at that context of the other mind instead, when its rule lets this mind append there (minds.md in the config repo); `itx.minds.get('<hostname>').fetch(request)` sends an https request to that mind signed as this one, five minutes, so its boundary stamps this mind as the caller (a WebSocket upgrade is refused on this path). It is `itx.fetch(request, { signFor: '<hostname>' })` of the context where dispatch starts, one Request and nothing more, so that context's rule for itx.fetch decides it: for loaded code that is the caller, wherever the call is spelled (`minds` is answered at the caller); a member's itx.cd(<context>) handle starts at that context, so there that context's fetch decides. A mask refuses it, and a narrow fetch passes the request on and nothing else, so the built-in does not sign it (a request that names a by-proxy secret is still signed by the secrets Worker for that proxy); a context signs wherever it can reach the built-in fetch unchanged, its own or another context's by itx.cd, exactly as it can fetch there: a table that masks its own fetch and leaves itx.cd('/') open has not narrowed fetch. The kernel's loop count does not cross a mind's edge: never answer another mind's request or event with one to that mind unless the app bounds the exchange itself (a nest of requests ends only at Cloudflare's limit, a 503 at about the 14th; a chain of events never ends)";
 
 const NOT_SENT = [...PLATFORM_NAMESPACES, "mind-meld"];
 
@@ -66,6 +66,17 @@ export function mindsRoot(
               );
             return rest.length > 0 ? delivery(path).invoke(rest) : delivery(path);
           }
+          const [call] = methodSteps;
+          if (!at && methodSteps.length === 1 && Array.isArray(call) && call[0] === "fetch") {
+            // ONE ARGUMENT: a fetch row back to this wrapper (`itx.fetch => itx.minds.get(x).fetch(@)`)
+            // hands it the option too, so it ends here, at its first turn, and loops no more.
+            if (call.length !== 2)
+              throw codedError(
+                "INVALID_INPUT",
+                "minds.get(hostname).fetch(request) takes one Request and nothing more",
+              );
+            return signedMindFetch(call[1], context, peer);
+          }
           return deliver(methodSteps, at);
         });
       const deliver = async (methodSteps: Parameters<InvokeHandle["invoke"]>[0], at?: string) => {
@@ -73,7 +84,7 @@ export function mindsRoot(
         const method = Array.isArray(call) ? call[0] : undefined;
         if (methodSteps.length !== 1 || (method !== "deliverEvents" && method !== "deliverEvent"))
           throw new Error(
-            `minds.get(hostname).${print(methodSteps)}: a mind answers deliverEvents(events) and deliverEvent(event), each also after at(path)`,
+            `minds.get(hostname).${print(methodSteps)}: a mind answers deliverEvents(events) and deliverEvent(event), each also after at(path), and fetch(request)`,
           );
         // `method` is a string only when the step is a call, `[name, ...args]`: its first argument.
         const sent = (call as unknown[])[1];
@@ -125,4 +136,40 @@ export function mindsRoot(
       return delivery();
     },
   };
+}
+
+/** `itx.minds.get(hostname).fetch(request)`: the calling context's OWN `itx.fetch`, as its caller,
+ *  with one more argument, `{ signFor: hostname }` (core/itx built-in `fetch`), so the context's
+ *  rules decide it as they decide any fetch of its code: a mask refuses it, a rewrite answers
+ *  what its target does (a narrow fetch passes the request on and nothing else, so the built-in
+ *  signs nothing), and where the built-in is reached the Door signs (`Door.fetchForMind`). */
+async function signedMindFetch(
+  input: unknown,
+  context: Pick<ItxHostRootContext, "invokeAs" | "caller">,
+  peer: string,
+): Promise<Response> {
+  if (!(input instanceof Request))
+    throw codedError("INVALID_INPUT", "minds.get(hostname).fetch(request): one Request");
+  const url = new URL(input.url);
+  if (url.protocol !== "https:")
+    throw codedError("INVALID_INPUT", "minds.get(hostname).fetch(request): an https URL");
+  if (input.headers.get("upgrade")?.toLowerCase() === "websocket")
+    throw codedError(
+      "INVALID_INPUT",
+      "minds.get(hostname).fetch(request): no WebSocket: a socket cannot come back across the signing call",
+    );
+  const method = input.method.toUpperCase();
+  const request = new Request(url.href, {
+    method: input.method,
+    headers: input.headers,
+    body: method === "GET" || method === "HEAD" ? null : input.body,
+    redirect: "manual",
+    // Node (undici) needs it for a streamed body; RequestInit does not declare it
+    duplex: "half",
+  } as RequestInit);
+  // `invokeAs` answers unknown: the built-in fetch, or the rule's target, answers a Response.
+  return (await context.invokeAs(context.caller(), [
+    "itx",
+    ["fetch", request, { signFor: peer }],
+  ])) as Response;
 }

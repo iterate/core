@@ -101,24 +101,26 @@ export function statelessResolverFor(args: {
   const context = reach.contextOf;
   // No `connections`: a resolver lives one round trip, so a connector root is sent to the
   // context, whose residency holds and releases them.
-  const resolverUnder = (callerNow: Caller) => {
+  const resolverUnder = (callerNow: Caller): ItxExpressionResolver => {
     const build = (): Record<string, unknown> => ({
       ...buildPortableBuiltIns({
         path,
         context,
-        egress: (request) => egress(request, { cause: callerNow.cause, path }),
+        egress: (request, options) => egress(request, { cause: callerNow.cause, path, ...options }),
+        afterTheAnswer: (work) => args.ctx.waitUntil(work),
         caller: () => callerNow,
         invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
         itx: libraryItx,
       }),
       ...buildIdentityRoots({ path, caller: () => callerNow }),
     });
-    return new ItxExpressionResolver({
+    const resolver = new ItxExpressionResolver({
       reach,
       builtIns: build,
       path,
       caller: () => callerNow,
     });
+    return resolver;
   };
   // The library's hops go as the platform's (no `app`). Cast: InvokeHandle's declared type lacks
   // the dotted members its prototype fallback serves.

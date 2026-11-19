@@ -10,9 +10,11 @@ import {
   type SecretHmacVerification,
   type SecretMaterial,
   type SecretOperation,
+  type SecretProxy,
   type SecretRefresh,
 } from "iterate/api";
 import { codedError } from "iterate/lib";
+import { isMindControlPlaneHostname } from "iterate/signed";
 import {
   basicCredentialOf,
   placeholderOf,
@@ -28,6 +30,63 @@ export type SecretRecord = {
   urls: string[];
   refresh: SecretRefresh | null;
 } & SecretUse;
+
+/** A secret by proxy as its object writes it: no value, no refresh, a header placeholder. */
+export type ProxiedSecretRecord = { proxy: SecretProxy; urls: string[]; refresh: null } & SecretUse;
+
+/** The record of a `set` with `proxy`; a field given as undefined counts as not given. */
+export function proxiedSecretRecordOf(input: Record<string, unknown>): ProxiedSecretRecord {
+  const parsed = ProxiedSetInput.safeParse(
+    Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)),
+  );
+  if (!parsed.success)
+    throw codedError(
+      "INVALID_INPUT",
+      'secrets.set with proxy: pass { material: null, urls, proxy, placement?: "header" } and nothing else, with one origin in urls at least: the secret proxy holds the value, keeps it fresh and uses it',
+    );
+  return {
+    proxy: secretProxyOf(parsed.data.proxy),
+    urls: originsOf(parsed.data.urls),
+    refresh: null,
+    placement: "header",
+    operations: [],
+    lendTo: [],
+  };
+}
+
+const ProxiedSetInput = z.strictObject({
+  material: z.null(),
+  urls: z.array(z.string()).min(1),
+  proxy: z.unknown(),
+  placement: z.literal("header").optional(),
+});
+
+/** A SECRET PROXY ON EVERY WAY IN: a `set`, and a cell marked `byProxy` at each opening. */
+export function secretProxyOf(value: unknown): SecretProxy {
+  const refuse = (sentence: string) =>
+    codedError("INVALID_INPUT", `secrets: a secret by proxy: ${sentence}`);
+  const parsed = z.strictObject({ mind: z.string(), url: z.string() }).safeParse(value);
+  if (!parsed.success) throw refuse("proxy is { mind, url }, two strings and nothing else");
+  const { mind, url } = parsed.data;
+  if (!isMindControlPlaneHostname(mind))
+    throw refuse("proxy.mind is the control-plane hostname of a mind, lowercase");
+  const parsedUrl = URL.parse(url);
+  const asWritten =
+    parsedUrl?.href === url || (parsedUrl?.pathname === "/" && parsedUrl.href === `${url}/`);
+  if (
+    parsedUrl?.protocol !== "https:" ||
+    !asWritten ||
+    parsedUrl.username ||
+    parsedUrl.password ||
+    url.includes("?") ||
+    url.includes("#") ||
+    url.endsWith("/")
+  )
+    throw refuse(
+      "proxy.url is an https URL, with a path or none, and no query, fragment, trailing slash or credentials",
+    );
+  return { mind, url };
+}
 
 // `lendTo` null is every path: a secret's only when its maker says `lendTo: null` outright.
 export type SecretUse = {

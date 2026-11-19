@@ -1,6 +1,7 @@
 import {
   ITX_EXPIRES_HEADER,
   ITX_GRANT_HEADER,
+  ITX_MIND_HEADER,
   ITX_PERSON_HEADER,
   ITX_PRINCIPAL_HEADER,
   nameInEmail,
@@ -17,6 +18,12 @@ import {
   type MindResourceMetadata,
 } from "iterate/mind-api";
 import { type MindConfig, controlPlaneOriginOf } from "iterate/mind-config";
+import { headerNamesASecret } from "iterate/secret-placeholder";
+import {
+  ITERATE_STATEMENT_HEADER,
+  STATEMENT_HEADER_MAX_CHARACTERS,
+  statementHashOf,
+} from "iterate/signed";
 import type { AuthService, TokenIdentity } from "iterate/workers";
 import { type MindHostCaller, mindHostCallerOf } from "./mind-host-sign-in.ts";
 import { appCookiesOf, sessionTokenOf } from "./session-cookies.ts";
@@ -26,6 +33,8 @@ export type Stamped = {
   caller: MindHostCaller;
   email: string | null;
   answer?: Response;
+  /** A checked mind's request: no app's 401 becomes a sign-in page for it (./host-session.ts). */
+  byMind?: true;
 };
 
 /** `route`: the part of the control plane the request is for, or null on a hostname of the mind's
@@ -43,8 +52,12 @@ export async function stampedRequest(
   },
 ): Promise<Stamped> {
   // Only the boundary stamps `x-itx-*`, and what it forwards to trusts the stamp: drop whatever a
-  // caller sent. Iterated header names are lowercase.
-  const headers = new Headers([...request.headers].filter(([name]) => !name.startsWith("x-itx-")));
+  // caller sent. Iterated header names are lowercase. A signed statement never reaches the code.
+  const headers = new Headers(
+    [...request.headers].filter(
+      ([name]) => !name.startsWith("x-itx-") && name !== ITERATE_STATEMENT_HEADER,
+    ),
+  );
   const url = new URL(request.url);
   const bearer = bearerOf(request.headers);
   if (route === "api" || route === "mcp") {
@@ -58,7 +71,12 @@ export async function stampedRequest(
         request.method === "GET"
           ? protectedResourceDocument(resource, controlPlaneOriginOf(config))
           : new Response("Method not allowed\n", { status: 405 });
-      return { forwarded: request, caller: "anonymous", email: null, answer };
+      return {
+        forwarded: new Request(request, { headers }),
+        caller: "anonymous",
+        email: null,
+        answer,
+      };
     }
     // The control-plane hostname is not the mind's: the mind gets no cookie and no credential.
     headers.delete("cookie");
@@ -117,6 +135,9 @@ export async function stampedRequest(
   if (route)
     return { forwarded: new Request(request, { headers }), caller: "anonymous", email: null };
 
+  const statement = request.headers.get(ITERATE_STATEMENT_HEADER);
+  if (statement) return mindStamped(request, headers, statement, auth, config);
+
   // An app's own script may send a bearer of its own beside the session cookie.
   const session = sessionTokenOf(request);
   const byBearer = bearer ? await auth.whoIs(bearer, url.origin) : null;
@@ -134,9 +155,7 @@ export async function stampedRequest(
     },
     request,
   });
-  const appCookies = appCookiesOf(request.headers.get("cookie"));
-  if (appCookies) headers.set("cookie", appCookies);
-  else headers.delete("cookie");
+  setAppCookies(headers, request.headers.get("cookie"));
   // a bearer of ours never reaches the app; one that did not verify may be the app's own
   if (byBearer) headers.delete("authorization");
   if (identity && caller !== "anonymous") {
@@ -164,6 +183,92 @@ export async function stampedRequest(
  *  of the stamp takes a guest for a person with one (iterate/principal `Guest`). */
 const personOf = (userId: string, email: string, name: string, method: SignInMethod): Person =>
   method === "guest" ? { userId, email: "", name, method } : { userId, email, name, method };
+
+/** A MIND'S SIGNED REQUEST (core/auth-worker/src/mind-fetch.ts): stamped in `ITX_MIND_HEADER`
+ *  alone, or a 401 of the boundary's own; a check that throws is a 503. The statement decides
+ *  alone: no bearer and no session is read, and neither reaches the app. */
+async function mindStamped(
+  request: Request,
+  headers: Headers,
+  statement: string,
+  auth: AuthService,
+  config: Pick<MindConfig, "controlPlaneHostname">,
+): Promise<Stamped> {
+  // with the filtered headers, so no path hands on what the filter took off; built on a refusal
+  // alone, since a copy takes the body
+  const refusedWith = (answer: Response): Stamped => ({
+    forwarded: new Request(request, { headers }),
+    caller: "anonymous",
+    email: null,
+    answer,
+  });
+  if (statement.length > STATEMENT_HEADER_MAX_CHARACTERS)
+    return refusedWith(mindRefusal("the statement is too long"));
+  // hashed, so no print of the keys shows a statement; with this stack's hostname
+  const key = await statementHashOf(
+    `${config.controlPlaneHostname}\n${request.method}\n${request.url}\n${statement}`,
+  );
+  let checked: Awaited<ReturnType<AuthService["mindOfSignedRequest"]>> | undefined =
+    stampsHere.get(key)?.stamp;
+  if (checked && Date.now() >= checked.expiresAt * 1000) {
+    stampsHere.delete(key);
+    checked = undefined;
+  }
+  try {
+    checked ||= await auth.mindOfSignedRequest({
+      statement,
+      method: request.method,
+      url: request.url,
+    });
+  } catch {
+    return refusedWith(
+      new Response("The signed statement of this request could not be checked now.\n", {
+        status: 503,
+        headers: { "cache-control": "no-store", "retry-after": "5" },
+      }),
+    );
+  }
+  if ("refused" in checked) return refusedWith(mindRefusal(checked.refused));
+  // the clock again, after the await
+  if (Date.now() >= checked.expiresAt * 1000)
+    return refusedWith(mindRefusal("the statement has expired"));
+  remember(key, checked);
+  // a member's token cannot be told from the app's own without a lookup
+  setAppCookies(headers, request.headers.get("cookie"));
+  headers.delete("authorization");
+  headers.set(ITX_MIND_HEADER, JSON.stringify(checked.principal));
+  headers.set(ITX_EXPIRES_HEADER, String(checked.expiresAt));
+  return {
+    forwarded: new Request(request, { headers }),
+    caller: "anonymous",
+    email: null,
+    byMind: true,
+  };
+}
+
+/** The cookie header AS IT GOES TO THE APP: the reserved cookies out, then read again as egress
+ *  reads it, since what is left may be a Basic credential (`withoutOutsidePlaceholders`). */
+function setAppCookies(headers: Headers, cookieHeader: string | null) {
+  const kept = appCookiesOf(cookieHeader);
+  if (kept && !headerNamesASecret(kept)) headers.set("cookie", kept);
+  else headers.delete("cookie");
+}
+
+const mindRefusal = (reason: string) =>
+  Response.json({ error: reason }, { status: 401, headers: { "cache-control": "no-store" } });
+
+type MindStamp = Exclude<
+  Awaited<ReturnType<AuthService["mindOfSignedRequest"]>>,
+  { refused: string }
+>;
+
+/** What this isolate stamped, so a warm request calls no auth Worker; no refusal is kept. */
+const stampsHere = new Map<string, { stamp: MindStamp }>();
+function remember(key: string, stamp: MindStamp) {
+  if (stampsHere.has(key)) return;
+  stampsHere.set(key, { stamp });
+  if (stampsHere.size > 1_000) stampsHere.delete(stampsHere.keys().next().value ?? "");
+}
 
 /** THE BEARER TOKEN OF A REQUEST'S `Authorization` HEADER, or undefined when the header is absent
  *  or of another scheme. The scheme's name is matched in any case (RFC 9110 section 11.1): a

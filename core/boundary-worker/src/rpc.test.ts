@@ -1,4 +1,5 @@
 // THE DOOR (./rpc.ts): which of the mind's requests are its own, and which sender a mail may have.
+import { MIND_FETCH_STATEMENT_TYPE, statementText } from "iterate/signed";
 import type { AuthService } from "iterate/workers";
 import { expect, test, vi } from "vitest";
 import { boundaryResponse, type MindTransport } from "./http.ts";
@@ -73,6 +74,119 @@ test("the mind's request to a hostname of its zones goes in through the boundary
     expect(request.headers.get("cf-connecting-ip")).toBe("192.0.0.8");
   }
   expect(outside).toEqual(["https://example.net/"]);
+});
+
+test("only fetchForMind signs: it uses the statement again while it lives and lets no answer give it back; a header that code writes signs nothing and does not leave", async () => {
+  const signs: unknown[] = [];
+  const sent: { url: string; redirect: string; headers: Record<string, string> }[] = [];
+  vi.stubGlobal("fetch", async (request: Request) => {
+    sent.push({
+      url: request.url,
+      redirect: request.redirect,
+      headers: Object.fromEntries(request.headers),
+    });
+    // an answer that echoes the statement
+    return new Response("the other mind's", {
+      headers: { "x-echo": request.headers.get("iterate-auth-statement") ?? "", "x-plain": "kept" },
+    });
+  });
+  const statement = statementText({
+    mind: "iterate.peer.net",
+    from: config.controlPlaneHostname,
+    path: "/",
+    type: MIND_FETCH_STATEMENT_TYPE,
+    payload: { method: "POST", url: "https://app.peer.net/v1" },
+    at: Date.now(),
+    expires: Date.now() + 300_000,
+  });
+  const door = Object.assign(new Door(undefined as never, undefined as never), {
+    env: {
+      ITERATE: JSON.stringify(config),
+      AUTH: {
+        sign: async (input: unknown) => {
+          signs.push(input);
+          return { statement, signature: { format: "ml-dsa-65", key: "k", sig: "s" } };
+        },
+        // the cast: a stand-in envelope, whose signature the Door never reads
+      } as unknown as Partial<AuthService>,
+    },
+  });
+  const request = (url: string, headers: Record<string, string> = {}) =>
+    new Request(url, { method: "POST", body: "b", headers, redirect: "manual" });
+  const answers = [];
+  for (let call = 0; call < 2; call += 1)
+    answers.push(
+      await door.fetchForMind(
+        "iterate.peer.net",
+        request("https://app.peer.net/v1", {
+          "iterate-auth-statement": "the code's own",
+          host: "app.peer.net",
+          "x-itx-principal": '{"actor":"user_1"}',
+          "x-iterate-marker": "ours",
+          // as the kernel's egress writes it (core/itx/src/cause.ts)
+          "x-iterate-cause": JSON.stringify({
+            chain: "2026-11-19T00:00:00.000Z with a request ~n1",
+            depth: 3,
+          }),
+        }),
+      ),
+    );
+  expect(signs).toMatchObject([
+    {
+      mind: "iterate.peer.net",
+      path: "/",
+      type: "events.iterate.com/mind/fetch-requested",
+      payload: { method: "POST", url: "https://app.peer.net/v1" },
+      expiresInSeconds: 300,
+    },
+  ]);
+  expect(sent).toHaveLength(2);
+  expect(sent[0]).toMatchObject({ url: "https://app.peer.net/v1", redirect: "manual" });
+  for (const name of ["host", "x-itx-principal", "x-iterate-marker"])
+    expect(sent[0]?.headers).not.toHaveProperty(name);
+  // the cause leaves with the request, as `leavingTheStack` writes it
+  expect(JSON.parse(sent[0]?.headers["x-iterate-cause"] ?? "")).toMatchObject({
+    chain: "2026-11-19T00:00:00.000Z with another stack ~n1",
+    depth: 3,
+  });
+  expect(sent[0]?.headers["iterate-auth-statement"]).toBe(
+    sent[1]?.headers["iterate-auth-statement"],
+  );
+  expect(sent[0]?.headers["iterate-auth-statement"]).not.toBe("the code's own");
+  for (const answer of answers) {
+    expect(answer.headers.get("x-echo")).toBeNull();
+    expect(answer.headers.get("x-plain")).toBe("kept");
+  }
+  // LOADED CODE (a jailed agent's itx.fetch) that writes a statement by hand: the request leaves
+  // unsigned, with none
+  await door.fetch(
+    request("https://app.peer.net/v1", { "iterate-auth-statement": "the code's own" }),
+  );
+  expect(sent[2]?.headers).not.toHaveProperty("iterate-auth-statement");
+  // the signer takes a fragment off, which never goes on the wire: the statement is for the URL
+  // that arrives, and the one kept for it serves
+  await door.fetchForMind("iterate.peer.net", request("https://app.peer.net/v1#frag"));
+  expect(sent[3]?.url).toBe("https://app.peer.net/v1");
+  // this mind, no hostname, http and an upgrade are refused, and nothing is signed or sent
+  for (const [url, signFor, headers] of [
+    ["https://app.peer.net/v1", "iterate.example.com", {}],
+    ["https://app.peer.net/v1", "not a hostname", {}],
+    ["http://app.peer.net/v1", "iterate.peer.net", {}],
+    ["https://app.peer.net/v1", "iterate.peer.net", { upgrade: "websocket" }],
+  ] as const)
+    await expect(door.fetchForMind(signFor, request(url, headers))).rejects.toThrow(
+      "fetch(request, { signFor })",
+    );
+  // a URL with userinfo is refused too: workerd's Request keeps one, and Node's refuses to make
+  // one, so the URL is set on a Request made without it
+  for (const url of ["https://user:pass@app.peer.net/v1", "https://user@app.peer.net/v1"]) {
+    const withUserinfo = request("https://app.peer.net/v1");
+    Object.defineProperty(withUserinfo, "url", { value: url });
+    await expect(door.fetchForMind("iterate.peer.net", withUserinfo)).rejects.toThrow(
+      "a request signed for another mind takes no credentials in its URL: send them in a header",
+    );
+  }
+  expect({ signs: signs.length, sent: sent.length }).toEqual({ signs: 1, sent: 4 });
 });
 
 test.for([

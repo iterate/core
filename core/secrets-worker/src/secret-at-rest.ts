@@ -1,5 +1,7 @@
 // The ciphertext is bound, as AES-GCM additional data, to the secret's path, pin, strategy, use,
-// version and the write's nonce: a copy opens nowhere else.
+// version and the write's nonce: a copy opens nowhere else. A secret by proxy seals its proxy as
+// its material, and the mark `byProxy` is in the binding: a cell whose mark was taken off or put
+// on opens nowhere, so no proxy is ever read from bytes that this stack did not seal.
 import type { SecretMaterial, SecretRefresh } from "iterate/api";
 
 export type EncryptedMaterial = {
@@ -19,6 +21,7 @@ type MaterialBinding = {
     operations: readonly string[];
     lendTo: readonly string[] | null;
     statementPaths?: readonly string[];
+    byProxy?: true;
   };
 };
 
@@ -81,6 +84,8 @@ function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
           ...(binding.use.statementPaths
             ? [{ statementPaths: [...new Set(binding.use.statementPaths)].sort() }]
             : []),
+          // named, and only for a secret by proxy: a value's cell binds the same bytes as before
+          ...(binding.use.byProxy ? [{ byProxy: true }] : []),
         ],
       ]),
     ),

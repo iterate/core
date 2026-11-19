@@ -184,6 +184,8 @@ test("a hop names its own caller on a request, over every caller that the reques
     "x-itx-expires": "2000000000",
     "x-itx-caller-path": "/elsewhere",
     "x-itx-app": "1",
+    // a mind's signed statement that code wrote goes on from no hop
+    "iterate-auth-statement": "a statement code wrote",
     accept: "*/*",
   };
   const nobody = new Headers(carried);

@@ -42,6 +42,9 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   "events.iterate.com/itx/facet-aborted",
   "events.iterate.com/itx/schedule-cancelled",
   "events.iterate.com/itx/child-created",
+  // the platform's record of an act that already left: a pause must not hide it, and only the
+  // platform appends it (../caller.ts `PLATFORM_FACT_TYPES`)
+  "events.iterate.com/itx/signed-request-sent",
 ]);
 
 // In memory only. A call on an instance the platform replaced never sees the new one's appends and

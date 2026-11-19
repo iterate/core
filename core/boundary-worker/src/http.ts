@@ -8,6 +8,7 @@ import { recordFacts as recorded, withFacts } from "iterate/facts";
 import { controlPlaneRouteOf, MIND_PROVIDE_EXTERNAL_MIND_HEADER } from "iterate/mind-api";
 import { isControlPlaneHostname, type MindConfig } from "iterate/mind-config";
 import { MIND_IDENTITY_PATH } from "iterate/mind-identity-log";
+import { withoutOutsidePlaceholders } from "iterate/secret-placeholder";
 import type { MindTarget } from "iterate/workers";
 import { boundaryConfigOf } from "./config.ts";
 import { controlPlaneApiResponse, isWebSocketUpgrade } from "./control-plane-api.ts";
@@ -46,11 +47,12 @@ function dottedHostnameRefusal(request: Pick<Request, "url">): Response | undefi
 }
 
 export async function boundaryResponse(
-  request: Request,
+  incoming: Request,
   env: DoorEnv,
   ctx: ExecutionContext,
   mind: MindTransport,
 ): Promise<Response> {
+  const request = withoutOutsidePlaceholders(incoming);
   const dotted = dottedHostnameRefusal(request);
   if (dotted) return dotted;
   const secure = httpsRedirect(request);

@@ -1,4 +1,5 @@
 import { codedError, errorCode, jsonEqual } from "iterate/lib";
+import { isMindControlPlaneHostname } from "iterate/signed";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -132,7 +133,11 @@ export interface BuildBuiltInsDeps {
   invoke: (call: ItxExpression) => Promise<unknown>;
   namedWorker: (source: ItxExpressionInput) => Promise<NamedWorker>;
   context: (path: string) => ReachableContext;
-  egress: (request: Request) => Promise<Response>;
+  /** `signFor`: the other mind the host signs the request for, from the built-in `fetch`'s own
+   *  argument alone (`signedFetchOptionsOf`): nothing in a Request or a header makes it sign. */
+  egress: (request: Request, options?: { signFor?: string }) => Promise<Response>;
+  /** Work that goes on after the answer has gone (the context's `waitUntil`). */
+  afterTheAnswer: (work: Promise<unknown>) => void;
   caller: () => Caller;
   invokeAs: (caller: Caller, call: ItxExpression) => Promise<unknown>;
   rpcStubs: BuiltInScope["rpcStubs"];
@@ -451,7 +456,7 @@ export function buildIdentityRoots(
 
 type PortableBuiltInsDeps = Pick<
   BuildBuiltInsDeps,
-  "path" | "context" | "egress" | "caller" | "invokeAs" | "itx" | "connections"
+  "path" | "context" | "egress" | "afterTheAnswer" | "caller" | "invokeAs" | "itx" | "connections"
 >;
 
 // What answers the same from every context of a Worker, so a context's Durable Object and the
@@ -481,13 +486,124 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
         );
       });
     },
-    fetch: (request: Request) => deps.egress(request),
+    fetch: async (request: Request, ...more: unknown[]) => {
+      if (!(request instanceof Request))
+        throw codedError(
+          "INVALID_INPUT",
+          "fetch(request): the first argument is one Request (`new Request(url, { method, headers, body })`)",
+        );
+      const signFor = signedFetchOptionsOf(more);
+      if (!signFor) return deps.egress(request);
+      // The caller is read NOW: on a context's Durable Object it is the turn's own store, empty or
+      // another request's once the answer has gone. The caller gets the same answer or throw;
+      // the fact is written after egress settles.
+      const caller = deps.caller();
+      const sent = deps.egress(request, { signFor });
+      const record = (outcome: SignedRequestOutcome) =>
+        recordSignedRequest(deps, caller, request, signFor, outcome);
+      deps.afterTheAnswer(
+        sent.then(
+          (answer) => record({ status: answer.status }),
+          // a try the loop guard refused reached no egress: the guard records it (`itx/loop-limit`)
+          (error: unknown) =>
+            errorCode(error) === "LOOP_LIMIT" ? undefined : record({ threw: thrownOf(error) }),
+        ),
+      );
+      return sent;
+    },
     run: (script: string) => {
       itxLoader("itx.run");
       return requestScriptRun(deps.itx, path, script);
     },
   } satisfies Pick<BuiltInScope, "cd" | "fetch" | "run">;
 }
+
+/** THE BUILT-IN FETCH SIGNS WHEN ITS CALLER ASKS BY ARGUMENT: `fetch(request, { signFor })`, a
+ *  mind's control-plane hostname, has the host sign the request as this mind for that one
+ *  (core/mind-worker `mindsRoot`, the Door). Nothing else beside the request is taken: anything
+ *  but exactly that object is INVALID_INPUT. */
+function signedFetchOptionsOf(more: unknown[]): string | undefined {
+  // an absent option, as `fetch(request, undefined)` spells it too
+  if (more.length === 0 || (more.length === 1 && more[0] === undefined)) return undefined;
+  const options = SignedFetchOptions.safeParse(more);
+  if (!options.success)
+    throw codedError(
+      "INVALID_INPUT",
+      "fetch(request, options?): the method, headers and body go INTO the Request (`new Request(url, { method, headers, body })`); the only option is exactly { signFor: <another mind's control-plane hostname> }",
+    );
+  return options.data[0].signFor;
+}
+const SignedFetchOptions = z.tuple([
+  z.strictObject({ signFor: z.string().refine(isMindControlPlaneHostname) }),
+]);
+
+/** ONE FACT FOR EACH TRY TO SEND AS THE MIND, after the answer, on the calling context's log: who
+ *  asked, for which mind, the method, the URL with no query, and the outcome: the answer's status,
+ *  or that egress threw, with the error's code alone. The built-in cannot tell a refusal of the
+ *  Door before it signs from a failure after: both reach it as a throw, so every try that reached
+ *  egress is recorded. No statement, header or body. A failed append is reported and changes
+ *  nothing. */
+function recordSignedRequest(
+  deps: Pick<PortableBuiltInsDeps, "path" | "context">,
+  caller: Caller,
+  request: Request,
+  peer: string,
+  outcome: SignedRequestOutcome,
+): Promise<unknown> {
+  const { path: callerPath, principal, app, cause, grant, via, onBehalfOf } = caller;
+  const url = new URL(request.url);
+  // As the platform: no one else may append this type (../caller.ts `PLATFORM_FACT_TYPES`). WHO
+  // ASKED is in the event's `source`, by the same fields as any event of that caller
+  // (`stampCaller`): the principal with its grant and page, and for loaded code the person it runs
+  // for (`onBehalfOf`), and the cause. No token and no signed claim.
+  const asPlatform: Caller = {
+    principal,
+    // Not keyed by a delivery: its write key makes a retried delivery's writes land once, and each
+    // send is its own act. Two sends in one delivery are two records, a retry that sends again
+    // another (`append` above keys an event only by `cause.writeKey`).
+    cause: cause && { ...cause, writeKey: undefined },
+    path: callerPath || deps.path,
+    platform: true,
+    grant,
+    via,
+    onBehalfOf,
+  };
+  const event = {
+    type: SIGNED_REQUEST_SENT,
+    payload: {
+      peer,
+      method: request.method,
+      url: `${url.origin}${url.pathname}`,
+      callerPath: callerPath || deps.path,
+      ...(principal && { principal: principal.actor }),
+      app: app === true,
+      outcome,
+    },
+  };
+  return deps
+    .context(deps.path)
+    .invoke(["itx", "builtins", ["append", event]], [], asPlatform)
+    .catch((error: unknown) => {
+      // the record of a send past the loop limit is refused as any act there is: no issue
+      if (errorCode(error) === "LOOP_LIMIT") return;
+      console.error({
+        event: "itx.signed-request-unrecorded",
+        context: deps.path,
+        peer,
+        message: String(error),
+      });
+    });
+}
+export const SIGNED_REQUEST_SENT = "events.iterate.com/itx/signed-request-sent";
+/** What threw, as a string: its code when that is one (a code that crossed a hop is any value;
+ *  an AbortError's is the number 20), else its name. */
+function thrownOf(error: unknown): string {
+  const code: unknown = errorCode(error);
+  if (typeof code === "string" && code) return code;
+  const name: unknown = typeof error === "object" && error && Reflect.get(error, "name");
+  return typeof name === "string" && name ? name : "unknown";
+}
+type SignedRequestOutcome = { status: number } | { threw: string };
 
 // A genuine InvokeHandle, so `workers.get(spec).run()` pipelines over every transport (workerd#6873).
 // The code loads here, with the authority of the context `iterateContextName` names.

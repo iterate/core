@@ -165,6 +165,8 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/approval/rule-proposal-rejected",
   "events.iterate.com/approval/locked",
   "events.iterate.com/approval/unlocked",
+  // the record of a request sent as the mind (./context/built-ins.ts `recordSignedRequest`)
+  "events.iterate.com/itx/signed-request-sent",
 ]);
 
 export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>

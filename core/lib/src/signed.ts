@@ -2,6 +2,8 @@
 // pre-authentication encoding of that text, so nothing is canonicalized and nothing parses the text
 // before the signature checks. A page's script cannot import this module, so it copies `signedBytes`.
 
+import { codedError, ITERATE_CAUSE_HEADER } from "./lib.ts";
+
 export type Statement = {
   /** The mind it is for, by its control-plane hostname. */
   mind: string;
@@ -236,6 +238,84 @@ export function envelopeOf(value: unknown): Envelope | null {
   )
     return { statement, signature: { format, key, sig, authenticatorData, clientDataJSON } };
   return null;
+}
+
+/** A mind's signed statement on a request: base64url of the envelope's JSON (`statementHeaderOf`).
+ *  Its name holds "auth": Cloudflare's Workers Logs keep every request header in full but write
+ *  "REDACTED" for a name with auth, key, secret, token or jwt (proved 19 Nov on two minds). */
+export const ITERATE_STATEMENT_HEADER = "iterate-auth-statement";
+
+/** A MIND'S SIGNED REQUEST TO ANOTHER MIND: `path` "/", `payload` `{ method, url }` (upper case,
+ *  `URL.href`), 300 seconds at most. A credential, never an event (core/auth-worker/src/mind-fetch.ts). */
+export const MIND_FETCH_STATEMENT_TYPE = "events.iterate.com/mind/fetch-requested";
+
+/** A sender's memo (the Door's, a secret object's): a statement is used again while it has more
+ *  than a minute to live. One too long for a receiver is an `INVALID_INPUT`, kept nowhere. */
+export function mindFetchStatements(size: number) {
+  const kept = new Map<string, { header: string; expires: number }>();
+  return async (
+    sign: (input: {
+      mind: string;
+      path: string;
+      type: string;
+      payload: { method: string; url: string };
+      expiresInSeconds: number;
+    }) => Promise<Envelope>,
+    { from, mind, method, url }: { from: string; mind: string; method: string; url: string },
+  ): Promise<string> => {
+    const upper = method.toUpperCase();
+    const key = `${from} ${mind} ${upper} ${url}`;
+    const memo = kept.get(key);
+    if (memo && memo.expires - Date.now() > 60_000) return memo.header;
+    const envelope = await sign({
+      mind,
+      path: "/",
+      type: MIND_FETCH_STATEMENT_TYPE,
+      payload: { method: upper, url },
+      expiresInSeconds: 300,
+    });
+    const header = statementHeaderOf(envelope);
+    if (header.length > STATEMENT_HEADER_MAX_CHARACTERS)
+      throw codedError(
+        "INVALID_INPUT",
+        `itx.fetch: the signed statement for this URL is over ${STATEMENT_HEADER_MAX_CHARACTERS / 1024} KiB, more than ${mind} takes; send a shorter URL`,
+      );
+    const signed = statementOf(envelope.statement);
+    if ("refused" in signed) throw new Error(`the stack signed no statement: ${signed.refused}`);
+    kept.delete(key);
+    kept.set(key, { header, expires: signed.expires });
+    if (kept.size > size) kept.delete(kept.keys().next().value ?? "");
+    return header;
+  };
+}
+
+/** Both senders' headers: no `x-itx-*`, `x-iterate-*` or `host`; the cause leaves with the
+ *  request (iterate/lib `leavingTheStack`). */
+export function signedRequestHeaders(headers: Headers): Headers {
+  const cause = ITERATE_CAUSE_HEADER.toLowerCase();
+  return new Headers(
+    [...headers].filter(
+      ([name]) =>
+        name === cause ||
+        !(name.startsWith("x-itx-") || name.startsWith("x-iterate-") || name === "host"),
+    ),
+  );
+}
+
+export const statementHeaderOf = (envelope: Envelope) =>
+  base64url(encoder.encode(JSON.stringify(envelope)));
+
+/** The longest `iterate-auth-statement` a receiver reads (an ML-DSA-65 one is about 5 KB). */
+export const STATEMENT_HEADER_MAX_CHARACTERS = 16 * 1024;
+
+/** The envelope in an `iterate-auth-statement`, or null. It checks no signature. */
+export function envelopeOfStatementHeader(value: string): Envelope | null {
+  if (value.length > STATEMENT_HEADER_MAX_CHARACTERS) return null;
+  try {
+    return envelopeOf(JSON.parse(new TextDecoder().decode(fromBase64url(value))));
+  } catch {
+    return null;
+  }
 }
 
 /** Call it only after the signature checked. */

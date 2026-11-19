@@ -60,6 +60,8 @@ export const StoredSecret = z.strictObject({
       iv: z.string().min(1),
       ciphertext: z.string().min(1),
     }),
+    /** The sealed material is the proxy, and the mark is in the binding (../secret-at-rest.ts). */
+    byProxy: z.literal(true).optional(),
     placement: z.enum(["header", "url"]),
     operations: z.array(z.enum(SECRET_OPERATIONS)),
     /** Null: every secret of the mind. */
@@ -86,6 +88,7 @@ export type SecretFact =
         lendTo: string[] | null;
         statementPaths?: string[];
         by?: { userId: string; email: string };
+        proxy?: { mind: string; url: string };
       };
     }
   | { type: "events.iterate.com/secret/deleted"; payload: { path: string } }
@@ -100,7 +103,8 @@ export type SecretFact =
   // The request as received: its placeholders, never a value.
   | {
       type: "events.iterate.com/secret/used";
-      payload: { method: string; url: string; status: number; digest?: string };
+      // `proxy`: for a secret by proxy, the URL the request went to
+      payload: { method: string; url: string; status: number; digest?: string; proxy?: string };
     }
   // Never an input or an output of the operation.
   | {

@@ -70,7 +70,10 @@ export async function mindHostResponse(
     route: null,
     config: deps.config,
   });
+  if (stamp.answer) return stamp.answer;
   const answer = withoutSessionCookies(await forward(stamp.forwarded));
+  // a mind's request gets the app's answer as it is: no sign-in page is a mind's
+  if (stamp.byMind) return answer;
   const decision = mindHostSignInAnswerOf({ answer, request, caller: stamp.caller });
   if (!decision) return answer;
   await answer.body?.cancel();

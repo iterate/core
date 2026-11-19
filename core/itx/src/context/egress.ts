@@ -11,6 +11,8 @@ export function egress(
   from: {
     cause: Cause | undefined;
     path: string;
+    /** The other mind that the host signs this request for (`ItxHost.egress`). */
+    signFor?: string;
   },
 ): Promise<Response> {
   const cause = from.cause || parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
@@ -26,5 +28,6 @@ export function egress(
   if (!headers.has("user-agent")) headers.set("user-agent", "iterate");
   const outbound = new Request(request, { headers });
   const door = itxHost().egress;
-  return door ? door(outbound, { path: from.path }) : fetch(outbound);
+  if (from.signFor && !door) throw new Error("egress: this host signs no request for another mind");
+  return door ? door(outbound, { path: from.path, signFor: from.signFor }) : fetch(outbound);
 }

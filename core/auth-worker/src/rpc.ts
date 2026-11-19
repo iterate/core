@@ -10,6 +10,7 @@ import { authResponse } from "./http.ts";
 import { identityFactsDelivered, identityFactsToDeliver, identityLogResponse } from "./identity.ts";
 import { verifiedStatement } from "./keys.ts";
 import { isMember, isMemberSession } from "./members.ts";
+import { mindOfSignedRequest } from "./mind-fetch.ts";
 import { hostClientOf } from "./oauth.ts";
 import { signedByStack, signedDeliveryByStack } from "./stack-key.ts";
 import { proposeStatement } from "./statement-drafts.ts";
@@ -73,6 +74,10 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
   // only a Worker of the stack reaches this, over a binding
   async sign(input: Parameters<AuthService["sign"]>[0]) {
     return signedByStack(this.env, input);
+  }
+
+  async mindOfSignedRequest(input: Parameters<AuthService["mindOfSignedRequest"]>[0]) {
+    return mindOfSignedRequest(this.env, input);
   }
 
   async proposeStatement(input: Parameters<AuthService["proposeStatement"]>[0]) {

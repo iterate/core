@@ -19,6 +19,12 @@ import {
 import { SECRET_USE_HEADER, secretPathsReferenced } from "iterate/secret-placeholder";
 import { type MindConfig, zoneOf, zoneOfMailAddress } from "iterate/mind-config";
 import type { Door as DoorService, SecretVerb, SecretVerbs } from "iterate/workers";
+import {
+  isMindControlPlaneHostname,
+  ITERATE_STATEMENT_HEADER,
+  mindFetchStatements,
+  signedRequestHeaders,
+} from "iterate/signed";
 import { z } from "zod";
 import { boundaryConfigOf } from "./config.ts";
 import type { DoorEnv } from "./env.ts";
@@ -26,9 +32,10 @@ import { ownRequestHeaders } from "./own-request.ts";
 
 export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   async fetch(request: Parameters<DoorService["fetch"]>[0]) {
-    // Only the door names a secret in SECRET_USE_HEADER, never a caller.
+    // Only the Door names a secret in SECRET_USE_HEADER, and only `fetchForMind` signs.
     const headers = new Headers(request.headers);
     headers.delete(SECRET_USE_HEADER);
+    headers.delete(ITERATE_STATEMENT_HEADER);
     const outbound = new Request(request, { headers });
     const paths = secretPathsReferenced(outbound);
     if (paths.length > 1)
@@ -59,6 +66,61 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
       ),
       [],
     );
+  }
+
+  /** The built-in `itx.fetch(request, { signFor })` alone (core/itx/src/context/built-ins.ts),
+   *  which `itx.minds.get(signFor).fetch` calls (core/mind-worker/src/context/minds.ts). */
+  async fetchForMind(...[signFor, request]: Parameters<DoorService["fetchForMind"]>) {
+    const headers = signedRequestHeaders(request.headers);
+    // a fragment never goes on the wire, so the statement is for the URL without it
+    const url = new URL(request.url);
+    url.hash = "";
+    // workerd takes a URL with userinfo, which the statement would sign and the fetch would send
+    if (url.username || url.password)
+      throw codedError(
+        "INVALID_INPUT",
+        "fetch(request, { signFor }): a request signed for another mind takes no credentials in its URL: send them in a header",
+      );
+    const unsigned = new Request<unknown, CfProperties>(
+      url.href,
+      new Request(request, { headers }),
+    );
+    const refusal = this.#signRefusal(
+      signFor,
+      unsigned,
+      secretPathsReferenced(unsigned).length > 0,
+    );
+    if (refusal) throw codedError("INVALID_INPUT", `fetch(request, { signFor }): ${refusal}`);
+    const statement = await this.#statementFor(signFor, unsigned);
+    headers.set(ITERATE_STATEMENT_HEADER, statement);
+    return withoutStatement(
+      withFacts(
+        await fetch(leavingTheStack(new Request(unsigned, { headers })), { redirect: "manual" }),
+        [],
+      ),
+      statement,
+    );
+  }
+
+  #signRefusal(signFor: string, request: Request, namesASecret: boolean) {
+    const own = boundaryConfigOf(this.env).controlPlaneHostname;
+    if (!isMindControlPlaneHostname(signFor) || signFor === own)
+      return `${signFor} is no other mind to sign a request for`;
+    if (new URL(request.url).protocol !== "https:")
+      return "a request to another mind goes by https";
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
+      return "a WebSocket upgrade is refused: a socket cannot come back across the signing call";
+    if (namesASecret) return "a request signed for another mind names no secret";
+    return undefined;
+  }
+
+  #statementFor(signFor: string, request: Request): Promise<string> {
+    return statementsHere((input) => this.env.AUTH.sign(input), {
+      from: boundaryConfigOf(this.env).controlPlaneHostname,
+      mind: signFor,
+      method: request.method,
+      url: new URL(request.url).href,
+    });
   }
 
   /* oxlint-disable iterate/mechanical-class-impl -- a generic method: `Parameters<>` of the contract would lose `V`, which ties each verb to its input and its answer */
@@ -198,6 +260,21 @@ export class Door extends WorkerEntrypoint<DoorEnv> implements DoorService {
   async writeMetrics(points: Parameters<DoorService["writeMetrics"]>[0]) {
     return this.env.TELEMETRY.writeMetrics(points);
   }
+}
+
+const statementsHere = mindFetchStatements(256);
+
+/** `response` with no header that holds `statement`, which is never the code's. */
+function withoutStatement(response: Response, statement: string): Response {
+  const named = [...response.headers].filter(([, value]) => value.includes(statement));
+  if (!named.length) return response;
+  const headers = new Headers(response.headers);
+  for (const [name] of named) headers.delete(name);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 /** WHY A MAIL MAY NOT LEAVE FROM `from`, or null. The sender is ONE mailbox at a zone of the

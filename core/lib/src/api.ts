@@ -202,6 +202,12 @@ export type ScheduledAppend = {
  *  not sent. */
 export type SecretMaterial = string | Record<string, unknown>;
 
+/** A SECRET THAT GOES BY PROXY holds no value: a request that names it goes, signed by this mind
+ *  for `mind` (a control-plane hostname), to `<url>/<target host><path and query>`. THE PROXYING
+ *  MIND SEES EVERY REQUEST AND ANSWER OF THIS SECRET. Whoever may `secrets.set` a path can point
+ *  it at any https host this way: a jail grants no `set`. No approval rule holds one. */
+export type SecretProxy = { mind: string; url: string };
+
 /** How a token endpoint wants the client credential — the RFC 8414 `token_endpoint_auth_methods_supported`
  *  registry values, so a provider's discovery document pastes straight in: `client_secret_basic`
  *  (HTTP Basic — Google, Slack, the petshop; the default), `client_secret_post` (`client_id` +
@@ -353,6 +359,7 @@ export type SecretCatalogEntry = {
   /** The material's public fields (`set`'s `public`, a collection form's public parts), by name:
    *  an OAuth client's `clientId` beside the secret that holds its `clientSecret`. */
   public?: Record<string, string>;
+  proxy?: SecretProxy;
   /** A path that forwards every use to a secret elsewhere, as a lend of the old platform left it:
    *  whose, under which lend, and the connection it is. packages/mind-backup reads it. */
   borrowed?: {
@@ -1504,7 +1511,22 @@ export interface IterateContextApi {
     options?: { includeEphemeral?: boolean },
   ): Promise<StreamPage>;
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
-  fetch(request: Request): Promise<Response>;
+  /** The request through this context's rule for `itx.fetch`. The method, headers and body go
+   *  into the Request.
+   *  THERE ARE TWO SIGNERS, AND NOTHING ELSE SIGNS. (1) The built-in fetch signs for the mind its
+   *  caller names by argument: `{ signFor: "<another mind's control-plane hostname>" }` sends the
+   *  request as this mind to that one (`minds.get(domain).fetch` asks so); its record is
+   *  `events.iterate.com/itx/signed-request-sent`. (2) A request that uses a secret by proxy
+   *  (`SecretProxy`) is signed by the secrets Worker for that secret's proxy alone, to that
+   *  proxy's address, as the secret's `set` says; its record is the secret's own use fact, not
+   *  that event.
+   *  A rule's target gets the option as one more argument (a whole `@` hands on both): a narrow
+   *  fetch passes the request on and nothing else, so the built-in does not sign what it sends. A
+   *  request that names a by-proxy secret is still signed by the secrets Worker for that proxy,
+   *  for any caller that may use that secret. For a jail's
+   *  author: a narrowed fetch calls the mind's fetch with the request alone; it never hands on
+   *  what else it was given. */
+  fetch(request: Request, options?: { signFor: string }): Promise<Response>;
   kv: {
     get(key: string): Promise<string | null>;
     put(key: string, value: string): Promise<{ ok: true }>;
@@ -1566,7 +1588,8 @@ export interface IterateContextApi {
   secrets: {
     set(
       path: string,
-      material: SecretMaterial,
+      /** Null for a secret that goes by proxy (`options.proxy`), and only for one. */
+      material: SecretMaterial | null,
       /** The material and its options replace the whole of what the secret held. `public`: the
        *  names of the material's top-level string fields that are no secret (an OAuth client's
        *  `clientId`): the `secret/set` fact carries their values and `describe` answers them.
@@ -1578,6 +1601,8 @@ export interface IterateContextApi {
         refresh?: SecretRefresh;
         merge?: boolean;
         public?: string[];
+        /** With it, `material` is null and only `urls` and `placement: "header"` go beside it. */
+        proxy?: SecretProxy;
       } & SecretUses,
     ): Promise<{ path: string }>;
     /** OAuth's first tokens: the link to send a human to — the secrets Worker's start page on the
@@ -1612,10 +1637,11 @@ export interface IterateContextApi {
      *  callback, `<platform origin>/secrets/oauth/callback`. */
     oauthCallbackUrl(): Promise<string>;
     delete(path: string): Promise<{ path: string }>;
-    /** Whether the secret at `path` holds a value, never the value: `set` is false for a path
-     *  that holds none, one never set included. A read alone: no fact. The answer has more fields
+    /** Whether the secret at `path` is set, never its value: by a value, or by proxy with
+     *  `proxy` and no value here. `set` is false for a path that holds neither, one never set
+     *  included. A read alone: no fact. The answer has more fields
      *  (`SecretDescription`, iterate/workers). */
-    describe(path: string): Promise<{ path: string; set: boolean }>;
+    describe(path: string): Promise<{ path: string; set: boolean; proxy?: SecretProxy }>;
     list(): Promise<SecretCatalogEntry[]>;
     /** A secret's stored cell as text, for a backup: ciphertext that only the stack's at-rest key
      *  opens, handed to a caller whose `proof` is the HMAC-SHA256 of
@@ -1626,7 +1652,10 @@ export interface IterateContextApi {
     /** A sealed cell, taken in once: one that `exportSealed` handed out on a stack with the same
      *  at-rest key, which comes back as it was. `proof`: the HMAC-SHA256 of `[path, cell]` as JSON
      *  under that key.
-     *  AN OLDER CELL IS TAKEN OVER A NEWER VALUE, once: that is what a restore is for. A cell of
+     *  AN OLDER CELL IS TAKEN OVER A NEWER VALUE, once: that is what a restore is for. A proxy's
+     *  cell goes only over nothing, as its `set` does. An older genuine cell of the path still
+     *  imports over nothing, so an archive can bring back a secret, or a proxy, that the owner
+     *  has replaced since (main's behaviour for a value too). A cell of
      *  a grant whose refresh token works once holds a token that is spent by then. */
     importSealed(path: string, cell: string, proof: string): Promise<{ path: string }>;
     /** The persons' grants that the iterate Cloud brokers, refreshed now, whichever client of the
@@ -1796,9 +1825,30 @@ export interface IterateContextApi {
    *  adds each event at that one context of the other mind instead, when its rule lets this mind
    *  append there. `itx/*` and `mind-meld/*` events are not sent. Any
    *  answer but a 200 throws, so the row tries again and ends in a dead letter. The delivery
-   *  loop's call alone. */
+   *  loop's call alone.
+   *  THE KERNEL'S LOOP COUNT DOES NOT CROSS A MIND'S EDGE: never answer another mind's request or
+   *  event with one to that mind unless the app bounds the exchange itself. A nest of requests
+   *  ends only at Cloudflare's limit (a 503 at about the 14th); a chain of events never ends. */
   minds: {
-    get(domain: string): InvokeHandle;
+    /** `.fetch(request)`: an https request to that mind, signed as this mind. One Request and
+     *  nothing more; no WebSocket. It is the `itx.fetch(request, { signFor: domain })` of the
+     *  context where dispatch starts, so that context's rule for `itx.fetch` decides it. For loaded
+     *  code that is the caller, wherever the call is spelled: `minds` is answered at the caller, so
+     *  its `itx.cd(<a limited context>).minds.get(x).fetch(request)` signs when its own fetch is
+     *  free. A member's `itx.cd(<context>)` handle starts dispatch at that context, so there that
+     *  context's fetch decides. A mask refuses it, and a narrow fetch sends it on without the
+     *  built-in's signature. A context signs wherever it can reach the built-in fetch unchanged, its own or
+     *  another context's by `itx.cd`, exactly as it can fetch there: a table that masks its own
+     *  fetch and leaves `itx.cd('/')` open has not narrowed fetch. Each try leaves `events.iterate.com/itx/signed-request-sent` on the
+     *  calling context's log, written when egress settles, whether or not the caller waits for
+     *  the answer; on a context's own object the local write runs before the caller goes on. It
+     *  holds the URL's origin and path, never its query: a path can itself hold a token. Its `source` names who asked by
+     *  the same fields as any event of that caller: the principal with its grant, and for loaded
+     *  code the person it runs for (`onBehalfOf`); code that runs for nobody is named by nobody. When a
+     *  member's page makes the call through a context's fetch channel, the source has the member
+     *  and not `via.appPage`, because that channel carries no `via`; an ordinary append of the
+     *  same page keeps it. */
+    get(domain: string): InvokeHandle & { fetch(request: Request): Promise<Response> };
   };
   /** A subscription: a pure itx expression, or a live callback lent to the registry (what live state
    *  uses); `null` removes the row. The handle's dispose removes it too. */

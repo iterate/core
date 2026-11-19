@@ -33,6 +33,19 @@ export const CoreEventCatalog = {
         metadata: z.record(z.string(), z.unknown()).nullable().optional(),
       }),
     },
+    "events.iterate.com/itx/signed-request-sent": {
+      description:
+        "A request this context's caller asked the built-in fetch to send signed as the mind, after egress answered or threw (context/built-ins.ts `recordSignedRequest`). The platform's alone, written when egress settles. Its `source` names who asked, as any event of that caller. The URL is its origin and path, never its query: a path can itself hold a token.",
+      payloadSchema: z.object({
+        peer: z.string(),
+        method: z.string(),
+        url: z.string(),
+        callerPath: z.string(),
+        principal: z.string().optional(),
+        app: z.boolean(),
+        outcome: z.union([z.object({ status: z.number().int() }), z.object({ threw: z.string() })]),
+      }),
+    },
     "events.iterate.com/itx/child-created": {
       description:
         "A context under this one exists: every context appends it to each ancestor up to its root when it wakes (iterate-context-durable-object.ts `announceToAncestors`), keyed by the child's path, so it lands once per child. The Mind processor reduces the ones on `/` into its context registry.",

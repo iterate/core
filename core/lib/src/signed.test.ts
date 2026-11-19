@@ -4,10 +4,13 @@ import {
   challengeOf,
   type Envelope,
   envelopeOf,
+  envelopeOfStatementHeader,
+  ITERATE_STATEMENT_HEADER,
   keyIdOf,
   signedMlDsa65,
   signedP256,
   statementOf,
+  statementHeaderOf,
   statementText,
   verifySignature,
 } from "./signed.ts";
@@ -16,6 +19,11 @@ const SITE = { origin: "https://iterate.example.com", rpId: "iterate.example.com
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 const ECDSA_SHA256 = { name: "ECDSA", hash: "SHA-256" } as const;
 const encoder = new TextEncoder();
+
+test("a mind's statement travels in a header that Cloudflare's Workers Logs redact: its name holds auth, key, secret, token or jwt", () => {
+  // Workers Logs keep every other request header in full, and a statement in full can be replayed
+  expect(ITERATE_STATEMENT_HEADER).toMatch(/auth|key|secret|token|jwt/);
+});
 
 test("a p256 statement verifies under its key, and a changed byte fails", async () => {
   const key = await newKey();
@@ -106,6 +114,17 @@ test("a statement parses only with every field", () => {
     "refused",
   );
   expect(statementOf("not json")).toHaveProperty("refused");
+});
+
+test("a statement header carries its envelope there and back, and a bad or oversized value is null", async () => {
+  const envelope = await signedP256(statement(), (await newKey()).privateKey, "a-key");
+  const header = statementHeaderOf(envelope);
+  expect(header).toMatch(/^[A-Za-z0-9_-]+$/);
+  expect(envelopeOfStatementHeader(header)).toEqual(envelope);
+  expect(envelopeOfStatementHeader(`${header}${"A".repeat(16 * 1024)}`)).toBeNull();
+  expect(envelopeOfStatementHeader("not base64url!")).toBeNull();
+  expect(envelopeOfStatementHeader(base64url(encoder.encode("not json")))).toBeNull();
+  expect(envelopeOfStatementHeader(base64url(encoder.encode('{"statement":1}')))).toBeNull();
 });
 
 async function newKey() {
