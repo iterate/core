@@ -1,6 +1,10 @@
 import { errorCode } from "iterate/lib";
 import { stampedExpiryOf } from "iterate/principal";
-import { ITERATE_SERVE_CONTEXT_HEADER, ITERATE_SERVE_HEADER } from "iterate/mind-ingress";
+import {
+  ITERATE_SERVE_ADMITS_HEADER,
+  ITERATE_SERVE_CONTEXT_HEADER,
+  ITERATE_SERVE_HEADER,
+} from "iterate/mind-ingress";
 import type { Caller } from "./caller.ts";
 import {
   FETCH_UPGRADE_CONTEXT_HEADER,
@@ -122,8 +126,9 @@ export async function serveHostRequest(args: {
     }
     if (serve === "person-itx") {
       const path = answer.headers.get(ITERATE_SERVE_CONTEXT_HEADER);
+      const admits = answer.headers.get(ITERATE_SERVE_ADMITS_HEADER);
       await answer.body?.cancel();
-      return await personItxSession({ ctx, request: args.request, path });
+      return await personItxSession({ ctx, request: args.request, path, admits });
     }
     return withoutServeHeader(held)(answer);
   } catch (error) {
@@ -147,12 +152,14 @@ const withoutServeHeader =
   (answer: Response): Response => {
     if (
       !answer.headers.has(ITERATE_SERVE_HEADER) &&
-      !answer.headers.has(ITERATE_SERVE_CONTEXT_HEADER)
+      !answer.headers.has(ITERATE_SERVE_CONTEXT_HEADER) &&
+      !answer.headers.has(ITERATE_SERVE_ADMITS_HEADER)
     )
       return next(answer);
     const headers = new Headers(answer.headers);
     headers.delete(ITERATE_SERVE_HEADER);
     headers.delete(ITERATE_SERVE_CONTEXT_HEADER);
+    headers.delete(ITERATE_SERVE_ADMITS_HEADER);
     return next(
       new Response(answer.body, {
         status: answer.status,

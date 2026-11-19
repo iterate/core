@@ -5,6 +5,8 @@ import { errorCode } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { PERSON_METHOD_MAX_CHARS } from "./context/facet-public-methods.ts";
 import {
+  ADMITS_EVERY_MS,
+  admissionOf,
   asAFacetIsTold,
   asAPersonReads,
   PersonContextRpcTarget,
@@ -683,6 +685,133 @@ test.for<{ name: string; act: (target: PersonContextRpcTarget) => unknown; code:
   expect(asPerson).not.toHaveBeenCalled();
 });
 
+// ADMITS: an app's answer may name a facet that says whether a guest still reaches the context.
+test("a guest's socket ends within the check's interval after their link ends", async () => {
+  let clock = 1_000_000;
+  let live = true;
+  const ask = vi.fn(async () => live);
+  const { onFrame } = admissionOf({ facet: "call", member: false, ask, now: () => clock });
+  // traffic within the interval asks nothing
+  clock += 1_000;
+  expect(await onFrame!()).toBeUndefined();
+  expect(ask).not.toHaveBeenCalled();
+  clock += ADMITS_EVERY_MS;
+  expect(await onFrame!()).toBeUndefined();
+  expect(ask).toHaveBeenCalledWith("call");
+  // the link ends: the first frame after the interval ends the session
+  live = false;
+  clock += 1_000;
+  expect(await onFrame!()).toBeUndefined();
+  clock += ADMITS_EVERY_MS;
+  expect(await onFrame!()).toBe("your access to this context ended");
+  // a no is final, and a throw is a no
+  const throwing = admissionOf({
+    facet: "call",
+    member: false,
+    ask: async () => {
+      throw new Error("no such facet");
+    },
+    now: () => clock,
+  });
+  clock += ADMITS_EVERY_MS;
+  expect(await throwing.onFrame!()).toBe("your access to this context ended");
+});
+
+test("a guest's write after their link ended is refused at once, and a read is not asked", async () => {
+  let live = true;
+  const ask = vi.fn(async () => live);
+  const { gate } = admissionOf({ facet: "call", member: false, ask });
+  const { target, asPerson, context } = view(BOB.actor, gate);
+  await target.agents.get(PATH).message("hello");
+  expect(asPerson).toHaveBeenCalledTimes(1);
+  live = false;
+  await expect(target.agents.get(PATH).message("again")).rejects.toThrow(
+    "your access to this context ended",
+  );
+  await expect(
+    target.append({
+      type: "events.iterate.com/agent/context-added",
+      payload: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
+    }),
+  ).rejects.toThrow("your access to this context ended");
+  expect(asPerson).toHaveBeenCalledTimes(1);
+  // reads are the socket's check to end, not each read's
+  await target.readEvents(0, 10);
+  expect(context.invoke).toHaveBeenCalledTimes(1);
+  expect(ask).toHaveBeenCalledTimes(2);
+});
+
+test("a member is never asked, nor a person on a socket whose answer named no facet", async () => {
+  const ask = vi.fn(async () => false);
+  for (const args of [
+    { facet: "call", member: true },
+    { facet: null, member: false },
+    { facet: "../call", member: true },
+  ]) {
+    const { gate, onFrame } = admissionOf({ ...args, ask, now: () => 0 });
+    expect(onFrame).toBeUndefined();
+    await gate();
+  }
+  expect(ask).not.toHaveBeenCalled();
+});
+
+test("a no stays final when a check that started earlier answers yes after it", async () => {
+  const answers: ((admitted: boolean) => void)[] = [];
+  const ask = vi.fn(() => new Promise<boolean>((resolve) => answers.push(resolve)));
+  const { gate } = admissionOf({ facet: "call", member: false, ask });
+  const first = gate();
+  const second = gate();
+  answers[1]!(false);
+  await expect(second).rejects.toThrow("your access to this context ended");
+  // the earlier check's yes comes after the no: its write is refused too
+  answers[0]!(true);
+  await expect(first).rejects.toThrow("your access to this context ended");
+  // the later yes did not undo the no: the next write is refused, and nobody is asked
+  await expect(gate()).rejects.toThrow("your access to this context ended");
+  expect(ask).toHaveBeenCalledTimes(2);
+});
+
+test("a facet name that is no facet's name refuses a guest at once: a typo leaves no socket open", async () => {
+  const ask = vi.fn(async () => true);
+  for (const facet of ["../call", "call share", " "]) {
+    const { gate, onFrame } = admissionOf({
+      facet,
+      member: false,
+      ask,
+      now: () => 0,
+    });
+    await expect(gate()).rejects.toThrow("your access to this context ended");
+    expect(await onFrame!()).toBe("your access to this context ended");
+  }
+  expect(ask).not.toHaveBeenCalled();
+});
+
+test("a message's key goes to the agent, so a retry with the same key lands once", async () => {
+  const { target, asPerson } = view();
+  await target.agents.get(PATH).message("hello", { key: "page-1:msg-7" });
+  await target.agents.get(PATH).message("hello", { key: "page-1:msg-7" });
+  expect(asPerson.mock.calls.map(([expression]) => expression)).toEqual([
+    [
+      "itx",
+      "builtins",
+      "facets",
+      ["get", "agent"],
+      ["message", "hello", "/", { key: "page-1:msg-7" }],
+    ],
+    [
+      "itx",
+      "builtins",
+      "facets",
+      ["get", "agent"],
+      ["message", "hello", "/", { key: "page-1:msg-7" }],
+    ],
+  ]);
+  // the key alone: no other option crosses
+  expect(
+    refusalOf(() => target.agents.get(PATH).message("hello", { key: "k", trigger: false })),
+  ).toBe("INVALID_INPUT");
+});
+
 // The socket is the platform's to open: for the person the boundary stamped, on an upgrade from the
 // host's own page, for a context the app named by its canonical path.
 const person = {
@@ -755,7 +884,7 @@ test("a guest is named as who asked by their id and the name they typed, marked 
 
 /** The view over stand-ins for the context. `viewer`: the id of a person who is no member, who
  *  reads as one; with none, the view hands on every value as it is, as for a member. */
-function view(viewer?: string) {
+function view(viewer?: string, gate?: () => Promise<void>) {
   const context = {
     invoke: vi.fn(async (..._args: unknown[]): Promise<unknown> => "answer"),
     subscribe: vi.fn(async (..._args: unknown[]) => "handle"),
@@ -769,6 +898,7 @@ function view(viewer?: string) {
       context as unknown as ConstructorParameters<typeof PersonContextRpcTarget>[1],
       asPerson,
       viewer ? (value) => asAPersonReads(value, viewer) : (value) => value,
+      gate,
     ),
   };
 }

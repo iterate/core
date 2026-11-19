@@ -113,6 +113,8 @@ test("a guest's way in: a live link's check, the join as the platform's guest, a
   expect(socket).toMatchObject({ status: 426 });
   expect(socket.headers.get("x-iterate-serve")).toBe("person-itx");
   expect(socket.headers.get("x-iterate-serve-context")).toBe(AGENT);
+  // the platform asks the call whether she still reaches the agent (call.ts `admits`)
+  expect(socket.headers.get("x-iterate-serve-admits")).toBe("call");
   // a member who opens a link comes in as themselves
   expect(await mind.post(member, `/guest/join${AGENT}`, { secret })).toEqual([
     200,

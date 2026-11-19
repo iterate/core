@@ -1179,6 +1179,25 @@ test("transcription, said and delegate carry the admission: an earlier admission
   ).rejects.toThrow("Join the call first.");
 });
 
+test("admits: a member always, a guest while a live link lists them, nobody else", async () => {
+  // the method reads who asks and the share state alone, so it runs here on a stand-in `this`
+  const admits = (asked: Asked, share: ShareState) =>
+    CallDurableObject.prototype.admits.call({
+      onBehalfOf: () => asked,
+      snapshot: async () => ({ state: share }),
+    } as unknown as CallDurableObject);
+  const now = Date.now();
+  const live = shareWith({ guests: ["guest:grace"], until: now + 3_600_000 });
+  const ended: ShareState = {
+    links: live.links.map((link) => ({ ...link, endedAt: new Date(now).toISOString() })),
+  };
+  expect(await admits(owner, { links: [] })).toBe(true);
+  expect(await admits(grace, live)).toBe(true);
+  expect(await admits(grace, ended)).toBe(false);
+  expect(await admits({ principal: { actor: "guest:eve", kind: "guest" } }, live)).toBe(false);
+  expect(await admits(undefined, live)).toBe(false);
+});
+
 test("the call's class is in a module that a publication offers a facet's class from", async () => {
   // the platform's rule (core/mind-worker/src/mind/publication.ts `publishedModules`, not exported):
   // a module at the config's root, or an app's backend.ts. The test holds the rule's text, so a
@@ -1197,7 +1216,9 @@ test("the call's class is in a module that a publication offers a facet's class 
   // and that module exports the class the spec names, a facet's host
   const exported = (await import("../../configs/default/call.ts")) as Record<string, unknown>;
   expect(exported[CALL_FACET.className]).toBe(CallDurableObject);
-  expect(CallDurableObject.personMethods.join(" ")).toBe("join signal leave transcription said");
+  expect(CallDurableObject.personMethods.join(" ")).toBe(
+    "join signal leave transcription said admits",
+  );
   // the voice agent's request is its host's, a member's: no person method
   expect(CallDurableObject.publicMethods).toContain("delegate");
   // the row is pushed the share events, a page's row un-set, and its own look, alone

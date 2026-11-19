@@ -185,7 +185,9 @@ export function meetApp({ joinFoldMs = JOIN_FOLD_MS }: { joinFoldMs?: number } =
       !isLiveGuest(await shareOf(itx, agent), person.userId, Date.now())
     )
       return json(ended, 403);
-    return host.auth.personItx(request, agent, { guests: true });
+    // the platform asks the call whether the guest still reaches the agent, and ends the socket
+    // when their link ends (call.ts `admits`)
+    return host.auth.personItx(request, agent, { guests: true, admits: "call" });
   }
 
   return {

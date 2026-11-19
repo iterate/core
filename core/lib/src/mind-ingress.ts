@@ -23,6 +23,11 @@ export const ITERATE_SERVE_HEADER = "x-iterate-serve";
 /** The context path a `person-itx` answer names: the one context the person's socket reaches. */
 export const ITERATE_SERVE_CONTEXT_HEADER = "x-iterate-serve-context";
 
+/** The facet of that context a `person-itx` answer names, if any: the platform asks its person
+ *  method `admits()` whether a person who is no member still reaches the context (iterate/sdk
+ *  `auth.personItx`, `admits`). */
+export const ITERATE_SERVE_ADMITS_HEADER = "x-iterate-serve-admits";
+
 /** THE BASE PATH an app is served under, when what serves it strips a prefix from the URL the app
  *  sees: an app composes the paths the browser addresses with it (packages/ui
  *  `src/apps/base-path.ts`). Absent on a mind's own hostnames, where each app owns its origin. */

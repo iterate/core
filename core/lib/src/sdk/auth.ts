@@ -11,6 +11,7 @@ import {
 } from "../principal.ts";
 import {
   ITERATE_CONTROL_PLANE_HOSTNAME_HEADER,
+  ITERATE_SERVE_ADMITS_HEADER,
   ITERATE_SERVE_CONTEXT_HEADER,
   ITERATE_SERVE_HEADER,
 } from "../mind-ingress.ts";
@@ -141,8 +142,18 @@ export const auth = {
    *  The socket is no `itx`: it reads that context's log and live state, names the person on the
    *  words they send its agent and on the stop of an answer, and signs a URL for a file under its
    *  path. Nothing else (core/configs/default/people.md, "A live view of one context"). The
-   *  session ends when the sign-in does. */
-  personItx(request: Request, path: string, options: GuestOption = {}): Response {
+   *  session ends when the sign-in does.
+   *
+   *  `admits` names a facet of that context whose person method `admits()` says whether the
+   *  person still reaches it. For a person who is no member, the platform asks it before each
+   *  write and at most once every 5 seconds of the socket's traffic, and a `false` or a throw
+   *  ends the socket: a guest whose link ended is out of the context, not only of a call. A
+   *  member is never asked. */
+  personItx(
+    request: Request,
+    path: string,
+    options: GuestOption & { admits?: string } = {},
+  ): Response {
     return (
       auth.requirePerson(request, options) ||
       new Response("Open this path as a WebSocket: it is the page's view of one context.\n", {
@@ -151,6 +162,7 @@ export const auth = {
           upgrade: "websocket",
           [ITERATE_SERVE_HEADER]: "person-itx",
           [ITERATE_SERVE_CONTEXT_HEADER]: path,
+          ...(options.admits && { [ITERATE_SERVE_ADMITS_HEADER]: options.admits }),
         },
       })
     );

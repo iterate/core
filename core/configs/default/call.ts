@@ -26,7 +26,14 @@ import {
 } from "iterate/stream/processor";
 import { z } from "zod";
 import { Call, CALL_DUE, type CallData } from "./call/rules.ts";
-import { isLive, LINK_ENDED, reduceShare, SHARE_EVENTS, ShareState } from "./call/share.ts";
+import {
+  isLive,
+  isLiveGuest,
+  LINK_ENDED,
+  reduceShare,
+  SHARE_EVENTS,
+  ShareState,
+} from "./call/share.ts";
 
 /** The event that sets or un-sets a row; un-set (`target: null`) for a page means it left. */
 const ROW_SET = "events.iterate.com/itx/subscription-configured";
@@ -131,8 +138,9 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
     "transcription",
     "said",
     "delegate",
+    "admits",
   ];
-  static override personMethods = ["join", "signal", "leave", "transcription", "said"];
+  static override personMethods = ["join", "signal", "leave", "transcription", "said", "admits"];
 
   readonly #call = new Call({
     path: String(this.ctx.props.iterateContextName),
@@ -201,6 +209,16 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
     // the stored call is read before any event or method: the first live state after a wake
     // shows who is in the call, so no page takes itself for out and joins again
     void ctx.blockConcurrencyWhile(() => this.#call.ready());
+  }
+
+  /** Whether who asks still reaches this agent: a member always, a guest while a live link lists
+   *  them. A person's socket that names this facet asks it, and ends on a no (iterate/sdk
+   *  `auth.personItx`, `admits`), so an ended link ends a guest's chat too, not only the call. */
+  async admits() {
+    const asked = this.onBehalfOf();
+    if (asked?.member) return true;
+    const actor = asked?.principal?.actor;
+    return !!actor && isLiveGuest((await this.snapshot()).state, actor, Date.now());
   }
 
   /** Come in (again: fresh TURN credentials). `page`: this page's own row on the context. */

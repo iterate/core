@@ -69,6 +69,11 @@ type CallAsPerson = (
   personMethod?: true,
 ) => Promise<unknown>;
 
+/** How often a person's socket asks the named facet whether the person still reaches the
+ *  context, at most (`admissionOf`). */
+export const ADMITS_EVERY_MS = 5_000;
+const ACCESS_ENDED = "your access to this context ended";
+const FACET_NAME = /^[A-Za-z0-9_.-]+$/;
 // The only `invoke` texts: the seed of a live state, and a facet's state, for the chat's views.
 const SNAPSHOT_TEXT = /^itx\.facets\.get\('([A-Za-z0-9_.-]+)'\)\.(liveSnapshot|snapshot)\(\)$/;
 // The only `invoke` expression: one call of one method of a facet of this context. Whether the
@@ -113,6 +118,11 @@ const PresenceStatus = z.tuple([
     }),
   }),
 ]);
+// A message's options on a person's view: its idempotency key alone (iterate/agents `AgentMessageOptions`).
+const MessageOptions = z
+  .object({ key: z.string().min(1).max(200).optional() })
+  .strict()
+  .optional();
 const MessageInput = z.union([
   z.string(),
   z
@@ -127,8 +137,24 @@ const MessageInput = z.union([
     .strict(),
 ]);
 
+/** The chat's stop of an answer, in the platform's own words (WHAT THE VIEW APPENDS, above). */
+const STOP_OF_AN_ANSWER = {
+  type: "events.iterate.com/agent/context-added",
+  payload: {
+    role: "developer",
+    content: "The user interrupted the in-progress response from the web chat.",
+    actor: { type: "user" },
+    llmRequestPolicy: { behaviour: "interrupt-current-request" },
+  },
+};
+
 /** A value as the view's person reads it: `asAPersonReads` for them, or as it is for a member. */
 type Reads = (value: unknown) => unknown;
+
+/** Before the view's own writes (a message to the agent, the stop of an answer): throws when the
+ *  person no longer reaches the context (`admissionOf`). A facet's person method
+ *  is the facet's own to refuse, and a presence status writes nothing to the log. */
+type Admitted = () => Promise<void>;
 
 /** A page's live callback as capnweb hands it over: a callable stub (context/rpc-stub-relay.ts
  *  `ClientRpcStub`). */
@@ -145,13 +171,21 @@ export class PersonContextRpcTarget extends RpcTarget {
   readonly #asPerson: CallAsPerson;
   // this socket's calls of a person method, counted before their arguments are read
   readonly #personCalls = new PersonCallCount();
+  readonly #admitted: Admitted;
 
   /** `reads`: how the person reads each answer and each batch of events (WHAT THE PERSON READS
    *  OF OTHER PEOPLE, above). It wraps each call into the context here, so no method below
    *  can leave it out. */
-  constructor(path: string, context: ContextReach, asPerson: CallAsPerson, reads: Reads) {
+  constructor(
+    path: string,
+    context: ContextReach,
+    asPerson: CallAsPerson,
+    reads: Reads,
+    admitted: Admitted = async () => {},
+  ) {
     super();
     this.#path = path;
+    this.#admitted = admitted;
     this.#context = {
       invoke: async (call, ...args) => reads(await context.invoke(call, ...args)),
       subscribe: (input) =>
@@ -260,22 +294,9 @@ export class PersonContextRpcTarget extends RpcTarget {
         "FORBIDDEN",
         "append on a person's view takes one event alone: the chat's stop of an answer (an events.iterate.com/agent/context-added with llmRequestPolicy.behaviour interrupt-current-request), or the page's presence status (an ephemeral presence/status with { subscription, away, typing, marks? } and no other field)",
       );
-    return this.#asPerson([
-      "itx",
-      "builtins",
-      [
-        "append",
-        {
-          type: "events.iterate.com/agent/context-added",
-          payload: {
-            role: "developer",
-            content: "The user interrupted the in-progress response from the web chat.",
-            actor: { type: "user" },
-            llmRequestPolicy: { behaviour: "interrupt-current-request" },
-          },
-        },
-      ],
-    ]);
+    return this.#admitted().then(() =>
+      this.#asPerson(["itx", "builtins", ["append", STOP_OF_AN_ANSWER]]),
+    );
   }
 
   get files(): FilesRpcTarget {
@@ -296,13 +317,22 @@ export class PersonContextRpcTarget extends RpcTarget {
   }
 
   get agents(): AgentsRpcTarget {
-    return new AgentsRpcTarget((path, input) => {
+    return new AgentsRpcTarget((path, input, options) => {
       this.#ownPath(path, "agents.get");
-      const words = wireInput(MessageInput, input, "agents.get(path).message(input)");
-      // the sender is a person, as on a member's page: `/` (core/lib/src/agents/collection.ts)
-      return this.#asPerson(
-        ["itx", "builtins", "facets", ["get", "agent"], ["message", words, "/"]],
-        `${this.#path}#agent.message`,
+      const words = wireInput(MessageInput, input, "agents.get(path).message(input, { key? })");
+      const { key } =
+        wireInput(MessageOptions, options, "agents.get(path).message(input, { key? })") ?? {};
+      // the sender is a person, as on a member's page: `/` (core/lib/src/agents/collection.ts); a
+      // key makes a retry land once
+      const message: [string, ...unknown[]] = key
+        ? ["message", words, "/", { key }]
+        : ["message", words, "/"];
+      // the checks above throw at once; the question to the facet comes after them
+      return this.#admitted().then(() =>
+        this.#asPerson(
+          ["itx", "builtins", "facets", ["get", "agent"], message],
+          `${this.#path}#agent.message`,
+        ),
       );
     });
   }
@@ -353,24 +383,25 @@ class FileUrlRpcTarget extends RpcTarget {
 }
 
 class AgentsRpcTarget extends RpcTarget {
-  readonly #message: (path: unknown, input: unknown) => Promise<unknown>;
-  constructor(message: (path: unknown, input: unknown) => Promise<unknown>) {
+  readonly #message: (path: unknown, input: unknown, options: unknown) => Promise<unknown>;
+  constructor(message: (path: unknown, input: unknown, options: unknown) => Promise<unknown>) {
     super();
     this.#message = message;
   }
   get(path: unknown): AgentRpcTarget {
-    return new AgentRpcTarget((input) => this.#message(path, input));
+    return new AgentRpcTarget((input, options) => this.#message(path, input, options));
   }
 }
 
 class AgentRpcTarget extends RpcTarget {
-  readonly #message: (input: unknown) => Promise<unknown>;
-  constructor(message: (input: unknown) => Promise<unknown>) {
+  readonly #message: (input: unknown, options: unknown) => Promise<unknown>;
+  constructor(message: (input: unknown, options: unknown) => Promise<unknown>) {
     super();
     this.#message = message;
   }
-  message(input: unknown): Promise<unknown> {
-    return this.#message(input);
+  /** `options`: `{ key }` alone, which makes a retry land once (iterate/agents `AgentMessageOptions`). */
+  message(input: unknown, options?: unknown): Promise<unknown> {
+    return this.#message(input, options);
   }
 }
 
@@ -383,6 +414,8 @@ export async function personItxSession(args: {
   ctx: ExecutionContext;
   request: Request;
   path: string | null;
+  /** The facet the answer named to ask `admits()` (`admissionOf`), or none. */
+  admits?: string | null;
 }): Promise<Response> {
   const { ctx, request } = args;
   const url = new URL(request.url);
@@ -433,10 +466,21 @@ export async function personItxSession(args: {
       caller,
     ).invoke(expression);
   };
+  const admission = admissionOf({
+    facet: args.admits,
+    member: !!member,
+    ask: (facet) =>
+      asPerson(
+        ["itx", "builtins", "facets", ["get", facet], ["admits"]],
+        `${path}#${facet}.admits`,
+        true,
+      ),
+  });
   return serveSession(ctx, {
     caller: { principal: null },
     endsAt,
     endReason: "the sign-in for this session ended: sign in again",
+    onFrame: admission.onFrame,
     root: (context, teardown) => {
       const reads = context.cd(path);
       // The kernel's own code names the person here, so no signed token is needed, and a redial
@@ -456,9 +500,51 @@ export async function personItxSession(args: {
         },
         asPerson,
         asThePersonReads,
+        admission.gate,
       );
     },
   });
+}
+
+/** ADMITS: whether a person who is no member still reaches the context, by the facet the app's
+ *  answer named (iterate/sdk `auth.personItx`, `admits`). `ask` calls that facet's person method
+ *  `admits()` as the person. `gate` asks before each of the view's own writes and refuses on a no;
+ *  `onFrame` asks on the socket's traffic at most every `ADMITS_EVERY_MS` and ends the session on a
+ *  no. A throw is a no, and a no is final, and so is a name that is no facet's name. A member, or an
+ *  answer that named no facet, is never asked: then there is no `onFrame`, and the gate lets every
+ *  write through. */
+export function admissionOf(args: {
+  facet: string | null | undefined;
+  member: boolean;
+  ask: (facet: string) => Promise<unknown>;
+  now?: () => number;
+}) {
+  const now = args.now || Date.now;
+  const named = !args.member && !!args.facet;
+  const facet = named && FACET_NAME.test(args.facet!) ? args.facet! : null;
+  // a name that is no facet's name is a no: a typo in an app never leaves the socket open
+  let refused = named && !facet;
+  let askedAt = now();
+  const admitted = async () => {
+    if (refused) return false;
+    if (!facet) return true;
+    // a no only ever sets it: an answer that comes later, from a check that started earlier,
+    // never clears it
+    if ((await args.ask(facet).catch(() => false)) !== true) refused = true;
+    return !refused;
+  };
+  return {
+    gate: async () => {
+      if (!(await admitted())) throw codedError("FORBIDDEN", ACCESS_ENDED);
+    },
+    onFrame: named
+      ? async () => {
+          if (!refused && now() - askedAt < ADMITS_EVERY_MS) return;
+          askedAt = now();
+          if (!(await admitted())) return ACCESS_ENDED;
+        }
+      : undefined,
+  };
 }
 
 /** HOW THE VIEW'S PERSON READS. The boundary stamps a principal beside the person for a member
