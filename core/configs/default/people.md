@@ -106,6 +106,11 @@ What the page can do, on that one context:
 - send its agent words: `agents.get(path).message(input)`. The event names the person as who
   asked, in `source.onBehalfOf`, with this host in `via.appPage`. It carries no `principal`;
 - stop the agent's answer: the platform appends the stop in its own words;
+- call a method that a facet's class names for a person (`static personMethods`, each also one of
+  its `publicMethods`): `invoke(["itx", "facets", ["get", name], [method, ...args]])`, with JSON
+  arguments and a JSON answer. The facet reads who asked with `this.onBehalfOf()`: of a person
+  who is no member, their id, their name and whether they are a guest. A class that names none
+  offers a person nothing;
 - get a download URL for a file under the context's path.
 
 What it cannot do: reach another context, or the mind's `itx`, or append any other event, or run

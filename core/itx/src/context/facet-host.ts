@@ -22,6 +22,7 @@ import type { FacetSpec, WorkerSource } from "iterate/api";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import type { Caller } from "../caller.ts";
 import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
+import { askerOf, type OnBehalfOf } from "../on-behalf-of.ts";
 import {
   CoreContract,
   facetSpecFromHostingTarget,
@@ -32,6 +33,7 @@ import {
 import {
   assertFacetPlacement,
   firstPartyFacetClassOf,
+  firstPartyFacetPersonMethodsOf,
   firstPartyFacetPublicMethodsOf,
 } from "../first-party-facets.ts";
 import { itxLoader } from "../host.ts";
@@ -42,7 +44,11 @@ import {
   FacetHandle,
   isMissingRpcMethod,
 } from "./dispatch.ts";
-import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
+import {
+  assertFacetMethodIsAPersons,
+  assertFacetMethodIsPublic,
+  PersonCallCount,
+} from "./facet-public-methods.ts";
 import {
   assertFacetSourceWithinCeiling,
   loadedIdentityChanges,
@@ -94,7 +100,13 @@ const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
   watchdogMs: FACET_CALL_WATCHDOG_MS,
   onTimeout: "restart",
 };
-type FacetCallOptions = { byItxExpression?: boolean; cause?: Cause };
+// `onBehalfOf`: who asked, which the facet's `onBehalfOf()` answers. `byPerson`: a person's view asked.
+type FacetCallOptions = {
+  byItxExpression?: boolean;
+  cause?: Cause;
+  onBehalfOf?: OnBehalfOf;
+  byPerson?: boolean;
+};
 // A call from loaded code never restarts the quiet clock. Past the ~10 s eviction and the pins'
 // 30 s release, so a used context costs one extra alarm wake per quiet period.
 export const UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS = 60_000;
@@ -170,8 +182,8 @@ export class FacetHost {
     FacetHandle,
     { name: string; spec: FacetSpec | undefined }
   >();
-  // a publication that changes the code changes the identity, and with it the list
-  readonly #publicMethodsByLoaderId = new Map<string, readonly string[]>();
+  // a publication that changes the code changes the identity, and with it the lists
+  readonly #listedMethodsByLoaderId = new Map<string, readonly string[]>();
   readonly #loaderIdByName = new Map<string, string>();
   readonly #namedWorkerInstalled = new Map<string, NamedWorkerStarted>();
   readonly #ranThisIncarnation = new Set<string>();
@@ -555,11 +567,17 @@ export class FacetHost {
 
   handle(name: string, spec?: FacetSpec): FacetHandle {
     const facetHandle = new FacetHandle((called) => {
+      // A person's view asks as a caller with no principal that names a person. Its call is
+      // counted first, before anything is made of its arguments or asked of a facet, and is held
+      // to the facet's person methods (`#callOn`).
+      const caller = this.#deps.caller();
+      const person = caller.principal ? undefined : caller.onBehalfOf?.principal;
+      if (person) this.#personCalls.count(person.actor, this.#deps.path);
       // A first-party facet is the Worker's own code. Loaded code's `fetch` is told who asks by
       // the call's caller, never by the Request that the calling code built.
       const itxExpressionSteps = firstPartyFacetClassOf(name)
         ? called
-        : fetchStepsForLoadedCode(called, this.#deps.caller());
+        : fetchStepsForLoadedCode(called, caller);
       // A facet never answers a WebSocket: a socket a facet held would die with it, unseen by the
       // parent (1006). Refused before the memo, so an upgrade materializes nothing.
       const [first] = itxExpressionSteps;
@@ -573,19 +591,28 @@ export class FacetHost {
           "FACET_NO_UPGRADE",
           `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
         );
-      const call = (cause: Cause | undefined) =>
-        this.#callFacet(name, spec, itxExpressionSteps, { byItxExpression: true, cause });
       // a `fetch` carries the mark alone, which names nobody
       const steps = itxExpressionSteps.map(itxExpressionStepName);
-      const cause =
-        steps[0] === "fetch"
-          ? this.#deps.cause()
-          : this.#deps.causeOfCall(`${name}.${steps.join(".")}`.slice(0, 200));
+      const isFetch = steps[0] === "fetch";
+      const callName = `${name}.${steps.join(".")}`.slice(0, 200);
+      // who asked, by the kernel's own record of this call
+      const onBehalfOf = isFetch ? undefined : askerOf(caller, `${this.#deps.path}#${callName}`);
+      const call = (cause: Cause | undefined) =>
+        this.#callFacet(name, spec, itxExpressionSteps, {
+          byItxExpression: true,
+          cause,
+          onBehalfOf,
+          byPerson: Boolean(person),
+        });
+      const cause = isFetch ? this.#deps.cause() : this.#deps.causeOfCall(callName);
       return cause instanceof Promise ? cause.then(call) : call(cause);
     });
     this.#facetAddressByFacetHandle.set(facetHandle, { name, spec });
     return facetHandle;
   }
+
+  // by person, for all the person methods of this context together (`PersonCallCount`)
+  readonly #personCalls = new PersonCallCount();
 
   hostsLoadedCode(facetHandle: FacetHandle): boolean {
     const facetAddress = this.#facetAddressByFacetHandle.get(facetHandle);
@@ -613,7 +640,7 @@ export class FacetHost {
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    { byItxExpression = false, cause }: FacetCallOptions = {},
+    { byItxExpression = false, cause, onBehalfOf, byPerson }: FacetCallOptions = {},
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -624,6 +651,7 @@ export class FacetHost {
     // the core reduce answers at its facet-shaped address with a synthesized view: it is no facet
     if (name === CoreContract.slug) {
       if (spec) throw new Error(`"${name}" is the core reduce — never a facet name`);
+      if (byPerson) assertFacetMethodIsAPersons(name, [], [], itxExpressionSteps);
       return (
         await walkSteps(
           {
@@ -654,7 +682,7 @@ export class FacetHost {
         ["fetch", requestCausedBy(first[1], cause), ...first.slice(2)],
         ...rest,
       ];
-    const callOptions = { byItxExpression, cause };
+    const callOptions = { byItxExpression, cause, onBehalfOf, byPerson };
     this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
@@ -705,41 +733,58 @@ export class FacetHost {
     name: string,
     itxExpressionSteps: ItxExpression,
     watchdog: FacetCallWatchdog,
-    { byItxExpression = false, cause }: FacetCallOptions,
+    { byItxExpression = false, cause, onBehalfOf, byPerson }: FacetCallOptions,
   ): Promise<unknown> {
-    if (byItxExpression) {
+    if (byItxExpression || byPerson) {
       const publicMethods = materialized.loaderId
-        ? await this.#publicMethodsOf(materialized, name)
+        ? await this.#listedMethodsOf(materialized, name, "listPublicMethods")
         : firstPartyFacetPublicMethodsOf(name);
-      assertFacetMethodIsPublic(name, publicMethods, itxExpressionSteps);
+      // a person's call takes the person's check alone, which holds the public one
+      if (byPerson)
+        assertFacetMethodIsAPersons(
+          name,
+          publicMethods,
+          materialized.loaderId
+            ? await this.#listedMethodsOf(materialized, name, "listPersonMethods")
+            : firstPartyFacetPersonMethodsOf(name),
+          itxExpressionSteps,
+        );
+      else assertFacetMethodIsPublic(name, publicMethods, itxExpressionSteps);
     }
     const withCause =
       cause &&
       itxExpressionStepName(itxExpressionSteps[0]) !== "fetch" &&
-      (!materialized.loaderId || (await this.#publicMethodsOf(materialized, name)).length > 0);
+      (!materialized.loaderId ||
+        (await this.#listedMethodsOf(materialized, name, "listPublicMethods")).length > 0);
     return await this.#call(
       materialized,
       name,
-      withCause ? [["callWithCause", cause, itxExpressionSteps]] : itxExpressionSteps,
+      withCause
+        ? [["callWithCause", cause, itxExpressionSteps, ...(onBehalfOf ? [onBehalfOf] : [])]]
+        : itxExpressionSteps,
       watchdog,
     );
   }
 
   // Asked of the facet: a static does not cross the isolate. A class that is no SDK shell lists nothing.
-  async #publicMethodsOf(materialized: MaterializedFacet, name: string) {
-    const loaderId = materialized.loaderId!;
-    let publicMethods = this.#publicMethodsByLoaderId.get(loaderId);
-    if (publicMethods) return publicMethods;
+  async #listedMethodsOf(
+    materialized: MaterializedFacet,
+    name: string,
+    list: "listPublicMethods" | "listPersonMethods",
+  ) {
+    const key = `${list} ${materialized.loaderId!}`;
+    let methods = this.#listedMethodsByLoaderId.get(key);
+    if (methods) return methods;
     try {
-      publicMethods = z
+      methods = z
         .array(z.string())
-        .parse(await this.#call(materialized, name, [["listPublicMethods"]], FACET_CALL_WATCHDOG));
+        .parse(await this.#call(materialized, name, [[list]], FACET_CALL_WATCHDOG));
     } catch (error) {
-      if (!isMissingRpcMethod(error, "listPublicMethods")) throw error;
-      publicMethods = [];
+      if (!isMissingRpcMethod(error, list)) throw error;
+      methods = [];
     }
-    this.#publicMethodsByLoaderId.set(loaderId, publicMethods);
-    return publicMethods;
+    this.#listedMethodsByLoaderId.set(key, methods);
+    return methods;
   }
 
   // At most one retry on a replacement a peer put in place, and one restart for this call, so a
@@ -907,7 +952,8 @@ export class FacetHost {
             name,
             changed: loadedIdentityChanges(previousLoaderId, loaderId),
           });
-          this.#publicMethodsByLoaderId.delete(previousLoaderId);
+          this.#listedMethodsByLoaderId.delete(`listPublicMethods ${previousLoaderId}`);
+          this.#listedMethodsByLoaderId.delete(`listPersonMethods ${previousLoaderId}`);
           const abort = () => this.#abortForRestart(name, "loaded identity changed");
           if (platformStart) abort();
           else {

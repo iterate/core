@@ -3,7 +3,7 @@
 import type { Principal } from "iterate/principal";
 import { RUN_DEADLINE_MS } from "iterate/stream/run";
 import { z } from "zod";
-import { signClaims, verifyClaims } from "./caller.ts";
+import { signClaims, verifyClaims, type Caller } from "./caller.ts";
 
 // `run` names a script's request (`<path>@<offset>`), `call` a person's own call into a facet
 // (`<path>#<facet>.<method>`): one of the two on a call made for someone. A holder's stamp has
@@ -15,6 +15,9 @@ export type OnBehalfOf = {
   via?: { appPage: string };
   run?: string;
   call?: string;
+  // A member of the mind asks. Only on a Caller, where kernel code sets it for a person's view,
+  // and on what `askerOf` answers: a token and a stamp have no such field (`OnBehalfOfStamp`).
+  member?: true;
 };
 
 const PrincipalStamp = z.object({
@@ -59,4 +62,25 @@ export async function verifyOnBehalfOf(
   const claims = Claims.safeParse(await verifyClaims(token, secret));
   if (!claims.success || claims.data.expiresAt < now) return undefined;
   return claims.data.onBehalfOf;
+}
+
+/** WHO ASKED FOR A CALL, AS THE KERNEL ITSELF KNOWS THEM: a member's own session, or a person's
+ *  one-context view (person-context.ts names the person on the Caller of a person method's call).
+ *  Read from the Caller, which only the kernel's own code sets (caller.ts), and never from the
+ *  cause: loaded code hands its cause back, and the token on it could be one that it kept from
+ *  another call. So a call that came through loaded code (a script, a worker, a facet) names
+ *  nobody here, whatever its cause says. `call` is `<path>#<facet>.<method>`.
+ *
+ *  `member` says that a member of the mind asks: in their own session, or through a person's
+ *  view, where the view says so from the boundary's stamp. A key's session names the service that
+ *  the key speaks for, which is no member (core/mind-worker rpc.ts). A guest and a person who
+ *  proved an address and is no member have no mark, and no other field tells the two from a
+ *  member. */
+export function askerOf(caller: Caller, call: string): OnBehalfOf | undefined {
+  const { principal, grant, via, onBehalfOf } = caller;
+  if (principal)
+    return { principal, grant, via, call, ...(!grant?.startsWith("key:") && { member: true }) };
+  if (!onBehalfOf) return undefined;
+  const { principal: person, via: page, member } = onBehalfOf;
+  return { principal: person, via: page, call, member };
 }

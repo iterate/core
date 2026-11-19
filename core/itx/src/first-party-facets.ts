@@ -22,6 +22,11 @@ export function firstPartyFacetPublicMethodsOf(name: string): readonly string[] 
   return firstPartyFacet(name)?.publicMethods ?? [];
 }
 
+/** Its class's own `personMethods`, as the host declares them: none, unless it does. */
+export function firstPartyFacetPersonMethodsOf(name: string): readonly string[] {
+  return firstPartyFacet(name)?.personMethods ?? [];
+}
+
 // The wake record is in the filter so each incarnation runs the processor's at-head pass, which
 // restarts what the last incarnation left owed. Undefined for a row kept unfiltered.
 export function firstPartyRowConsumesOf(name: string): string[] | undefined {

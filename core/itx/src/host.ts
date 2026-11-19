@@ -53,6 +53,8 @@ export interface ItxHost {
 export type FirstPartyFacet = {
   className: string;
   publicMethods: readonly string[];
+  /** Its class's `personMethods`: what a person's view may call. With none, nothing. */
+  personMethods?: readonly string[];
   placement?: { where: string; mayBeHostedOn(path: string): boolean };
   /** The row's filter when its enable names none; without it, every durable event. */
   consumes?: readonly string[];

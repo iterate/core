@@ -8,6 +8,12 @@ import { AsyncLocalStorage as NodeAsyncLocalStorage } from "node:async_hooks";
 import { DurableObject, RpcStub, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { runCausedBy } from "../cause.ts";
 import { codedError } from "../lib.ts";
+import type { StreamEvent } from "../stream/processor.ts";
+
+/** WHO ASKED FOR A CALL: a person, the grant and the page they came through, and the call, in the
+ *  shape that an event's `source.onBehalfOf` has; and `member`, set when a member of the mind
+ *  asked. Only the context says `member`, from its own record of the call: no event has it. */
+export type OnBehalfOf = NonNullable<StreamEvent["source"]["onBehalfOf"]> & { member?: true };
 
 /** A step of `callWithCause`'s walk, which reaches no further than Workers RPC would: on this facet
  *  or an RpcTarget, a member its class declares (never a field of its own); anything on a stub; on
@@ -15,26 +21,29 @@ import { codedError } from "../lib.ts";
 /** An expression's steps past a host: a property, or a method and its arguments. */
 export type RpcSteps = (string | [string, ...unknown[]])[];
 
-/** The caller's path of the walk running now (`walkUnderCause`). The import is untyped (above), so
- *  its constructor is typed here. */
-const walkCallerPath = new (NodeAsyncLocalStorage as new <T>() => {
+/** The caller of the walk running now (`walkUnderCause`): the context it came from, and who asked.
+ *  The import is untyped (above), so its constructor is typed here. */
+const walkCaller = new (NodeAsyncLocalStorage as new <T>() => {
   run<R>(store: T, code: () => R): R;
   getStore(): T | undefined;
-})<{ callerPath: string | undefined }>();
+})<{ callerPath: string | undefined; onBehalfOf: OnBehalfOf | undefined }>();
 
 /** `callWithCause` (../cause.ts): the platform's way to walk `steps` on `host` under the cause of
  *  the call that made it — only as far as Workers RPC would reach, and never into `callWithCause`
  *  itself or `getItx`, which Workers RPC reaches on every loaded entrypoint (loaded-worker.ts).
  *  `callerPath` is the context the call came from, as the platform stamps it (core/itx/src/caller.ts
- *  `Caller.path`); `currentCallerPath` reads it while the walk runs. */
+ *  `Caller.path`); `currentCallerPath` reads it while the walk runs. `onBehalfOf` is who asked for
+ *  the call, as the context itself knows them (core/itx/src/on-behalf-of.ts `askerOf`);
+ *  `currentOnBehalfOf` reads it. */
 export function walkUnderCause(
   host: object,
   cause: unknown,
   steps: RpcSteps,
   callerPath?: string,
+  onBehalfOf?: OnBehalfOf,
 ): Promise<unknown> {
   return runCausedBy(cause, () =>
-    walkCallerPath.run({ callerPath }, async () => {
+    walkCaller.run({ callerPath, onBehalfOf }, async () => {
       let value: unknown = host;
       for (const step of steps) {
         const [name, ...args] = typeof step === "string" ? [step] : step;
@@ -55,7 +64,11 @@ export function walkUnderCause(
 
 /** The context the method running now was called from (`walkUnderCause`), or undefined outside a
  *  walk the platform handed one: a `fetch`, a facet's call, module scope. */
-export const currentCallerPath = (): string | undefined => walkCallerPath.getStore()?.callerPath;
+export const currentCallerPath = (): string | undefined => walkCaller.getStore()?.callerPath;
+
+/** Who asked for the call whose method is running now (`walkUnderCause`), or undefined: outside a
+ *  walk, or in one that the platform named nobody for. */
+export const currentOnBehalfOf = (): OnBehalfOf | undefined => walkCaller.getStore()?.onBehalfOf;
 
 function memberRpcReaches(value: unknown, name: string): unknown {
   // (RpcStub's own type is generic past what TypeScript will narrow)

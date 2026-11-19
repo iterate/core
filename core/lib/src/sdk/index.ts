@@ -34,7 +34,13 @@ import {
 // (../cause.ts).
 import { causeOfRequest, currentCause, runCausedBy } from "../cause.ts";
 import { auth } from "./auth.ts";
-import { currentCallerPath, walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
+import {
+  currentCallerPath,
+  currentOnBehalfOf,
+  walkUnderCause,
+  type OnBehalfOf,
+  type RpcSteps,
+} from "./call-with-cause.ts";
 // The hosts' `this.getItx()` is this (itx-scope.ts says why a scope is never kept).
 import { itxScope } from "./itx-scope.ts";
 import { DirectAppendHolder, type DirectAppend } from "./direct-append.ts";
@@ -46,6 +52,7 @@ import { DirectAppendHolder, type DirectAppend } from "./direct-append.ts";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { serveFiles, type FileContent } from "./files.ts";
+export type { OnBehalfOf };
 // What an app says of itself to the mind's issuer: the typed object, and the answer that serves it.
 export { serveAppDescription, type AppDescription } from "../app-description.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
@@ -100,7 +107,9 @@ export type FacetProps = {
  *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
  *  (`itx.facets.get(name).<method>(…)`) only through what its class lists in `publicMethods`: the
  *  context refuses any other first step FORBIDDEN before the call reaches the facet
- *  (core/itx/src/context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
+ *  (core/itx/src/context/facet-public-methods.ts). A person who is no member (a guest among them)
+ *  reaches, through their one-context view, only what it also lists in `personMethods`. The
+ *  platform's own calls — the delivery loop's push
  *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
  *  extend this shell lists nothing, so no caller reaches it by expression. */
 export abstract class FacetDurableObject<
@@ -112,8 +121,37 @@ export abstract class FacetDurableObject<
    *  `static override publicMethods = [...super.publicMethods, "send"]`. */
   static publicMethods: readonly string[] = ["fetch"];
 
+  /** What a PERSON may call through their one-context view of this facet's context
+   *  (`auth.personItx`): a signed-in person who need not be a member, a guest among them. Each is
+   *  one of `publicMethods`, and never `fetch`: `static override personMethods = ["join", "leave"]`.
+   *  With none, as here, no person reaches the facet's methods. A person's page calls one as
+   *  `invoke(["itx", "facets", ["get", name], [method, ...args]])`. What to know of such a call:
+   *  - WHO ASKED is `this.onBehalfOf()`. Decide by it and by this facet's own records: the list
+   *    lets every person with a view of the context in, and a guest is one. A member has
+   *    `member: true`; test that, never the absence of `kind`.
+   *  - THE ARGUMENTS are JSON, of any shape: check them. The answer must be JSON too: a stub, a
+   *    stream or a function in it is refused, and the Worker's log says so.
+   *  - THE ANSWER is yours to keep free of other people's addresses. The view reads events, rows
+   *    and states as a person reads them, and in an answer only what has the platform's shape of
+   *    a person (an object with `actor`): an address in a string stays in it.
+   *  - THE COUNT: a person's calls are counted by the minute on one context, for all its facets
+   *    together, and arguments and answer have one size bound
+   *    (core/itx/src/context/facet-public-methods.ts has both numbers). */
+  static personMethods: readonly string[] = [];
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // `this.constructor` is the concrete facet class (as in `listPublicMethods`, below).
+    const { name, publicMethods, personMethods } = this.constructor as typeof FacetDurableObject;
+    const notPublic = personMethods.filter((method) => !publicMethods.includes(method));
+    if (notPublic.length > 0)
+      throw new Error(
+        `${name}: static personMethods lists ${notPublic.join(", ")}, which static publicMethods does not list. A person may call only what a member's session may call: list it in both`,
+      );
+    if (personMethods.includes("fetch"))
+      throw new Error(
+        `${name}: static personMethods lists fetch. A person's view calls a method, never fetch: a Request names nobody`,
+      );
     // A Request the facet serves runs under the cause it carries (../cause.ts).
     const serve = (this as { fetch?: (request: Request) => unknown }).fetch;
     if (serve)
@@ -129,8 +167,8 @@ export abstract class FacetDurableObject<
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the
    *  alarm's revive. On no list: only the platform calls it (core/itx/src/context/facet-host.ts). */
-  callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
-    return walkUnderCause(this, cause, steps);
+  callWithCause(cause: unknown, steps: RpcSteps, onBehalfOf?: OnBehalfOf): Promise<unknown> {
+    return walkUnderCause(this, cause, steps, undefined, onBehalfOf);
   }
 
   /** This class's `publicMethods`, for the context that loaded it — a static does not cross the
@@ -140,6 +178,35 @@ export abstract class FacetDurableObject<
     // `Function`, which has no `publicMethods`.
     return (this.constructor as typeof FacetDurableObject).publicMethods;
   }
+
+  /** This class's `personMethods`, for the context, which asks when a person's view calls. On no
+   *  list, as `listPublicMethods`. */
+  listPersonMethods(): readonly string[] {
+    return (this.constructor as typeof FacetDurableObject).personMethods;
+  }
+
+  /** WHO ASKED, never what they may do: the person whose own call is running this method. A
+   *  member who called through their session (`principal`, with `grant` and `via`), or a person
+   *  who called a person method through their one-context view. Of a person who is no member it
+   *  holds what another person's view reads of them: `principal.actor` (a stable id),
+   *  `principal.name`, and `principal.kind: "guest"` for a guest; no address and no grant.
+   *  `call` is `<path>#<facet>.<method>`.
+   *
+   *  `member: true` says that a member of the mind asked, in their session or through a view.
+   *  It is the only mark of a member: a person who proved an address and is no member has no
+   *  `kind` either, and their `name` can be the start of that address. A key's session names the
+   *  service that the key speaks for, with no mark.
+   *
+   *  Read it at the start of the method. It belongs to the call's async context: work that the
+   *  call started and nobody awaited (a timer, a floating promise, `runInBackground`) still reads
+   *  that call's asker after the call ended.
+   *
+   *  The context answers it from its own record of the call, never from anything the calling
+   *  code wrote (core/itx/src/on-behalf-of.ts `askerOf`). So it is undefined for every call that
+   *  code made: a member's script, an agent's tool, another worker or facet, a delivery. It is
+   *  undefined in `fetch` and outside a call too. It grants nothing: decide from this facet's own
+   *  records. A field, as `getItx` is: Workers RPC reaches a class's methods. */
+  protected readonly onBehalfOf = (): OnBehalfOf | undefined => currentOnBehalfOf();
 
   /** `using itx = this.getItx()`: this facet's context's scope, released with every call made
    *  through it when the block ends (itx-scope.ts). Keep no RPC values past the block; see

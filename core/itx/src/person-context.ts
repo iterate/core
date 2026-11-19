@@ -14,6 +14,16 @@
 // a token on the call's cause that names them (on-behalf-of.ts), which every append it makes
 // verifies and stamps as `source.onBehalfOf`. Each says who asked or holds, never what they may do.
 //
+// A PERSON METHOD. A facet's class may name methods that a person may call (iterate/sdk
+// `FacetDurableObject.personMethods`). The view takes one such call as an expression and sends it
+// as the person, who is then named twice: on the kernel's own record of the call (`Caller.
+// onBehalfOf`), which holds the call to the class's person methods, counts it, and is what the
+// facet's `onBehalfOf()` answers (./context/facet-host.ts `handle`); and on the token, for the
+// stamp of what the facet appends. A person who is no member is named there by what another
+// person's view reads of them (`asAFacetIsTold`), so no address of theirs reaches a facet's code.
+// The arguments and the answer are JSON within one bound (`PERSON_METHOD_MAX_CHARS`), so no stub
+// crosses either way. The view decides nothing else of such a call: the facet does.
+//
 // WHAT THE VIEW APPENDS. Two events alone, each rebuilt from the fields it parsed, so nothing else
 // the page wrote (a key, a `source`, another field) lands: the stop of an answer, in the
 // platform's words, and the page's presence status (@iterate-com/ui `lib/presence.ts`), one
@@ -29,7 +39,7 @@
 // not words: an address that somebody wrote into a message stays in the message.
 import { RpcTarget } from "capnweb";
 import { type ItxExpression } from "iterate/expression";
-import { codedError, resolveContextPath } from "iterate/lib";
+import { codedError, releaseRpcSessions, resolveContextPath } from "iterate/lib";
 import {
   nameInEmail,
   stampedCallerOf,
@@ -41,6 +51,7 @@ import {
 import { z } from "zod";
 import type { Caller } from "./caller.ts";
 import { newChain } from "./cause.ts";
+import { PERSON_METHOD_MAX_CHARS, PersonCallCount } from "./context/facet-public-methods.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import { contexts, itxHost } from "./host.ts";
 import { IterateContextRpcTarget } from "./iterate-context.ts";
@@ -50,11 +61,24 @@ import { SessionTeardown, serveSession } from "./session.ts";
 /** What the view reaches of its context: reads as the session's caller, which names nobody, and a
  *  subscription as that caller with the person beside it (WHO CALLS, above). */
 type ContextReach = Pick<IterateContextRpcTarget, "invoke" | "subscribe">;
-/** One call at the context that names the person as who asked; `call` names a facet call. */
-type CallAsPerson = (expression: ItxExpression, call?: string) => Promise<unknown>;
+/** One call at the context that names the person as who asked; `call` names a facet call.
+ *  `personMethod`: the call is one of a facet's person methods (A PERSON METHOD, above). */
+type CallAsPerson = (
+  expression: ItxExpression,
+  call?: string,
+  personMethod?: true,
+) => Promise<unknown>;
 
 // The only `invoke` texts: the seed of a live state, and a facet's state, for the chat's views.
 const SNAPSHOT_TEXT = /^itx\.facets\.get\('([A-Za-z0-9_.-]+)'\)\.(liveSnapshot|snapshot)\(\)$/;
+// The only `invoke` expression: one call of one method of a facet of this context. Whether the
+// facet offers the method to a person is the kernel's to say.
+const PersonMethodCall = z.tuple([
+  z.literal("itx"),
+  z.literal("facets"),
+  z.tuple([z.literal("get"), z.string().regex(/^[A-Za-z0-9_.-]+$/)]),
+  z.tuple([z.string().min(1).max(100)], z.unknown()),
+]);
 
 const ReadEventsArgs = z.tuple([
   z.number().optional(),
@@ -119,6 +143,8 @@ export class PersonContextRpcTarget extends RpcTarget {
   readonly #path: string;
   readonly #context: ContextReach;
   readonly #asPerson: CallAsPerson;
+  // this socket's calls of a person method, counted before their arguments are read
+  readonly #personCalls = new PersonCallCount();
 
   /** `reads`: how the person reads each answer and each batch of events (WHAT THE PERSON READS
    *  OF OTHER PEOPLE, above). It wraps each call into the context here, so no method below
@@ -135,7 +161,12 @@ export class PersonContextRpcTarget extends RpcTarget {
           target: readingCallback(input.target as LiveCallback, reads),
         }),
     };
-    this.#asPerson = async (...call) => reads(await asPerson(...call));
+    // A person method's answer is made JSON first (`jsonAnswerOf`), so the reading walks plain data.
+    this.#asPerson = async (...call) => {
+      const [, name, personMethod] = call;
+      const answer = await asPerson(...call);
+      return reads(personMethod ? jsonAnswerOf(answer, name || "a person method") : answer);
+    };
   }
 
   /** Itself, for its own path; any other path is refused. */
@@ -183,16 +214,37 @@ export class PersonContextRpcTarget extends RpcTarget {
     return new ListRpcTarget(() => this.#context.invoke(["itx", "builtins", "rpcStubs", ["list"]]));
   }
 
-  /** `itx.facets.get('<name>').liveSnapshot()` or `….snapshot()`, as that exact text. */
+  /** `itx.facets.get('<name>').liveSnapshot()` or `….snapshot()`, as that exact text; or one
+   *  person method of a facet, as `["itx", "facets", ["get", name], [method, ...args]]`
+   *  (A PERSON METHOD, above). */
   invoke(call: unknown, ...args: unknown[]): Promise<unknown> {
     const match = typeof call === "string" && args.length === 0 && SNAPSHOT_TEXT.exec(call);
-    if (!match)
+    if (match) {
+      const [, facet, method] = match;
+      return this.#context.invoke(["itx", "builtins", "facets", ["get", facet], [method]]);
+    }
+    this.#personCalls.count("this socket", this.#path);
+    const personMethod = args.length === 0 ? PersonMethodCall.safeParse(call) : undefined;
+    if (!personMethod?.success)
       throw codedError(
         "FORBIDDEN",
-        "invoke on a person's view takes `itx.facets.get('<name>').liveSnapshot()` or `….snapshot()` alone",
+        'invoke on a person\'s view takes `itx.facets.get(\'<name>\').liveSnapshot()` or `….snapshot()` as text, or one method that a facet offers a person, as ["itx", "facets", ["get", name], [method, ...args]]',
       );
-    const [, facet, method] = match;
-    return this.#context.invoke(["itx", "builtins", "facets", ["get", facet], [method]]);
+    const [, , [, facet], [method, ...methodArgs]] = personMethod.data;
+    const json = jsonOf(methodArgs);
+    if (!json || json.length > PERSON_METHOD_MAX_CHARS)
+      throw codedError(
+        "INVALID_INPUT",
+        json
+          ? `the arguments of ${facet}.${method} are ${json.length} characters of JSON, over the ${PERSON_METHOD_MAX_CHARS} that a person's call may carry`
+          : `the arguments of ${facet}.${method} are not JSON: a person's call carries plain data, never a callback or a stub`,
+      );
+    return this.#asPerson(
+      // the arguments as their JSON says them: what was measured is what the facet gets
+      ["itx", "builtins", "facets", ["get", facet], [method, ...JSON.parse(json)]],
+      `${this.#path}#${facet}.${method}`,
+      true,
+    );
   }
 
   /** The chat's stop of an answer, which the platform appends in its own words, or the page's
@@ -358,15 +410,20 @@ export async function personItxSession(args: {
       { status: 500 },
     );
   const onBehalfOf = { principal: principalOf(person), via: { appPage: url.hostname } };
+  const { member, ...toAFacet } = { ...onBehalfOf, ...asAFacetIsTold(request, person) };
   const asThePersonReads = readsOf(request, person);
-  const asPerson: CallAsPerson = async (expression, call) => {
+  const asPerson: CallAsPerson = async (expression, call, personMethod) => {
     const { signingSecret } = itxHost();
     if (!signingSecret)
       throw new Error("this host signs no token that names a person: it sends nothing as one");
-    const token = await mintOnBehalfOf({ ...onBehalfOf, call }, await signingSecret(), Date.now());
+    const asked = { ...(personMethod ? toAFacet : onBehalfOf), call };
+    const token = await mintOnBehalfOf(asked, await signingSecret(), Date.now());
     const caller: Caller = {
       principal: null,
       cause: { ...newChain("a person's page"), onBehalfOf: token },
+      // The kernel's own record that a person asks, and whether they are a member: it holds the
+      // call to person methods. The mark is here alone, never on the token.
+      ...(personMethod && { onBehalfOf: { ...asked, member } }),
     };
     return new IterateContextRpcTarget(
       contexts(),
@@ -411,6 +468,22 @@ export function readsOf(request: Request, person: Person): Reads {
   return stampedCallerOf(request).principal
     ? (value) => value
     : (value) => asAPersonReads(value, person.userId);
+}
+
+/** WHO A FACET IS TOLD ASKED, for a person method. A member is told whole, as in their own
+ *  session, and marked a member: the boundary stamps a principal beside the person for a member
+ *  alone (`readsOf`). Anyone else is told as another person's view reads them (`asAPersonReads`):
+ *  their id, their name, and whether they are a guest. The token of such a call holds the same
+ *  principal, because loaded code can read the token on its cause, and never the mark. */
+export function asAFacetIsTold(
+  request: Request,
+  person: Person,
+): { principal: Principal; member?: true } {
+  const principal = principalOf(person);
+  if (stampedCallerOf(request).principal) return { principal, member: true };
+  // No viewer is "": the person is read as someone else reads them. The cast: `asAPersonReads`
+  // answers `unknown`, and of a principal it keeps `actor` and drops or adds only optional fields.
+  return { principal: asAPersonReads(principal, "") as Principal };
 }
 
 /** WHAT A PERSON WHO IS NO MEMBER READS OF OTHER PEOPLE, in any value the view hands them: an
@@ -470,6 +543,65 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== "object") return false;
   const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
+}
+
+/** ONE VALUE OF A JSON WALK: a leaf that JSON holds (text, a finite number, a boolean, null), an
+ *  absent value, which JSON leaves out, or an array or a plain object, whose members the walk
+ *  visits next. A guard and no schema: it runs for every value of up to 8 MiB that a person sent. */
+function isJsonNode(value: unknown): boolean {
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+    case "undefined":
+      return true;
+    case "number":
+      return Number.isFinite(value);
+    case "object":
+      // null, an array, or a plain object; never an instance of a class (bytes, a stream, a date
+      // that has no text)
+      return !value || Array.isArray(value) || isJsonObject(value);
+    default:
+      return false;
+  }
+}
+
+/** A value's JSON text, or "" when it is not what JSON holds: text, finite numbers, booleans,
+ *  null, and arrays and plain objects of these, with no cycle and no depth that the runtime cannot
+ *  walk. As JSON has it, an absent value is left out of an object and is null in an array, and a
+ *  date is its text. */
+function jsonOf(value: unknown): string {
+  try {
+    const json = JSON.stringify(value, (_key, item: unknown) => {
+      if (!isJsonNode(item)) throw new TypeError("not JSON");
+      return item;
+    });
+    return json || "";
+  } catch {
+    // the replacer's refusal, or the runtime's own of a cycle or of too deep a value
+    return "";
+  }
+}
+
+/** A PERSON METHOD'S ANSWER, AS THE PAGE GETS IT: the JSON it is, within the bound of the
+ *  arguments. Anything else (a stub, a stream, a function, a cycle) is refused in words and logged
+ *  for the facet's author, who alone can change it: a stub would be a reach into the facet that
+ *  its class did not list. `call` is `<path>#<facet>.<method>`. */
+function jsonAnswerOf(answer: unknown, call: string): unknown {
+  if (answer === undefined) return undefined;
+  const json = jsonOf(answer);
+  if (json && json.length <= PERSON_METHOD_MAX_CHARS) return JSON.parse(json);
+  releaseRpcSessions([answer]);
+  const refusal = json
+    ? `the answer of ${call} is ${json.length} characters of JSON, over the ${PERSON_METHOD_MAX_CHARS} that a person's call may answer`
+    : `the answer of ${call} is not JSON: a person method answers plain data, never a stub, a stream or a function`;
+  console.warn({
+    event: "person-method.answer-refused",
+    namespace: "person-context",
+    message: refusal,
+    call,
+  });
+  // a plain error: the fault is the facet's, not the page's input
+  throw new Error(refusal);
 }
 
 /** Who someone is, as the platform stamps them: an object with their id in `actor`. */

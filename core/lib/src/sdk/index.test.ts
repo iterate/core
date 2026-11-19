@@ -1,7 +1,12 @@
 // sdk/index.test.ts — `IterateConfigEntrypoint` in Node, on the `cloudflare:workers` shim's base class.
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
-import { IterateConfigEntrypoint, type IterateConfigProcessEventArgs } from "./index.ts";
+import {
+  FacetDurableObject,
+  IterateConfigEntrypoint,
+  type IterateConfigProcessEventArgs,
+  type OnBehalfOf,
+} from "./index.ts";
 
 const event = {
   type: "events.iterate.com/test/ping-sent",
@@ -90,6 +95,63 @@ test("callerPath() names the context the platform handed callWithCause, for that
   );
 });
 
+test("onBehalfOf() answers who the platform named for the call, for that call alone, and nobody outside one", async () => {
+  const call = facet(Call);
+  const asked = (actor: string): OnBehalfOf => ({ principal: { actor }, call: "/a#call.join" });
+  const [ada, bob, nobody] = await Promise.all([
+    call.callWithCause(undefined, [["join"]], asked("user_1")),
+    call.callWithCause(undefined, [["join"]], asked("user_9")),
+    call.callWithCause(undefined, [["join"]]),
+  ]);
+  expect({ ada, bob, nobody }).toEqual({
+    ada: asked("user_1"),
+    bob: asked("user_9"),
+    nobody: undefined,
+  });
+  expect(await call.join()).toBeUndefined();
+  // a step cannot be `callWithCause` itself, with another asker as its third argument
+  await expect(
+    call.callWithCause(
+      undefined,
+      [["callWithCause", undefined, [["join"]], asked("user_9")]],
+      asked("user_1"),
+    ),
+  ).rejects.toMatchObject({ code: "NOT_A_METHOD" });
+  // the reader is a field: no step of a caller's walk reaches it
+  await expect(
+    call.callWithCause(undefined, [["onBehalfOf"]], asked("user_1")),
+  ).rejects.toMatchObject({ code: "NOT_A_METHOD" });
+});
+
+// The asker belongs to the call's async context, which a timer of the call keeps.
+test("work that a call started and nobody awaited reads that call's asker after the call ended", async () => {
+  const call = facet(Call);
+  const asked: OnBehalfOf = { principal: { actor: "user_1" }, call: "/a#call.joinLater" };
+  await call.callWithCause(undefined, [["joinLater"]], asked);
+  expect(await call.later).toEqual(asked);
+  expect(await call.join()).toBeUndefined();
+});
+
+test("a person method that is not a public method is an error as the class loads, in words", () => {
+  class Mistaken extends FacetDurableObject {
+    static override publicMethods = [...super.publicMethods, "join"];
+    static override personMethods = ["join", "end", "wipe"];
+  }
+  expect(() => facet(Mistaken)).toThrow(
+    "Mistaken: static personMethods lists end, wipe, which static publicMethods does not list. A person may call only what a member's session may call: list it in both",
+  );
+  // every class lists `fetch` as public; a person's list may not
+  class Fetched extends FacetDurableObject {
+    static override personMethods = ["fetch"];
+  }
+  expect(() => facet(Fetched)).toThrow(
+    "Fetched: static personMethods lists fetch. A person's view calls a method, never fetch: a Request names nobody",
+  );
+  expect(facet(Call).listPersonMethods()).toEqual(["join"]);
+  // a class that names none offers a person nothing
+  expect(facet(class extends FacetDurableObject {}).listPersonMethods()).toEqual([]);
+});
+
 /** A config entrypoint over a fake `env.ITX` whose root logs each call and each release; `handler`
  *  overrides `processEvent` when given. */
 function configEntrypoint(
@@ -136,3 +198,20 @@ function configEntrypoint(
   Object.assign(entrypoint, { env });
   return entrypoint;
 }
+
+/** A facet with one person method, which answers who asked for its call. */
+class Call extends FacetDurableObject {
+  static override publicMethods = [...super.publicMethods, "join", "joinLater"];
+  static override personMethods = ["join"];
+  /** What a timer of `joinLater` read, after its call ended. */
+  later?: Promise<OnBehalfOf | undefined>;
+  async join() {
+    await Promise.resolve(); // across an await, as a method that calls out first reads it
+    return this.onBehalfOf();
+  }
+  joinLater() {
+    this.later = new Promise((resolve) => setTimeout(() => resolve(this.onBehalfOf()), 5));
+  }
+}
+const facet = <Facet>(Class: new (ctx: never, env: never) => Facet) =>
+  new Class({} as never, {} as never);

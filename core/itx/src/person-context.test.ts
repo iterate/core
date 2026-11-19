@@ -3,7 +3,9 @@
 // exact expression the view would send.
 import { errorCode } from "iterate/lib";
 import { expect, test, vi } from "vitest";
+import { PERSON_METHOD_MAX_CHARS } from "./context/facet-public-methods.ts";
 import {
+  asAFacetIsTold,
   asAPersonReads,
   PersonContextRpcTarget,
   personItxSession,
@@ -39,7 +41,7 @@ const ADAS_EVENT_AS_READ = {
 };
 
 test("the chat's reads reach that context, spelled at the platform's fixed point", async () => {
-  const { target, context } = view();
+  const { target, context, asPerson } = view();
   await target.readEvents(0, 100);
   await target.readEvents(5, 1, { includeEphemeral: true });
   await target.subscriptions.list();
@@ -58,6 +60,154 @@ test("the chat's reads reach that context, spelled at the platform's fixed point
   ]);
   expect(target.cd(PATH)).toBe(target);
   expect(target.cd(".")).toBe(target);
+  // a read is no person's call: it takes nothing from the count of a person's methods
+  expect(asPerson).not.toHaveBeenCalled();
+});
+
+// A PERSON METHOD: the view sends the one call as the person and marks it, so the kernel holds it
+// to what the facet's class names for a person (context/facet-host.test.ts has the refusals).
+test("one method of a facet goes to the kernel as the person, marked a person's call, at the platform's fixed point", async () => {
+  const { target, asPerson, context } = view();
+  const step = { publish: "mic", sdp: "v=0", mid: "0" };
+  // an absent field is left out, of the arguments and of the answer, as JSON leaves it out
+  asPerson.mockResolvedValue({ sdp: "v=0", tracks: undefined });
+  const answer = await target.invoke([
+    "itx",
+    "facets",
+    ["get", "call"],
+    ["signal", "page-1", { ...step, rid: undefined }],
+  ]);
+  expect(answer).toStrictEqual({ sdp: "v=0" });
+  // the read of a snapshot keeps its text form; as an expression it is a call like any other,
+  // which the kernel refuses unless the class names it for a person
+  await target.invoke(["itx", "facets", ["get", "agent"], ["snapshot"]]);
+  // equality: the exact expression, the call's name, and the mark
+  expect(asPerson).toHaveBeenCalledTimes(2);
+  expect(asPerson.mock.calls[0]![0]).toStrictEqual([
+    "itx",
+    "builtins",
+    "facets",
+    ["get", "call"],
+    ["signal", "page-1", step],
+  ]);
+  expect(asPerson).toHaveBeenNthCalledWith(
+    1,
+    ["itx", "builtins", "facets", ["get", "call"], ["signal", "page-1", step]],
+    `${PATH}#call.signal`,
+    true,
+  );
+  expect(asPerson).toHaveBeenNthCalledWith(
+    2,
+    ["itx", "builtins", "facets", ["get", "agent"], ["snapshot"]],
+    `${PATH}#agent.snapshot`,
+    true,
+  );
+  expect(context.invoke).not.toHaveBeenCalled();
+});
+
+test("a person method's answer is read as the person reads, and one with no answer has none", async () => {
+  const { target, asPerson } = view(EVE.actor);
+  asPerson.mockResolvedValueOnce({ joined: [ADAS_EVENT] }).mockResolvedValueOnce(undefined);
+  expect(await target.invoke(["itx", "facets", ["get", "call"], ["join", "page-1"]])).toEqual({
+    joined: [ADAS_EVENT_AS_READ],
+  });
+  expect(await target.invoke(["itx", "facets", ["get", "call"], ["leave", "page-1"]])).toBe(
+    undefined,
+  );
+});
+
+// An answer that is not JSON would be a reach into the facet that its class did not list.
+test.for<{ name: string; answer: () => unknown; refusal: RegExp }>([
+  {
+    name: "a stub",
+    answer: () => Object.assign(() => {}, { [Symbol.dispose]: vi.fn() }),
+    refusal: /the answer of \/agents\/a#call\.join is not JSON/,
+  },
+  { name: "a function inside data", answer: () => ({ leave: () => {} }), refusal: /is not JSON/ },
+  { name: "a stream", answer: () => new ReadableStream(), refusal: /is not JSON/ },
+  { name: "bytes", answer: () => ({ picture: new Uint8Array(4) }), refusal: /is not JSON/ },
+  {
+    name: "a number that JSON has not",
+    answer: () => ({ ttlS: Infinity }),
+    refusal: /is not JSON/,
+  },
+  {
+    name: "a graph with a cycle",
+    answer: () => {
+      const page: Record<string, unknown> = { who: { ...ADA } };
+      page.self = page;
+      return page;
+    },
+    refusal: /is not JSON/,
+  },
+  {
+    name: "JSON over the bound",
+    answer: () => "x".repeat(PERSON_METHOD_MAX_CHARS),
+    refusal: /the answer of \/agents\/a#call\.join is 8388610 characters of JSON, over the 8388608/,
+  },
+])(
+  "a person method's answer that is $name is refused in words, released, and logged for the facet's author",
+  async ({ answer, refusal }) => {
+    // a person who is no member: the answer is made JSON before it is read as they read
+    const { target, asPerson } = view(EVE.actor);
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const answered = answer();
+    asPerson.mockResolvedValue(answered);
+    await expect(
+      target.invoke(["itx", "facets", ["get", "call"], ["join", "page-1"]]),
+    ).rejects.toThrow(refusal);
+    expect(warned).toHaveBeenCalledWith({
+      event: "person-method.answer-refused",
+      namespace: "person-context",
+      message: expect.stringMatching(refusal),
+      call: `${PATH}#call.join`,
+    });
+    const disposer = (answered as Partial<Disposable> | null)?.[Symbol.dispose];
+    if (disposer) expect(disposer).toHaveBeenCalledOnce();
+  },
+);
+
+// WHO A FACET IS TOLD ASKED: of a person who is no member, what another person's view reads.
+test("a facet is told of a non-member their id and name alone, of a guest that they are one, and of a member what their session says, with the mark of a member", () => {
+  const request = (headers: Record<string, string> = {}) =>
+    new Request("https://meet.example.com/itx", { headers });
+  const admin = { actor: "user_0", email: "root@example.com" };
+  const eve = {
+    userId: EVE.actor,
+    email: EVE.email,
+    name: EVE.name,
+    method: "email" as const,
+    impersonatedBy: admin,
+  };
+  // `toStrictEqual`: no address, no `impersonatedBy`, no mark, and no key beyond these
+  expect(asAFacetIsTold(request(), eve)).toStrictEqual({
+    principal: { actor: EVE.actor, name: "eve" },
+  });
+  expect(
+    asAFacetIsTold(request(), { userId: "user_9", email: "", name: "Bob", method: "guest" }),
+  ).toStrictEqual({ principal: BOB });
+  expect(asAFacetIsTold(request({ "x-itx-principal": JSON.stringify(EVE) }), eve)).toStrictEqual({
+    principal: { actor: EVE.actor, email: EVE.email, name: "eve", impersonatedBy: admin },
+    member: true,
+  });
+});
+
+// The context's own count is by person and exact (context/facet-host.test.ts). This one is the
+// socket's, taken before the view reads a call's arguments.
+test("one socket has one count a minute of calls of a person method, taken before the arguments are read; a read takes none", async () => {
+  using _clock = clockAt(60_000 * 3_000);
+  const { target, asPerson, context } = view();
+  const join = ["itx", "facets", ["get", "call"], ["join", "page-1"]];
+  for (let n = 0; n < 120; n++) await target.invoke(join);
+  const overTheBound = ["itx", "facets", ["get", "call"], ["join", { onTrack: () => {} }]];
+  for (const call of [join, overTheBound, "itx.kv.get('k')"])
+    expect(refusalOf(() => target.invoke(call))).toBe("PERSON_CALL_LIMIT");
+  expect(asPerson).toHaveBeenCalledTimes(120);
+  await target.invoke("itx.facets.get('agent').liveSnapshot()");
+  expect(context.invoke).toHaveBeenCalledTimes(1);
+  vi.setSystemTime(60_000 * 3_001);
+  await target.invoke(join);
+  expect(asPerson).toHaveBeenCalledTimes(121);
 });
 
 test("a subscription takes the page's live callback under a name the kernel mints", async () => {
@@ -359,9 +509,45 @@ test.for<{ name: string; act: (target: PersonContextRpcTarget) => unknown; code:
     code: "FORBIDDEN",
   },
   {
-    name: "invoke of the snapshot as an expression array",
-    act: (t) => t.invoke(["itx", "facets", ["get", "agent"], ["snapshot"]]),
+    name: "invoke of a person method through another context",
+    act: (t) => t.invoke(["itx", ["cd", "/"], "facets", ["get", "call"], ["join"]]),
     code: "FORBIDDEN",
+  },
+  {
+    name: "invoke of a person method spelled at the fixed point",
+    act: (t) => t.invoke(["itx", "builtins", "facets", ["get", "call"], ["join"]]),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "invoke of a step past a person method",
+    act: (t) => t.invoke(["itx", "facets", ["get", "call"], ["join"], "asker"]),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "invoke of a facet's property, which is no call",
+    act: (t) => t.invoke(["itx", "facets", ["get", "call"], "limits"]),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "invoke of a person method with an argument beside the expression",
+    act: (t) => t.invoke(["itx", "facets", ["get", "call"], ["join"]], "page-1"),
+    code: "FORBIDDEN",
+  },
+  {
+    name: "invoke of a person method with a callback of the page's",
+    act: (t) => t.invoke(["itx", "facets", ["get", "call"], ["join", { onTrack: () => {} }]]),
+    code: "INVALID_INPUT",
+  },
+  {
+    name: "invoke of a person method with bytes",
+    act: (t) => t.invoke(["itx", "facets", ["get", "call"], ["picture", new Uint8Array(4)]]),
+    code: "INVALID_INPUT",
+  },
+  {
+    name: "invoke of a person method with arguments over the bound",
+    act: (t) =>
+      t.invoke(["itx", "facets", ["get", "call"], ["join", "x".repeat(PERSON_METHOD_MAX_CHARS)]]),
+    code: "INVALID_INPUT",
   },
   {
     name: "invoke of the snapshot with arguments",
@@ -616,4 +802,10 @@ function refusalOf(act: () => unknown): string | undefined {
     return errorCode(error);
   }
   return undefined;
+}
+
+/** The clock held at `now` until the test ends. */
+function clockAt(now: number): Disposable {
+  vi.useFakeTimers({ now });
+  return { [Symbol.dispose]: () => void vi.useRealTimers() };
 }

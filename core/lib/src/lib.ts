@@ -30,6 +30,7 @@
 /** The stable machine-readable codes — SCREAMING_SNAKE, defined once, both ends import this. */
 type ErrorCode =
   | "SCHEDULE_LIMIT" // bounded pending/failed scheduled batches per context
+  | "PERSON_CALL_LIMIT" // one person's calls of person methods on one context, over the count for a minute (core/itx/src/context/facet-public-methods.ts): ask again in the next minute
   | "INVALID_INPUT"
   | "IDENTITY_CONFLICT" // verified login cannot replace another linked identity
   | "GRANT_NOT_FOUND" // a caller may revoke only a grant in their own inventory
