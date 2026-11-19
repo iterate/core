@@ -113,7 +113,7 @@ export interface Door {
 /** As workers-types' `AnalyticsEngineDataPoint` spells it. */
 export type MetricPoint = { indexes?: string[]; blobs?: string[]; doubles?: number[] };
 
-export type TelemetryAnswer = { rows: Record<string, unknown>[]; sql: string };
+export type TelemetryAnswer = { rows: Record<string, unknown>[]; sql: string; notice?: string };
 
 /** It holds the warehouse's tokens, so the mind, which may be hostile, never holds one. */
 export interface TelemetryService {

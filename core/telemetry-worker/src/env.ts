@@ -8,10 +8,10 @@ export type Env = {
    *  its secrets beside it (./config.ts reads them all). A secret is never returned or logged. */
   ITERATE: string;
   ITERATE__OTLP_SECRET: string;
-  ITERATE__CATALOG_TOKEN: string;
-  ITERATE__ANALYTICS_TOKEN: string;
-  LOGS: Pipeline<LogRow>;
-  SPANS: Pipeline<SpanRow>;
-  EVENTS: Pipeline<EventsRow>;
+  ITERATE__CATALOG_TOKEN?: string;
+  ITERATE__ANALYTICS_TOKEN?: string;
+  LOGS?: Pipeline<LogRow>;
+  SPANS?: Pipeline<SpanRow>;
+  EVENTS?: Pipeline<EventsRow>;
   METRICS: AnalyticsEngineDataset;
 };

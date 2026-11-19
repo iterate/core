@@ -20,6 +20,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as Redacted from "effect/Redacted";
 import { MindConfig } from "./config.ts";
 import { mindStack } from "./stack.ts";
+import type { TelemetryMode } from "./telemetry-token.ts";
 
 const SNAPSHOT = new URL("stack-bindings.snapshot.json", import.meta.url);
 const accountId = "aaaaabbbbbccccc111112222233333aa";
@@ -86,8 +87,8 @@ const kindOf = (value: any): string => {
   return value.kind;
 };
 
-/** Each Worker's bindings, as the program declares them for one config. */
-const bindingsOf = (config: MindConfig) =>
+/** Each Worker's bindings and declared resources, as the program declares them for one config. */
+const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMode }) =>
   Effect.gen(function* () {
     const stack = {
       name: "mind",
@@ -102,7 +103,7 @@ const bindingsOf = (config: MindConfig) =>
         Effect.provideService(HttpClient.HttpClient, zoneLookup),
         Effect.provide(fromApiToken({ apiToken: Redacted.make("none") })),
       );
-    yield* inStack(mindStack(config));
+    yield* inStack(mindStack(config, options));
     const workers: Record<string, string[]> = {};
     for (const resource of Object.values(stack.resources).filter(
       (r) => r.Type === "Cloudflare.Worker",
@@ -116,15 +117,23 @@ const bindingsOf = (config: MindConfig) =>
         );
       workers[resource.LogicalId] = lines.sort();
     }
-    return workers;
+    const resources = Object.fromEntries(
+      Object.values(stack.resources).map((r) => [r.LogicalId, r.Type as string]),
+    );
+    return { workers, resources };
   });
 
 void test("each Worker of the stack holds what stack-bindings.snapshot.json says", async () => {
   const listing: Record<string, Record<string, string[]>> = {};
   for (const [name, config] of Object.entries(CASES))
-    listing[name] = await Effect.runPromise(
-      bindingsOf(MindConfig.parse(config)) as Effect.Effect<Record<string, string[]>>,
-    );
+    listing[name] = (
+      await Effect.runPromise(
+        declaredOf(MindConfig.parse(config)) as Effect.Effect<{
+          workers: Record<string, string[]>;
+          resources: Record<string, string>;
+        }>,
+      )
+    ).workers;
   if (process.env.UPDATE_STACK_BINDINGS)
     writeFileSync(SNAPSHOT, `${JSON.stringify(listing, null, 2)}\n`);
   const snapshot: typeof listing = JSON.parse(readFileSync(SNAPSHOT, "utf8"));
@@ -144,4 +153,85 @@ void test("each Worker of the stack holds what stack-bindings.snapshot.json says
     assert.fail(
       `The stack's bindings differ from the snapshot:\n${changes.join("\n")}\nIf this change is meant, update the snapshot: UPDATE_STACK_BINDINGS=1 pnpm --filter core-alchemy test`,
     );
+});
+
+void test("telemetry modes: minted keeps both AccountApiToken resources, given uses TelemetryToken, and off leaves out tables/tokens while keeping other Workers identical", async () => {
+  const config = MindConfig.parse(CASES["full-cloudflare, no mail forward"]);
+  const runMode = (telemetryMode: TelemetryMode) =>
+    Effect.runPromise(
+      declaredOf(config, { telemetryMode }) as Effect.Effect<{
+        workers: Record<string, string[]>;
+        resources: Record<string, string>;
+      }>,
+    );
+  const [minted, given, off] = await Promise.all([
+    runMode("minted"),
+    runMode("given"),
+    runMode("off"),
+  ]);
+
+  // Minted mode: exact Telemetry bindings & two AccountApiToken resources, no TelemetryToken
+  assert.deepEqual(minted.workers.Telemetry, [
+    "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
+    "ITERATE:plain_text",
+    "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
+    "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
+    "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+    "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
+    "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+    "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
+  ]);
+  assert.equal(minted.resources.TelemetryCatalogToken, "Cloudflare.ApiToken.AccountApiToken");
+  assert.equal(minted.resources.TelemetryAnalyticsToken, "Cloudflare.ApiToken.AccountApiToken");
+  assert.equal(minted.resources.TelemetryToken, undefined);
+
+  // Given mode: TelemetryToken and TELEMETRY_TOKEN_SOURCE marker, no AccountApiToken
+  assert.deepEqual(given.workers.Telemetry, [
+    "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
+    "ITERATE:plain_text",
+    "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
+    "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
+    "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+    "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
+    "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+    "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
+    "TELEMETRY_TOKEN_SOURCE:plain_text",
+  ]);
+  assert.equal(given.resources.TelemetryToken, "Iterate.TelemetryToken");
+  assert.equal(given.resources.TelemetryCatalogToken, undefined);
+  assert.equal(given.resources.TelemetryAnalyticsToken, undefined);
+
+  // Off mode: leaves out the 15 telemetry-table resources and 6 Telemetry Worker bindings
+  assert.deepEqual(off.workers.Telemetry, [
+    "ITERATE:plain_text",
+    "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+    "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+  ]);
+  for (const omitted of [
+    "TelemetryBucket",
+    "TelemetryToken",
+    "TelemetryCatalogToken",
+    "TelemetryAnalyticsToken",
+    "TelemetryCatalog",
+    "TelemetrySinkTables",
+    "Telemetry_events_stream",
+    "Telemetry_events_sink",
+    "Telemetry_events_pipeline",
+    "Telemetry_logs_stream",
+    "Telemetry_logs_sink",
+    "Telemetry_logs_pipeline",
+    "Telemetry_spans_stream",
+    "Telemetry_spans_sink",
+    "Telemetry_spans_pipeline",
+    "Telemetry_logs",
+    "Telemetry_traces",
+  ]) {
+    assert.equal(off.resources[omitted], undefined, `${omitted} should be omitted when off`);
+  }
+
+  // Every other Worker's bindings stay identical across all three telemetry modes
+  for (const worker of ["Auth", "Secrets", "Mind", "Boundary"] as const) {
+    assert.deepEqual(minted.workers[worker], given.workers[worker]);
+    assert.deepEqual(off.workers[worker], given.workers[worker]);
+  }
 });

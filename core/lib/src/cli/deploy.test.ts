@@ -39,6 +39,7 @@ import {
   redactMindConfig,
   saysTheStateStoreRefused,
   stageNameOf,
+  telemetryTokenStep,
   verifyTelemetryToken,
   zeroTrustStep,
 } from "./deploy.ts";
@@ -255,7 +256,8 @@ test("sign-in never asks for Account API Token Provisioning, stack uses Telemetr
     new URL("../../../alchemy/src/stack.ts", import.meta.url).pathname,
     "utf8",
   );
-  expect(script).not.toContain("AccountApiToken");
+  // AccountApiToken is kept solely inside the `minted` branch; new stacks use TelemetryToken (or off)
+  expect(script).toContain('if (telemetryMode === "minted")');
   expect(script).toContain('TelemetryToken("TelemetryToken"');
 
   const url = telemetryTokenPage("ada-labs-com");
@@ -363,6 +365,66 @@ test("verifyTelemetryToken accepts active account-owned tokens and rejects user-
 
   const invalid = await verifyTelemetryToken(accountId, "tok-bad", async () => unauthorized);
   expect(invalid).toEqual({ ok: false, error: "Invalid access token" });
+});
+
+test("telemetryTokenStep skips with no prompt by default, uses env token when set, requires token with --telemetry-token, and stops cleanly on a minted mind", async () => {
+  const account = { id: "a".repeat(32), name: "iterate (dev/preview)" };
+  const okVerify = async () => ({ ok: true as const });
+  const noTelemetryWorker = async () => ({
+    status: 404,
+    result: undefined,
+    total: 0,
+    error: "not found",
+  });
+  const mintedTelemetryWorker = async () => ({
+    status: 200,
+    result: {
+      bindings: [
+        { type: "secret_text", name: "ITERATE__CATALOG_TOKEN" },
+        { type: "secret_text", name: "ITERATE__ANALYTICS_TOKEN" },
+      ],
+    },
+    total: 1,
+    error: "",
+  });
+
+  // Default deploy (no env var, no --telemetry-token): goes through with no prompt and no stop
+  await expect(
+    telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
+      env: {},
+      isInteractive: false,
+      verify: okVerify,
+    }),
+  ).resolves.toEqual({});
+
+  // Env token provided: verified and returned even without --telemetry-token
+  await expect(
+    telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
+      env: { CLOUDFLARE_TELEMETRY_API_TOKEN: "tok-from-env" },
+      isInteractive: false,
+      verify: okVerify,
+    }),
+  ).resolves.toEqual({ token: "tok-from-env" });
+
+  // --telemetry-token on an existing minted mind: reports mintedAlready and changes nothing
+  await expect(
+    telemetryTokenStep(mintedTelemetryWorker, account, "ada-labs-com", {
+      env: {},
+      prompt: true,
+      isInteractive: false,
+      verify: okVerify,
+    }),
+  ).resolves.toEqual({ mintedAlready: true });
+
+  // --telemetry-token with no terminal and no env var on a mind without minted tokens: prints dashboard link
+  await expect(
+    telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
+      env: {},
+      prompt: true,
+      isInteractive: false,
+      verify: okVerify,
+    }),
+  ).rejects.toThrow(/dash\.cloudflare\.com.*CLOUDFLARE_TELEMETRY_API_TOKEN/s);
 });
 
 test("CLI color palette respects NO_COLOR/TERM/TTY and styles Cloudflare account names, codes, domains, URLs, and headings", () => {
@@ -473,7 +535,7 @@ test("deploy has no OAuth-client token prompt or Account API Token Provisioning,
   expect(source).toContain("CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken");
   expect(source).toContain("CLOUDFLARE_TELEMETRY_API_TOKEN: _droppedTelemetryToken");
   expect(source).toContain(
-    "await telemetryTokenStep(cf, account, stageName, { plan: input.plan })",
+    "await telemetryTokenStep(cf, account, stageName, {\n      plan: input.plan,\n      prompt: input.telemetryToken,\n    })",
   );
   expect(source).toContain(
     'p.log.info(`${c.callout("MindConfig:")}\\n${formatMindConfigForStdout(deployedConfig)}`)',

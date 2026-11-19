@@ -80,6 +80,8 @@ export type DeployInput = {
   source?: string;
   ref?: string;
   setup?: boolean;
+  /** turn on (or rotate) telemetry tables with an account-owned Cloudflare telemetry API token */
+  telemetryToken?: boolean;
   /** the stack's plan alone, over a mind that is there: nothing changes (`planArgsOf`) */
   plan?: boolean;
 };
@@ -1382,24 +1384,6 @@ export async function earlierDeployOf(
   );
 }
 
-/** Whether the deployed telemetry Worker already has its owner-provided telemetry token kept in
- *  Alchemy's state (core/alchemy/src/stack.ts `TELEMETRY_TOKEN_SOURCE`). */
-async function stackHasTelemetryToken(cf: Cloudflare, account: string, stageName: string) {
-  const settings = await cf(
-    "GET",
-    `/accounts/${account}/workers/scripts/iterate-${stageName}-telemetry/settings`,
-  );
-  if (settings.status !== 200) return false;
-  return Boolean(
-    WorkerSettings.safeParse(settings.result).data?.bindings.some(
-      (binding) =>
-        binding.type === "plain_text" &&
-        binding.name === "TELEMETRY_TOKEN_SOURCE" &&
-        binding.text === "provided",
-    ),
-  );
-}
-
 /** Verifies that a pasted or env-provided Cloudflare telemetry API token is an active
  *  account-owned token for `accountId`. Rejects user-owned tokens (which stop working when that
  *  user leaves the account) with a specific message. */
@@ -1432,59 +1416,113 @@ export async function verifyTelemetryToken(
   }
 }
 
-/** Collects and verifies the single account-owned Cloudflare telemetry API token when needed:
+/** Whether an existing mind's telemetry Worker already holds earlier minted API tokens
+ *  (`ITERATE__CATALOG_TOKEN` without the `TELEMETRY_TOKEN_SOURCE: "provided"` marker). */
+async function stackHasMintedTelemetryTokens(
+  cf: Cloudflare,
+  account: string,
+  stageName: string,
+): Promise<boolean> {
+  const settings = await cf(
+    "GET",
+    `/accounts/${account}/workers/scripts/iterate-${stageName}-telemetry/settings`,
+  );
+  if (settings.status === 404) return false;
+  if (settings.status !== 200)
+    throw new Error(
+      `Cloudflare did not answer with the telemetry Worker's settings (${settings.status}: ${settings.error}). Nothing was changed. Run the command again.`,
+    );
+  const bindings = WorkerSettings.safeParse(settings.result).data?.bindings || [];
+  const hasCatalogToken = bindings.some((binding) => binding.name === "ITERATE__CATALOG_TOKEN");
+  const hasProvidedMarker = bindings.some(
+    (binding) =>
+      binding.type === "plain_text" &&
+      binding.name === "TELEMETRY_TOKEN_SOURCE" &&
+      binding.text === "provided",
+  );
+  return hasCatalogToken && !hasProvidedMarker;
+}
+
+/** Collects and verifies the optional account-owned Cloudflare telemetry API token:
+ *  - On an existing `minted` mind, `--telemetry-token` changes nothing and says so in one sentence;
  *  - Uses `CLOUDFLARE_TELEMETRY_API_TOKEN` from the environment when set (for deploy and `--plan`);
- *  - Skips prompting during `--plan` or on re-deploys when the stack already keeps the token in state;
- *  - Otherwise opens a pre-filled Cloudflare dashboard link (after Enter) and reads the token. */
-async function telemetryTokenStep(
+ *  - Otherwise skips with no prompt and no stop unless `--telemetry-token` was passed;
+ *  - With `--telemetry-token`, opens Cloudflare's pre-filled dashboard link (after Enter) and reads
+ *    the token, or prints the link and stops cleanly when no terminal is attached. */
+export async function telemetryTokenStep(
   cf: Cloudflare,
   account: Account,
   stageName: string,
-  options: { plan?: boolean } = {},
-): Promise<string | undefined> {
-  const fromEnv = process.env[TELEMETRY_TOKEN_ENV]?.trim();
+  options: {
+    plan?: boolean;
+    prompt?: boolean;
+    env?: NodeJS.ProcessEnv;
+    isInteractive?: boolean;
+    verify?: typeof verifyTelemetryToken;
+  } = {},
+): Promise<{ token?: string; mintedAlready?: boolean }> {
+  if (options.prompt && (await stackHasMintedTelemetryTokens(cf, account.id, stageName))) {
+    return { mintedAlready: true };
+  }
+  const verify = options.verify || verifyTelemetryToken;
+  const env = options.env || process.env;
+  const fromEnv = env[TELEMETRY_TOKEN_ENV]?.trim();
   if (fromEnv) {
-    const checked = await verifyTelemetryToken(account.id, fromEnv);
+    const checked = await verify(account.id, fromEnv);
     if (!checked.ok)
       throw new Error(
         `Cloudflare rejected ${TELEMETRY_TOKEN_ENV} (${checked.error}). Create a valid account-owned telemetry token at ${telemetryTokenPage(stageName).href} and run again.`,
       );
     p.log.info(`Using Cloudflare telemetry API token from ${TELEMETRY_TOKEN_ENV}.`);
-    return fromEnv;
+    return { token: fromEnv };
   }
-  if (options.plan) return undefined;
-  if (await stackHasTelemetryToken(cf, account.id, stageName)) return undefined;
+  if (options.plan || !options.prompt) return {};
   const url = telemetryTokenPage(stageName).href;
-  const bucket = `iterate-${stageName}-telemetry`;
-  if (!interactive())
+  const canPrompt = options.isInteractive ?? interactive();
+  if (!canPrompt)
     throw new Error(
-      `Telemetry needs one account-owned Cloudflare API token (${TELEMETRY_TOKEN_ENV}). Create it at:\n${url}\nIf the bucket ${bucket} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${bucket}. Then re-run with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
+      `To turn on telemetry tables, create one account-owned Cloudflare API token at:\n${url}\nThen run again with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
     );
   const c = palette();
   await page(
     [
-      `Create one account-owned Cloudflare telemetry API token for ${c.account(account.name)} so your mind can read its own logs and metrics.`,
-      `Permissions are pre-filled (Workers R2 Data Catalog Write, Workers R2 Storage Bucket Item Write, Workers R2 SQL Read, Account Analytics Read). Select account ${c.account(account.name)} if prompted; if the bucket ${c.callout(bucket)} already exists, scope "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" to ${c.callout(bucket)} alone (for a new mind, you can narrow it to ${c.callout(bucket)} after the first deploy). Click ${c.callout('"Continue to summary" → "Create Token"')}, and copy the token.`,
+      `Create one account-owned telemetry API token for ${c.account(account.name)} to enable SQL over events, logs, spans, and metrics.`,
+      `Open this link (select account ${c.account(account.name)} if asked), click ${c.callout('"Continue to summary" → "Create Token"')}, and copy it:`,
     ].join("\n"),
     url,
   );
   for (;;) {
-    const pasted = (
-      await ask<string>(`set ${TELEMETRY_TOKEN_ENV}=<token>`, () =>
-        p.password({
-          message: "Paste the account-owned Cloudflare telemetry API token",
-          validate: (value) => (value?.trim() ? undefined : "Paste the API token from Cloudflare"),
-        }),
-      )
-    ).trim();
-    const checked = await verifyTelemetryToken(account.id, pasted);
+    const pasted = await readTelemetryTokenInput();
+    const checked = await verify(account.id, pasted);
     if (checked.ok) {
       p.log.success("Verified the Cloudflare telemetry API token.");
-      return pasted;
+      return { token: pasted };
     }
     p.log.warn(
       `Cloudflare rejected that token (${checked.error}). Paste an active account-owned API token.`,
     );
+  }
+}
+
+/** Reads a pasted token from the terminal, throwing cleanly if stdin ends before a token arrives. */
+async function readTelemetryTokenInput(): Promise<string> {
+  let onEnd: (() => void) | undefined;
+  try {
+    const answer = await Promise.race([
+      ask<string>(`set ${TELEMETRY_TOKEN_ENV}=<token>`, () =>
+        p.password({
+          message: "Paste the account-owned Cloudflare telemetry API token",
+          validate: (value) => (value?.trim() ? undefined : "Paste the API token from Cloudflare"),
+        }),
+      ),
+      new Promise<never>((_, reject) => {
+        onEnd = () => reject(new Error("No token was pasted. Nothing was changed."));
+        process.stdin.once("end", onEnd);
+      }),
+    ]);
+    return answer.trim();
+  } finally {
+    if (onEnd) process.stdin.off("end", onEnd);
   }
 }
 
@@ -1845,10 +1883,19 @@ export async function deployMind(input: DeployInput) {
       ? await holdingsToErase(pick.zone.uses || [], pick.zone.id)
       : undefined;
 
-    // Collect the single telemetry API token before mutating the account or buying a domain so
-    // stopping here leaves nothing changed. For `--plan`, pass the env var through when set
-    // without prompting interactively.
-    const telemetryToken = await telemetryTokenStep(cf, account, stageName, { plan: input.plan });
+    // Collect the optional telemetry API token only when `CLOUDFLARE_TELEMETRY_API_TOKEN` is set
+    // or `--telemetry-token` was requested, before mutating the account or buying a domain so
+    // stopping here leaves nothing changed.
+    const telemetryStep = await telemetryTokenStep(cf, account, stageName, {
+      plan: input.plan,
+      prompt: input.telemetryToken,
+    });
+    if (telemetryStep.mintedAlready) {
+      p.log.info("This mind already has its telemetry tokens; nothing was changed.");
+      p.outro(`Nothing was changed. Done in ${seconds(began)}.`);
+      return;
+    }
+    const telemetryToken = telemetryStep.token;
 
     // the account's workers.dev name: a new account has none, and a Worker needs one
     if (!resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)) {
@@ -2074,6 +2121,12 @@ export async function deployMind(input: DeployInput) {
       posted,
     });
     if (keyLine) p.log.info(keyLine);
+    if (telemetryToken) {
+      const bucket = `iterate-${stageName}-telemetry`;
+      p.log.info(
+        `Telemetry bucket ${c.callout(bucket)} is ready: you can now narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to ${c.callout(bucket)} in Cloudflare.`,
+      );
+    }
     if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);
     else p.log.step(`Continue setup in your browser:\n${c.url(onboardingUrl)}`);
     // the check's miss, said above, ends the command non-zero once every step is done

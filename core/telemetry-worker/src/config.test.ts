@@ -12,8 +12,8 @@ void test("the stack's variables become the Worker's settings, and a binding bes
   ]);
   assert.equal(config.eventsWriterName, "iterate-example-com-mind");
   assert.equal(config.otlpSecret.exposeSecret(), "the-otlp-secret");
-  assert.equal(config.catalogToken.exposeSecret(), "the-catalog-token");
-  assert.equal(config.analyticsToken.exposeSecret(), "the-analytics-token");
+  assert.equal(config.catalogToken?.exposeSecret(), "the-catalog-token");
+  assert.equal(config.analyticsToken?.exposeSecret(), "the-analytics-token");
 });
 
 void test("no secret prints", () => {
@@ -22,18 +22,21 @@ void test("no secret prints", () => {
     assert.equal(printed.includes(secret), false);
 });
 
-void test("a missing secret is refused by its name, in both spellings", () => {
-  for (const [variable, field] of [
-    ["ITERATE__OTLP_SECRET", "otlpSecret"],
-    ["ITERATE__CATALOG_TOKEN", "catalogToken"],
-    ["ITERATE__ANALYTICS_TOKEN", "analyticsToken"],
-  ] as const) {
-    const { [variable]: _, ...without } = stackVariables();
-    assert.throws(
-      () => telemetryWorkerConfigOf(without),
-      new RegExp(`ITERATE ${field} \\(${variable}\\)`),
-    );
-  }
+void test("a missing otlpSecret is refused by its name, while catalogToken and analyticsToken are optional", () => {
+  const { ITERATE__OTLP_SECRET: _, ...withoutOtlp } = stackVariables();
+  assert.throws(
+    () => telemetryWorkerConfigOf(withoutOtlp),
+    /ITERATE otlpSecret \(ITERATE__OTLP_SECRET\)/,
+  );
+
+  const {
+    ITERATE__CATALOG_TOKEN: _catalog,
+    ITERATE__ANALYTICS_TOKEN: _analytics,
+    ...withoutTelemetryTokens
+  } = stackVariables();
+  const config = telemetryWorkerConfigOf(withoutTelemetryTokens);
+  assert.equal(config.catalogToken, undefined);
+  assert.equal(config.analyticsToken, undefined);
 });
 
 void test("one env is parsed once", () => {

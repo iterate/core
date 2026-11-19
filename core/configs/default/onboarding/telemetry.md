@@ -6,7 +6,11 @@ The owner should come away with: the mind sees every request, error and event of
 
 - `await itx.telemetry.query(sql, { hours })` runs one `SELECT` over `events`, `logs` or `spans`
   (or `metrics` alone), cut to this mind's rows of the last `hours` (24 by default, 720 at most),
-  1,000 rows at most. It answers `{ rows, sql }`.
+  1,000 rows at most. It answers `{ rows, sql, notice? }`.
+- When the mind was deployed without a telemetry API token, `itx.telemetry.query` does not fail:
+  it answers `{ rows: [], sql, notice: "telemetry tables are off: add a telemetry token" }`. Show
+  that plain sentence to the owner (not as an error) and tell them they can turn telemetry tables
+  on later with `npx iterate deploy --telemetry-token` (or with `CLOUDFLARE_TELEMETRY_API_TOKEN`).
 - `spans` has `timestamp, worker, path, version_id, trace_id, span_id, parent_span_id, seq, name,
 kind, status, duration_ms, cpu_time_ms, wall_time_ms, outcome, entrypoint, durable_object_id,
 rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
@@ -35,21 +39,22 @@ rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
 The visits to `/` in the last hour:
 
 ```ts
-const { rows } = await itx.telemetry.query(
+const { rows, notice } = await itx.telemetry.query(
   "SELECT timestamp, worker, url_path, http_status, outcome, duration_ms, trace_id FROM spans WHERE kind = 'server' AND url_path = '/' ORDER BY timestamp DESC LIMIT 20",
   { hours: 1 },
 );
+if (notice) return notice;
 return rows;
 ```
 
 What failed in the last day:
 
 ```ts
-return (
-  await itx.telemetry.query(
-    "SELECT timestamp, worker, name, status_message, exception FROM spans WHERE status = 'error' ORDER BY timestamp DESC LIMIT 20",
-  )
-).rows;
+const { rows, notice } = await itx.telemetry.query(
+  "SELECT timestamp, worker, name, status_message, exception FROM spans WHERE status = 'error' ORDER BY timestamp DESC LIMIT 20",
+);
+if (notice) return notice;
+return rows;
 ```
 
 ## Say

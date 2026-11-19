@@ -11,6 +11,9 @@ import type { Env } from "./env.ts";
 import { type EventsRow, eventsRow } from "./events-row.ts";
 import { scoped } from "./query.ts";
 
+/** Plain sentence returned instead of an error when telemetry tables have no token configured. */
+const TELEMETRY_TABLES_OFF = "telemetry tables are off: add a telemetry token";
+
 export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService {
   async query(...[sql, hours]: Parameters<TelemetryService["query"]>) {
     const config = telemetryWorkerConfigOf(this.env);
@@ -22,7 +25,12 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
     const started = Date.now();
     let outcome: number | string = "unanswered";
     try {
-      const rows = await this.#rows(run);
+      const token = run.engine === "metrics" ? config.analyticsToken : config.catalogToken;
+      if (!token) {
+        outcome = "off";
+        return { rows: [], sql: run.sql, notice: TELEMETRY_TABLES_OFF };
+      }
+      const rows = await this.#rows(run, token.exposeSecret());
       outcome = rows.length;
       return { rows, sql: run.sql };
     } catch (error) {
@@ -37,6 +45,7 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
   /** A failed send throws and the whole batch comes again, so a row may land twice (dedupe on path
    *  and offset). A row over ROW_MAX_BYTES would hold every later event back: it is dropped. */
   async sendEvents(events: Parameters<TelemetryService["sendEvents"]>[0]) {
+    if (!this.env.EVENTS) return;
     const worker = telemetryWorkerConfigOf(this.env).eventsWriterName;
     const rows: { row: EventsRow; bytes: number }[] = [];
     let dropped = 0;
@@ -58,14 +67,14 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
     for (const point of MetricPoints.parse(points)) this.env.METRICS.writeDataPoint(point);
   }
 
-  async #rows(run: ReturnType<typeof scoped>): Promise<Record<string, unknown>[]> {
+  async #rows(run: ReturnType<typeof scoped>, token: string): Promise<Record<string, unknown>[]> {
     const config = telemetryWorkerConfigOf(this.env);
     if (run.engine === "metrics") {
       const response = await fetch(
         `https://api.cloudflare.com/client/v4/accounts/${config.accountId}/analytics_engine/sql`,
         {
           method: "POST",
-          headers: { authorization: `Bearer ${config.analyticsToken.exposeSecret()}` },
+          headers: { authorization: `Bearer ${token}` },
           body: run.sql,
           signal: AbortSignal.timeout(30_000),
         },
@@ -83,7 +92,7 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
       `https://api.sql.cloudflarestorage.com/api/v1/accounts/${config.accountId}/basin-sql/query/${config.telemetryBucketName}`,
       {
         method: "POST",
-        headers: { authorization: `Bearer ${config.catalogToken.exposeSecret()}` },
+        headers: { authorization: `Bearer ${token}` },
         body: JSON.stringify({ query: run.sql }),
         signal: AbortSignal.timeout(30_000),
       },

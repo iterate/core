@@ -17,9 +17,12 @@ import * as Retry from "@distilled.cloud/cloudflare/Retry";
 import * as zones from "@distilled.cloud/cloudflare/zones";
 import * as Provider from "alchemy/Provider";
 import { Resource } from "alchemy/Resource";
+import { isResourceState, type PersistedState, State } from "alchemy/State/State";
+import type { ResourceState } from "alchemy/State/ResourceState";
 import * as Effect from "effect/Effect";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import { z } from "zod";
@@ -38,6 +41,53 @@ export type TelemetryToken = Resource<
   Cloudflare.Providers
 >;
 export const TelemetryToken = Resource<TelemetryToken>("Iterate.TelemetryToken");
+
+/** How the stack wires telemetry tables:
+ *  - `"minted"`: an existing mind whose state already holds `TelemetryCatalogToken` or
+ *    `TelemetryAnalyticsToken` — keep the two `AccountApiToken` resources, sinks, and bindings as
+ *    they were (plan is `noop`, no deletes, no migration).
+ *  - `"given"`: `TelemetryToken` is already in state, or `CLOUDFLARE_TELEMETRY_API_TOKEN` was
+ *    provided — use the single owner-created token.
+ *  - `"off"`: neither stored nor provided — deploy without telemetry tables, catalog, or sinks. */
+export type TelemetryMode = "minted" | "given" | "off";
+
+const isLiveResource = (persisted: PersistedState | undefined): persisted is ResourceState =>
+  Boolean(persisted && isResourceState(persisted) && persisted.status !== "deleting");
+
+/** Whether a persisted state row represents a live `TelemetryToken` with a stored value. */
+export const isTelemetryTokenPersisted = (persisted: PersistedState | undefined): boolean =>
+  Boolean(isLiveResource(persisted) && persisted.attr && "value" in persisted.attr);
+
+/** Chooses the stack's telemetry mode from its persisted state rows and optional env token.
+ *  A `minted` mind always stays `minted` (no delete, no migration). */
+export const telemetryModeFromState = (
+  rows: {
+    catalogToken?: PersistedState;
+    analyticsToken?: PersistedState;
+    givenToken?: PersistedState;
+  },
+  providedToken?: string,
+): TelemetryMode => {
+  if (isLiveResource(rows.catalogToken) || isLiveResource(rows.analyticsToken)) return "minted";
+  if (providedToken || isTelemetryTokenPersisted(rows.givenToken)) return "given";
+  return "off";
+};
+
+/** Reads Alchemy's `State` once to determine the stack's telemetry mode for `stage`.
+ *  Propagates `StateStoreError` so a store read failure stops the deploy rather than dropping
+ *  existing telemetry resources. */
+export const telemetryModeOf = (stage: string, providedToken?: string) =>
+  Effect.gen(function* () {
+    const stateOption = yield* Effect.serviceOption(State);
+    if (Option.isNone(stateOption)) return providedToken ? ("given" as const) : ("off" as const);
+    const state = yield* stateOption.value;
+    const [catalogToken, analyticsToken, givenToken] = yield* Effect.all([
+      state.get({ stack: "mind", stage, fqn: "TelemetryCatalogToken" }),
+      state.get({ stack: "mind", stage, fqn: "TelemetryAnalyticsToken" }),
+      state.get({ stack: "mind", stage, fqn: "TelemetryToken" }),
+    ]);
+    return telemetryModeFromState({ catalogToken, analyticsToken, givenToken }, providedToken);
+  });
 
 /** Environment variable carrying the owner-created Cloudflare telemetry API token. */
 export const TELEMETRY_TOKEN = "CLOUDFLARE_TELEMETRY_API_TOKEN";

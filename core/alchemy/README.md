@@ -113,17 +113,22 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   `STACK_SCOPES` in [cloudflare-access.ts](../lib/src/cli/cloudflare-access.ts). A sign-in's
   scope is an API token's permission under another spelling (`workers-scripts.write` is "Workers
   Scripts Write").
-- Telemetry needs one account-owned API token (`CLOUDFLARE_TELEMETRY_API_TOKEN`) holding "Workers
-  R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2 SQL Read", and
-  "Account Analytics Read" (`src/telemetry-token.ts`). When the bucket
-  `iterate-<alchemy.stageName>-telemetry` already exists in the account, scope "Workers R2 Storage
-  Bucket Item Write" and "Workers R2 SQL Read" to that bucket alone. `iterate deploy` opens a
-  pre-filled Cloudflare dashboard link for it on first deploy and passes it in
-  `CLOUDFLARE_TELEMETRY_API_TOKEN`. The stack keeps the value in Alchemy's state so later deploys
-  and plans reuse it without asking again. Upgrading a stack that still holds legacy
-  `TelemetryCatalogToken` / `TelemetryAnalyticsToken` deletes them when the credential has
-  API-token write permission, or logs their names and dashboard link for manual removal when it
-  does not.
+- Telemetry tables (`events`, `logs`, `spans`, and `metrics` SQL) are optional (`src/telemetry-token.ts`,
+  `telemetryModeOf`):
+  - **Earlier minted-token minds (`minted`):** a stack whose Alchemy state already holds `TelemetryCatalogToken`
+    or `TelemetryAnalyticsToken` keeps those two `AccountApiToken` resources, sinks, and bindings
+    as they were — `alchemy plan` is `noop` for telemetry, with no deletes and no token asked.
+  - **Owner-provided token (`given`):** passing `CLOUDFLARE_TELEMETRY_API_TOKEN` (one account-owned
+    token with "Workers R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2
+    SQL Read", and "Account Analytics Read", or `iterate deploy --telemetry-token`) turns telemetry
+    tables on and keeps the redacted token in Alchemy's state so later deploys and plans keep every
+    telemetry resource with no changes. When `iterate-<alchemy.stageName>-telemetry` exists, you can
+    narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to that
+    bucket alone.
+  - **No token (`off`):** a fresh deploy with no token in the environment and none in state succeeds
+    without creating the telemetry R2 bucket, Data Catalog, sink tables, Pipelines
+    streams/sinks/pipelines, or OTLP observability destinations; `itx.telemetry.query` answers
+    `"telemetry tables are off: add a telemetry token"`.
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,

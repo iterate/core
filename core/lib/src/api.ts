@@ -1599,8 +1599,9 @@ export interface InstalledAppRoots {}
 /** A context whose mind installed the named apps: with the app's package imported,
  *  `IterateContextApiWith<"myApp">` spells `itx.myApp`. Code that holds a plain scope asserts it
  *  (`itx as IterateContextApiWith<"myApp">`) where it knows the app is installed. */
-/** What `itx.telemetry.query` answers: the rows, and the SQL that ran for the mind. */
-export type TelemetryRows = { rows: Record<string, unknown>[]; sql: string };
+/** What `itx.telemetry.query` answers: the rows, the SQL that ran for the mind, and an optional
+ *  plain notice (e.g. when telemetry tables are off). */
+export type TelemetryRows = { rows: Record<string, unknown>[]; sql: string; notice?: string };
 
 export type IterateContextApiWith<App extends keyof InstalledAppRoots> = IterateContextApi &
   Pick<InstalledAppRoots, App>;

@@ -18,10 +18,12 @@ import { mindStack, refuseDeploy } from "./src/stack.ts";
 import {
   AccountApiTokenDeleteFallbackProvider,
   TELEMETRY_TOKEN,
+  telemetryModeOf,
   TelemetryTokenProvider,
 } from "./src/telemetry-token.ts";
 
 const config = loadMindConfig();
+const providedTelemetryToken = process.env[TELEMETRY_TOKEN]?.trim() || undefined;
 
 /** Ends a command that is for another stage or another Cloudflare account than the config's. */
 const refuseAnotherStageOrAccount = Effect.gen(function* () {
@@ -50,8 +52,8 @@ export default Alchemy.Stack(
       // the stack's former OAuth client: its row leaves the state with no call
       // (src/retired-cloudflare-oauth-client.ts)
       RetiredCloudflareOAuthClientProvider(),
-      // with the owner-created telemetry API token on first deploy or rotation; kept in state after
-      TelemetryTokenProvider(process.env[TELEMETRY_TOKEN]?.trim() || undefined),
+      // with the owner-created telemetry API token when enabling or rotating telemetry tables; kept in state after
+      TelemetryTokenProvider(providedTelemetryToken),
       // legacy AccountApiToken cleanup succeeds even without API-token write scope on fresh sign-ins
       AccountApiTokenDeleteFallbackProvider(),
       DataCatalogProviderThatWaitsForItsToken(),
@@ -83,5 +85,10 @@ export default Alchemy.Stack(
     ],
   },
   // the check again: a deploy runs the program, and none may take the placeholder stage
-  refuseAnotherStageOrAccount.pipe(Effect.andThen(mindStack(config))),
+  refuseAnotherStageOrAccount.pipe(
+    Effect.andThen(
+      telemetryModeOf(config.alchemy.stageName, providedTelemetryToken).pipe(Effect.orDie),
+    ),
+    Effect.flatMap((telemetryMode) => mindStack(config, { telemetryMode })),
+  ),
 );

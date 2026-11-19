@@ -66,9 +66,11 @@ stack's script ([core/alchemy](../../../alchemy/README.md)), and runs that scrip
 computer. Its code is [deploy.ts](deploy.ts) and [cloudflare-access.ts](cloudflare-access.ts).
 
 ```sh
-npx iterate deploy                                   # a person at a terminal: two questions
+npx iterate deploy                                   # a person at a terminal: two questions (no telemetry token needed)
 npx iterate deploy --new-account --domain ada-labs.com --buy
+npx iterate deploy --domain example.com --telemetry-token    # turn on telemetry tables later (prints dashboard link)
 CLOUDFLARE_API_TOKEN=… npx iterate deploy --account <id> --domain example.com --owner you@example.org
+CLOUDFLARE_API_TOKEN=… CLOUDFLARE_TELEMETRY_API_TOKEN=… npx iterate deploy --account <id> --domain example.com --owner you@example.org
 ```
 
 What it does, in order:
@@ -97,12 +99,15 @@ What it does, in order:
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
-4. **Telemetry API token (first deploy).** On a first deploy (unless
-   `CLOUDFLARE_TELEMETRY_API_TOKEN` is already set in the environment), the command shows a
-   pre-filled Cloudflare dashboard link for creating one account-owned telemetry API token
-   (`iterate-<stage>-telemetry`) with the four telemetry permissions, waits for Enter before
-   opening it, and verifies the token you paste. Alchemy keeps the token in the stack's encrypted
-   state so later deploys and plans reuse it without asking again.
+4. **Telemetry API token (optional).** A deploy without `CLOUDFLARE_TELEMETRY_API_TOKEN` goes
+   through with no prompt and no stop: the mind runs without the telemetry tables (`events`, `logs`,
+   `spans`, and `metrics` SQL), and `itx.telemetry.query` answers `"telemetry tables are off: add a
+telemetry token"`. To turn telemetry tables on (at first deploy or later), run
+   `npx iterate deploy --telemetry-token` (which prints a pre-filled Cloudflare dashboard link for
+   one account-owned token `iterate-<stage>-telemetry`, waits for Enter before opening it, and
+   verifies the pasted token) or pass `CLOUDFLARE_TELEMETRY_API_TOKEN=<token>`. Once added, Alchemy
+   keeps the token in the stack's encrypted state so later deploys and plans keep telemetry tables
+   with no changes and without asking again.
 5. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
    until it is on. Off means Cloudflare refused the read, and the account's line shows its words.
    A read that failed is not a fact: a 429 or a 5xx is read again, and after three the command

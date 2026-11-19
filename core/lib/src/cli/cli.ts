@@ -276,6 +276,12 @@ const launcherProcedures = {
           .describe(
             "Change nothing: over a mind that is there already, write the stack's plan (Alchemy's, of each resource: noop, update, create, delete) to plan.log beside the deploy's config, with the same sign-in, source and config as a deploy",
           ),
+        telemetryToken: z
+          .boolean()
+          .optional()
+          .describe(
+            "Turn on telemetry tables (events, logs, spans, and metrics SQL): prints Cloudflare's pre-filled dashboard link to create one account-owned telemetry API token, or uses CLOUDFLARE_TELEMETRY_API_TOKEN",
+          ),
         setup: z
           .boolean()
           .default(true)

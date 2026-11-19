@@ -26,13 +26,16 @@ export async function otlpResponse(request: Request, env: Env) {
     console.warn({ event: "telemetry.secret-refused", pathname });
     return new Response(null, { status: 503 });
   }
-  return pathname === "/v1/logs"
-    ? land(request, pathname, env.LOGS, "rejectedLogRecords", (payload) =>
-        logRows(OtlpLogs.parse(payload)),
-      )
-    : land(request, pathname, env.SPANS, "rejectedSpans", (payload) =>
-        spanRows(OtlpTraces.parse(payload)),
-      );
+  if (pathname === "/v1/logs") {
+    if (!env.LOGS) return Response.json({});
+    return land(request, pathname, env.LOGS, "rejectedLogRecords", (payload) =>
+      logRows(OtlpLogs.parse(payload)),
+    );
+  }
+  if (!env.SPANS) return Response.json({});
+  return land(request, pathname, env.SPANS, "rejectedSpans", (payload) =>
+    spanRows(OtlpTraces.parse(payload)),
+  );
 }
 
 // decompressed: one batch made huge by a mind's own logging, or a gzip bomb, is not parsed
