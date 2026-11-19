@@ -125,10 +125,22 @@ export function speakerOf(source: StreamEvent["source"]): Speaker | undefined {
   }
   const principal = source.principal || source.onBehalfOf?.principal;
   if (!principal) return undefined;
-  // `kind` and `name` stay out: only a signer is a mind, and a guest's name is their own claim
+  // Only a signer is a mind. A person who is no member is named by `onBehalfOf` alone, with the
+  // name they gave: the model is told it as their claim, and that a guest proved nothing
+  // (render.ts), so an agent can call them by it and still knows what it is worth. A verified
+  // principal never has a name here.
   const { actor, email, impersonatedBy } = principal;
   const script = !source.principal && Boolean(source.onBehalfOf?.run);
-  return { actor, email, script: script || undefined, impersonatedBy };
+  const claimed = source.principal ? undefined : source.onBehalfOf?.principal;
+  return {
+    actor,
+    email,
+    // a person with no address (an empty one too) is named by what they gave
+    name: email ? undefined : claimed?.name || undefined,
+    guest: claimed?.kind === "guest" || undefined,
+    script: script || undefined,
+    impersonatedBy,
+  };
 }
 
 /** The `context-added` iterate's loop appends for a `message-received` (processor.ts): the words,

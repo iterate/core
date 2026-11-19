@@ -33,11 +33,16 @@ export type FileAttachment = z.infer<typeof FileAttachment>;
 /** THE PRINCIPAL WHOSE WORDS AN ITEM HOLDS, as the platform stamped the event that brought them
  *  (message.ts `speakerOf`): a person, or another mind whose key signed them (`kind`, as
  *  `Principal` has it). `script`: their script sent the words, they did not type them.
- *  `impersonatedBy`: an administrator was signed in as them. The model reads it as
- *  `[from <address>]` before the words (render.ts). It is never read from a payload. */
+ *  `impersonatedBy`: an administrator was signed in as them. `name` and `guest`: a person who is
+ *  no member has no verified address; `name` is the name they gave, their own claim, and `guest`
+ *  says that they proved nothing. The model reads it as `[from <address>]`, or as
+ *  `[from a guest who gives the name <name>]`, before the words (render.ts). It is never read
+ *  from a payload. */
 const Speaker = z.object({
   actor: z.string().min(1),
   email: z.string().optional(),
+  name: z.string().optional(),
+  guest: z.literal(true).optional(),
   kind: z.literal("mind").optional(),
   script: z.literal(true).optional(),
   impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),

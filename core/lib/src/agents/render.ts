@@ -265,12 +265,21 @@ const inLabel = (text: string) =>
     .slice(0, 120);
 
 /** Words a principal sent: who, as the platform stamped them (contract.ts `Speaker`). Their
- *  address when they have one, else their id; another mind by its domain. */
+ *  address when they have one; another mind by its domain. A person with no address is named by
+ *  what they are first and the name they gave last, as their own claim: "a guest who gives the
+ *  name …" (a guest proved nothing), "a person who gives the name …"; with no name, their id. */
 function saidByLine(saidBy: Speaker): string {
+  const unproven = saidBy.guest ? "a guest" : "a person";
   const who =
     saidBy.kind === "mind"
       ? `the mind ${inLabel(saidBy.actor)}`
-      : inLabel(saidBy.email || saidBy.actor);
+      : saidBy.email
+        ? inLabel(saidBy.email)
+        : saidBy.name
+          ? `${unproven} who gives the name ${inLabel(saidBy.name)}`
+          : saidBy.guest
+            ? `a guest, ${inLabel(saidBy.actor)}`
+            : inLabel(saidBy.actor);
   const script = saidBy.script ? ", sent by a script of theirs" : "";
   const impersonated = saidBy.impersonatedBy
     ? `, signed in by ${inLabel(saidBy.impersonatedBy.email)} acting as them`
