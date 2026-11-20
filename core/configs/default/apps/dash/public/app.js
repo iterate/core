@@ -74,6 +74,12 @@ const pages = [
     call: {
       enable: (itx, path) => itx.cd(path).processors.enable("call", CALL_FACET),
     },
+    // AN AGENT'S TOOLS IN THIS PAGE are off. `pageTools: true` here lends the agent whose page a
+    // member has open a banner in that tab, and, inside what index.html marks with
+    // `data-page-tools="scope"` (<body> for all of it), Playwright's locators: fill, click, press,
+    // highlight, read. What the agent does there carries THAT MEMBER's stamp in the log, and the
+    // page's audit row for the call names no caller. A jailed agent gets nothing. apps.md, "The
+    // Dash", says what it costs.
     // what the mind says first in an agent's empty chat, the first time anyone opens it: the
     // onboarding agent greets a new owner (onboarding.md is what it is told)
     openers: {

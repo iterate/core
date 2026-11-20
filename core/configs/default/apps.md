@@ -116,6 +116,20 @@ is drawn again, and a typed draft in it is lost. To keep them, say on the compon
 `useKeptContext` from `@iterate-com/ui/live`, which open them again by themselves. A wrapper that
 only draws around one of iterate's pages needs the one line alone.
 
+**An agent's tools in the page are off.** `pageTools: true` on the Agents row of `app.js` makes
+each member's open agent page lend that agent `itx.page.<person>.<tab>` while the page is open:
+`banner.show(…)`, and, inside the element that `index.html` marks with `data-page-tools="scope"`
+(`<body>` for the whole page), Playwright's locators with `fill`, `click`, `press`, `highlight` and
+`textContent`. The member sees the agent's path on each banner, a label while a call runs, and
+Stop; no call runs while the tab is in the background. What the agent does in the tab carries the
+member's stamp in the log. The page's audit row for each call
+(`events.iterate.com/page/tool-called`) carries that stamp too and names no caller: any unjailed
+code of the mind can call a lent name. On your own Dash the scope and the fields that never match
+are manners, no wall: an unjailed agent can commit to this repo, which is the Dash's code. The
+walls are the jail (an agent whose scripts run in a jail gets no lend) and the passkey (no tool
+reaches the pages where a member signs). `pageTools: { tools }` adds functions of your own: the
+kit's README has the lines for an `evaluate` tool, and its price.
+
 ## UI components in a page
 
 A page `fetch` serves can render iterate's own components (the stream viewer `ContextView`, buttons,
