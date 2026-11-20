@@ -96,7 +96,9 @@ const THIS_MIND = "That is this mind. Type the address of your own mind.";
 const VouchedPayload = z.strictObject({
   state: z.string().min(1),
   nonce: z.string().min(1),
-  user: z.string().min(1).max(200),
+  // the vouching mind's user id (./vouch.ts, `user_<32 hex>`): a plain token, never an address,
+  // since it is kept as `mind:<id>:<user>` in `users.email`, which `isMember` reads by its "@"
+  user: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
   member: z.literal(true),
   to: z.string().min(1),
 });

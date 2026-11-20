@@ -402,6 +402,22 @@ test("a failed return keeps the sign-in that waits: the right answer still signs
   expect(await a.back(right, form)).toMatchObject({ status: 303 });
 });
 
+test("a vouched user id is a plain token: an address, a key's separator or a space is no vouch, and the sign-in still waits", async () => {
+  const { a, b, app } = await twoMinds();
+  const { form, ask } = await a.started(app.next);
+  const vouchFor = (user: string) =>
+    signedByStack(b.env, {
+      mind: a.log.mind,
+      path: "/",
+      type: SIGN_IN_VOUCHED_TYPE,
+      payload: { state: ask.state, nonce: ask.nonce, user, member: true, to: `https://${A}` },
+      expiresInSeconds: 60,
+    });
+  for (const user of ["owner@mind-b.example", "user_b:other", "user b", "", "x".repeat(101)])
+    expect(await a.back(await vouchFor(user), form)).toMatchObject({ status: 403 });
+  expect(await a.back(await vouchFor("user_b"), form)).toMatchObject({ status: 303 });
+});
+
 test("a token of the way mind is not refreshed, and ends with the vouch's 24 hours", () => {
   const grant = {
     userId: "user_x",
