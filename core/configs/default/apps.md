@@ -281,7 +281,7 @@ Meet (below) is the template's page for it.
   pickers for the microphone, camera and speaker, repair of a failed connection, three simulcast
   layers for a camera. Capture starts only by the person's own press: a page that joins again by
   itself keeps the mute, and its camera and screen stay off. A Dash link with `call=join`
-  (`/agents?contextPath=<agent>&call=join`) joins the call as the page loads, but anyone can send
+  (`/agents<agent>?call=join`) joins the call as the page loads, but anyone can send
   a member such a link, so that join only listens: no microphone opens and nothing is sent until
   the person presses Unmute, and the page says so. `useCallPip`, `CallPipButton` and
   `CallPipPlace` put the tiles in a floating window where the browser has Document
