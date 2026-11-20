@@ -1,7 +1,7 @@
 // app.js — THE DASH'S PAGE: which pages there are and in what order, their names and icons,
 // and the apps and the pages about access it links to. `Dash` from @iterate-com/ui draws them:
-// how the sidebar, the URL and the two ids `agents` and `contexts` work is in its source,
-// packages/ui/src/components/dash/dash.tsx (links below).
+// how the sidebar, the URL and the three ids `agents`, `contexts` and `settings` work is in its
+// source, packages/ui/src/components/dash/dash.tsx (links below).
 //
 // A PAGE OF YOUR OWN is a row with a component, which gets `{ itx, mind, principal, page, agents }`:
 //   import { Notes } from "./notes.js";
@@ -24,6 +24,7 @@ import {
   DashIntegrations,
   DashRepo,
   DashSecrets,
+  DashSettings,
 } from "@iterate-com/ui/components/dash/dash";
 import { DashAgents, DashHome } from "@iterate-com/ui/agent-kind-view/dash-agents";
 import { memberItx } from "@iterate-com/ui/live";
@@ -34,10 +35,11 @@ import {
   ChartLineIcon,
   CompassIcon,
   FolderGit2Icon,
+  HistoryIcon,
   KeyRoundIcon,
   LayoutDashboardIcon,
   LockKeyholeIcon,
-  LogOutIcon,
+  SettingsIcon,
   ShieldCheckIcon,
   SparklesIcon,
   UsersIcon,
@@ -79,46 +81,115 @@ const pages = [
         "The owner has just opened this chat for the first time and has typed nothing yet. Send your first message now: words only, no script (onboarding.md, 'Your first message').",
     },
   },
-  { id: "contexts", name: "Contexts", icon: WaypointsIcon, component: DashContexts },
-  { id: "repos", name: "Config repo", icon: FolderGit2Icon, component: DashRepo },
-  { id: "secrets", name: "Secrets", icon: LockKeyholeIcon, component: DashSecrets },
-  { id: "integrations", name: "Integrations", icon: BlocksIcon, component: DashIntegrations },
+  {
+    id: "integrations",
+    name: "Integrations",
+    about: "The accounts and services the mind is connected to.",
+    icon: BlocksIcon,
+    row: false,
+    component: DashIntegrations,
+  },
+  {
+    id: "secrets",
+    name: "Secrets",
+    about: "The credentials the mind holds.",
+    icon: LockKeyholeIcon,
+    row: false,
+    component: DashSecrets,
+  },
+  {
+    id: "repos",
+    name: "Config repo",
+    about: "The mind's code. A commit to main publishes it.",
+    icon: FolderGit2Icon,
+    row: false,
+    component: DashRepo,
+  },
+  {
+    id: "contexts",
+    name: "Contexts",
+    about: "Every context of the mind, raw and live.",
+    icon: WaypointsIcon,
+    row: false,
+    component: DashContexts,
+  },
   // not every stack has telemetry: without it, the row says "Off"
   {
     id: "analytics",
     name: "Analytics",
+    about: "The mind's telemetry.",
     icon: ChartLineIcon,
     serves: "telemetry",
+    row: false,
     component: DashAnalytics,
   },
+  { id: "settings", name: "Settings", icon: SettingsIcon, component: DashSettings },
 ];
 
 // The mind's apps, each on its own hostname of this page's zone: an app you add in worker.ts
 // gets a row here.
 const apps = [
-  { name: "Docs", host: "docs", icon: BookOpenIcon },
-  { name: "Meet", host: "meet", icon: UsersIcon },
-  { name: "Onboarding", host: "onboarding", icon: SparklesIcon },
+  {
+    name: "Docs",
+    about: "The repos' files, written together.",
+    host: "docs",
+    icon: BookOpenIcon,
+  },
+  {
+    name: "Meet",
+    about: "Calls and meetings with agents and guests.",
+    host: "meet",
+    icon: UsersIcon,
+  },
+  {
+    name: "Onboarding",
+    about: "Set up this mind step by step.",
+    host: "onboarding",
+    icon: SparklesIcon,
+  },
 ].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 
 // The stack's pages about who may do what. "Approvals" shows how many requests wait for a yes.
 const access = [
   {
     name: "Approvals",
+    about: "What waits for a passkey, and the rules.",
     href: `${stack}/secrets/approvals`,
     icon: ShieldCheckIcon,
     count: "approvals",
   },
-  { name: "Keys", href: `${stack}/keys`, icon: KeyRoundIcon },
-  { name: "Sessions", href: `${stack}/sessions`, icon: LogOutIcon },
-  { name: "Members", href: `${stack}/members`, icon: UsersIcon },
-  { name: "Other Minds", href: `${stack}/minds`, icon: CompassIcon },
+  {
+    name: "Members",
+    about: "Who reaches the whole mind.",
+    href: `${stack}/members`,
+    icon: UsersIcon,
+  },
+  { name: "Keys", about: "The keys of this mind.", href: `${stack}/keys`, icon: KeyRoundIcon },
+  {
+    name: "Other minds",
+    about: "The minds that may send events here.",
+    href: `${stack}/minds`,
+    icon: CompassIcon,
+  },
 ];
 
 const links = [
-  { title: "Apps", rows: apps, collapsed: true },
-  { title: "Access", rows: access, collapsed: true },
+  { title: "Access", rows: access },
+  { title: "Apps", rows: apps },
 ];
+
+// Anchored at the foot of the sidebar above Settings.
+const foot = [
+  {
+    name: "Approvals",
+    href: `${stack}/secrets/approvals`,
+    icon: ShieldCheckIcon,
+    count: "approvals",
+  },
+];
+
+// Personal items inside the account popover above Sign out.
+const accountLinks = [{ name: "Your sessions", href: `${stack}/sessions`, icon: HistoryIcon }];
 
 // The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open,
 // or the rail of icons for a first arrival at the onboarding agent). A choice they made wins.
@@ -138,7 +209,17 @@ function MindDash() {
   useEffect(() => void profile.then(setProfile), []);
   // with no icon, the kit draws its own mark
   const logo = icon && html`<img src=${icon} alt="" className="size-8 rounded-md" />`;
-  const shown = { name: name || zone, logo, itx, mind, pages, links, sidebarDefaultOpen };
+  const shown = {
+    name: name || zone,
+    logo,
+    itx,
+    mind,
+    pages,
+    links,
+    foot,
+    accountLinks,
+    sidebarDefaultOpen,
+  };
   return html`<${Dash} app="Dash" ...${shown} />`;
 }
 

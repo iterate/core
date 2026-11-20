@@ -94,10 +94,12 @@ apps/<name>/
 ## The Dash
 
 The Dash's home has a composer that starts an agent, what waits for the member and the agents
-active last. Its sidebar lists the agents active last; clicking the mind header returns Home.
+active last. Its sidebar lists the agents active last above the foot rows (`Approvals` and
+`Settings`, which opens `/settings` listing the mind's pages, access pages and apps); the account
+popover holds `Your sessions` and `Sign out`, and clicking the mind header returns Home.
 `apps/dash/public/app.js` is its contents, and it is yours to change: the list
-of pages (the sidebar comes from it), the apps and access pages it links to, and what the mind says
-first in an agent's empty chat (`openers`). `Dash` and its
+of pages (pages with `row: false` stay routable and appear on Settings), the apps and access pages
+it links to, and what the mind says first in an agent's empty chat (`openers`). `Dash` and its
 pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
 own instead, and the file's header says how.
 

@@ -32,7 +32,8 @@ body,
   background: var(--muted);
 }
 
-/* the sidebar: the mind's name, some rows, and Collapse and the account at its foot */
+/* the sidebar: the mind's name, New agent, Agents label + three loading rows, View all,
+   two foot rows (Approvals, Settings), and Collapse + account at its foot */
 .frame-sidebar {
   position: relative;
   flex: none;
@@ -62,24 +63,57 @@ body,
 .frame-row:nth-of-type(2) {
   top: 82px;
 }
-.frame-sidebar .frame-row:nth-of-type(3) {
-  top: 122px;
-  width: 30%;
+.frame-sidebar .frame-label {
+  top: 123px;
+  right: auto;
+  left: 16px;
+  width: 24%;
+  height: 10px;
 }
-.frame-sidebar .frame-row:nth-of-type(4) {
-  top: 154px;
-  width: 42%;
+.frame-sidebar .frame-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 48px;
+  padding: 0 8px;
 }
-.frame-row:nth-of-type(5) {
-  top: 186px;
+.frame-sidebar .frame-agent span:first-child {
+  width: 16px;
+  height: 16px;
 }
-.frame-sidebar .frame-row:nth-of-type(6) {
-  top: 218px;
+.frame-sidebar .frame-agent span:last-child {
+  width: 66.6667%;
+  height: 16px;
+}
+.frame-sidebar .frame-agent:nth-of-type(4) {
+  top: 144px;
+}
+.frame-sidebar .frame-agent:nth-of-type(5) {
+  top: 192px;
+}
+.frame-sidebar .frame-agent:nth-of-type(6) {
+  top: 240px;
+}
+.frame-sidebar .frame-view-all {
+  top: 302px;
+  right: auto;
+  left: 16px;
+  width: 34%;
+  height: 12px;
+}
+.frame-sidebar .frame-foot {
+  right: auto;
+  left: 16px;
+  width: 44%;
+  height: 12px;
+}
+.frame-sidebar .frame-foot:nth-of-type(8) {
+  bottom: 150px;
+}
+.frame-sidebar .frame-foot:nth-of-type(9) {
+  bottom: 118px;
   width: 36%;
-}
-.frame-sidebar .frame-row:nth-of-type(7) {
-  top: 250px;
-  width: 48%;
 }
 .frame-sidebar .frame-fold {
   bottom: 64px;
@@ -101,10 +135,42 @@ body,
 [data-sidebar="collapsed"] .frame-sidebar .frame-row {
   width: 16px;
   height: 16px;
-  margin-top: -10px;
-}
-[data-sidebar="collapsed"] .frame-sidebar .frame-row:nth-of-type(2) {
   margin-top: -18px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-label {
+  display: none;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-agent {
+  justify-content: center;
+  height: 32px;
+  padding: 0;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-agent span:last-child {
+  display: none;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-agent:nth-of-type(4) {
+  top: 104px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-agent:nth-of-type(5) {
+  top: 136px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-agent:nth-of-type(6) {
+  top: 168px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-view-all {
+  top: 212px;
+  width: 16px;
+  height: 16px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-foot {
+  width: 16px;
+  height: 16px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-foot:nth-of-type(8) {
+  bottom: 136px;
+}
+[data-sidebar="collapsed"] .frame-sidebar .frame-foot:nth-of-type(9) {
+  bottom: 104px;
 }
 [data-sidebar="collapsed"] .frame-sidebar .frame-fold {
   bottom: 48px;

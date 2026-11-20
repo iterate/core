@@ -22,8 +22,9 @@ mind's code: read them before a brief.
 
 - A person who is no member signs in with a code that the mind mails to their address. Read
   `people.md` before you promise an app for such people.
-- The Dash's sidebar lists the apps from `apps/dash/public/app.js`. A row there for a new app is a
-  change under `apps/dash/`: say the trade first (`onboarding/look.md`), and add it only on a yes.
+- The Dash's Settings page (`/settings`) lists the apps from `apps/dash/public/app.js`. Adding a
+  new app there is a change under `apps/dash/`: say the trade first (`onboarding/look.md`), and add
+  it only on a yes.
 
 ## How
 

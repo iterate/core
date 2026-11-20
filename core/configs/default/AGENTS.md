@@ -165,13 +165,15 @@ that has work is "awake" in it. The calls and what a row holds: [top-of-mind.md]
 Each app is a folder under `apps/` ([apps.md](apps.md)).
 
 - `apps/dash/` is the Dash, on `dash.<zone>` for members: every agent, and a chat with each
-  (`/agents`, `/agents/<path>`); any context of the mind, live (`/contexts/<path>`);
-  the config repo as a small IDE (`/repos/config/<file>`), the mind's secrets (`/secrets`), its
-  integrations (`/integrations`), and its telemetry (`/analytics`)
+  (`/agents`, `/agents/<path>`); settings (`/settings`, which links to integrations, secrets,
+  config repo, contexts, analytics, access pages, and apps); any context of the mind, live
+  (`/contexts/<path>`); the config repo as a small IDE (`/repos/config/<file>`), the mind's
+  secrets (`/secrets`), its integrations (`/integrations`), and its telemetry (`/analytics`)
   ([apps.md](apps.md), "The Dash"). `https://<control-plane hostname>/` sends everyone to the Dash.
   To link a person to any view in the Dash, call `await itx.config.dashLink(input)` with a
   structured destination (`{ view: "agent", contextPath }`, `{ view: "context", contextPath }`,
-  `{ view: "repos", repo?, file? }`, `{ view: "page", page, rest? }`, or a named view such as
+  `{ view: "repos", repo?, file? }`, `{ view: "page", page, rest? }` — e.g.
+  `{ view: "page", page: "settings" }` — or a named view such as
   `"home"`, `"secrets"`, `"integrations"`, `"analytics"`); in config code, use
   `dashLinks(apex)` from `apps/dash/links.ts`. The origin is always this mind's Dash and the URL
   grants nothing.
