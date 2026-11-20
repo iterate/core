@@ -291,11 +291,72 @@ export async function productRead(
   }
 }
 
-/** Whether a line of a deploy's output says that the stack's state store refused a request. A
- *  store that the same run made does so in its first seconds, and nothing is made without state:
- *  the one failure after which the command deploys again by itself. */
+/** Whether a line of a deploy's output says that the stack's state store refused a request, or
+ *  that its workers.dev address answered 404. A store that the same run made does so while
+ *  Cloudflare does not serve it yet, and nothing is made without state: the one failure after
+ *  which the command waits for the store and deploys again by itself. */
 export const saysTheStateStoreRefused = (line: string) =>
-  /State store .*failed|StateStoreError/.test(line);
+  /State store .*failed|StateStoreError|\(404 GET https:\/\/[^\s/]+-state\.[^\s/]+\.workers\.dev\//.test(
+    line,
+  );
+
+/** The new state store's workers.dev address, where Alchemy reads it. */
+export const stateStoreAddress = (stageName: string, workersSubdomain: string) =>
+  `https://iterate-${stageName}-state.${workersSubdomain}.workers.dev`;
+
+/** The longest wait for Cloudflare to serve a new state store, after Alchemy's own 2 minutes.
+ *  Cloudflare's edge can answer 404 at a new script's workers.dev address for more than 5
+ *  minutes after its upload and its subdomain both answered 200, though most stores answer
+ *  within seconds: 6 minutes more covers about 8 minutes after the upload. */
+export const STORE_WAIT_MS = 6 * 60_000;
+
+/** How many 200 answers in a row, 2 seconds apart, say that Cloudflare serves the store: the
+ *  edge may answer from one place before another. */
+const STORE_ANSWERS_IN_A_ROW = 3;
+
+/** What each line the command says while it waits for the store holds, after the time waited:
+ *  the time comes first, so a spinner cut to the terminal's width still shows it move. */
+export const WAITING_FOR_STORE = "waiting for Cloudflare to serve the mind's new state store";
+
+/** Whether the store's address answers its `/version` (no token) with 200. */
+const storeAnswers = async (address: string) => {
+  const response = await fetch(`${address}/version`, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(5000),
+  }).catch(() => undefined);
+  await response?.body?.cancel();
+  return response?.status === 200;
+};
+
+/** Waits until the store's address answers 200 three times in a row, 2 seconds apart, for at
+ *  most `STORE_WAIT_MS`. It says a line at the start and each 30 seconds. */
+export async function waitForStore(
+  address: string,
+  say: (line: string) => void,
+  { pause = sleep, now = Date.now, answers = storeAnswers }: StoreWaitDeps = {},
+): Promise<boolean> {
+  const began = now();
+  say(`0 s: ${WAITING_FOR_STORE} at ${address}, for at most ${duration(STORE_WAIT_MS)}`);
+  let told = 0;
+  let inARow = 0;
+  for (;;) {
+    inARow = (await answers(address)) ? inARow + 1 : 0;
+    if (inARow === STORE_ANSWERS_IN_A_ROW) return true;
+    const waited = now() - began;
+    if (waited >= STORE_WAIT_MS) return false;
+    if (Math.floor(waited / 30_000) > told) {
+      told = Math.floor(waited / 30_000);
+      say(`${duration(waited)}: ${WAITING_FOR_STORE}`);
+    }
+    await pause(2000);
+  }
+}
+
+type StoreWaitDeps = {
+  pause?: (ms: number) => Promise<unknown>;
+  now?: () => number;
+  answers?: (address: string) => Promise<boolean>;
+};
 
 /** Whether a line of a deploy's output says that Alchemy did not see the event queue's new
  *  consumer bound to the boundary Worker: the other failure after which the command deploys again
@@ -545,10 +606,12 @@ async function page(text: string, url: string) {
   execFile(command, args, () => {});
 }
 
-const seconds = (since: number) => {
-  const all = Math.round((Date.now() - since) / 1000);
-  return all < 60 ? `${all} s` : `${Math.floor(all / 60)} min ${all % 60} s`;
+const duration = (ms: number) => {
+  const all = Math.round(ms / 1000);
+  if (all < 60) return `${all} s`;
+  return all % 60 ? `${Math.floor(all / 60)} min ${all % 60} s` : `${all / 60} min`;
 };
+const seconds = (since: number) => duration(Date.now() - since);
 
 // ---------------------------------------------------------------------------------------------
 // The stack's source.
@@ -829,21 +892,35 @@ const hidden = (line: string, run: Run) =>
     process.env.CLOUDFLARE_OAUTH_CLIENT_API_TOKEN,
   ].reduce<string>((text, token) => (token ? text.replaceAll(token, "[token]") : text), line);
 
-/** The deploy. When the state store refused it (`saysTheStateStoreRefused`) or Alchemy did not
- *  yet see the queue's consumer (`saysTheConsumerIsNotSeenYet`), it runs once more, and only
+/** The deploy. When the state store refused it (`saysTheStateStoreRefused`), it waits until
+ *  Cloudflare serves the store (`waitForStore`); when Alchemy did not yet see the queue's
+ *  consumer (`saysTheConsumerIsNotSeenYet`), it waits a minute. Then it runs once more, and only
  *  once. The second run goes on with what the first made, as a person's run of the command does,
- *  so it adopts. */
-export async function deployStack<R extends { stageName: string; say?: (line: string) => void }>(
+ *  so it adopts. `storeNotServed` is the store's address when the deploy failed because
+ *  Cloudflare did not serve it. */
+export async function deployStack<
+  R extends { stageName: string; storeAddress: string; say?: (line: string) => void },
+>(
   run: R,
   once: (run: R, args?: string[]) => ReturnType<typeof deployOnce>,
-  pause: (ms: number) => Promise<unknown> = sleep,
-): Promise<{ code: number; consumerNotSeen: boolean }> {
+  deps: StoreWaitDeps = {},
+): Promise<{ code: number; consumerNotSeen: boolean; storeNotServed?: string }> {
+  const { pause = sleep } = deps;
   const first = await once(run);
   if (first.code === 0) return { code: 0, consumerNotSeen: false };
   if (first.storeRefused) {
-    run.say?.(`The new state store refused the deploy: ${ONE_MORE_TRY} 15 seconds`);
-    await pause(15_000);
-    return { code: (await once(run)).code, consumerNotSeen: false };
+    const say = (line: string) => run.say?.(line);
+    say(
+      `The new state store refused the deploy: ${ONE_MORE_TRY} at most ${duration(STORE_WAIT_MS)}, when Cloudflare serves it`,
+    );
+    if (!(await waitForStore(run.storeAddress, say, deps)))
+      return { code: first.code, consumerNotSeen: false, storeNotServed: run.storeAddress };
+    const second = await once(run);
+    return {
+      code: second.code,
+      consumerNotSeen: false,
+      ...(second.code !== 0 && second.storeRefused && { storeNotServed: run.storeAddress }),
+    };
   }
   if (!first.consumerNotSeen) return { code: first.code, consumerNotSeen: false };
   run.say?.(
@@ -2013,7 +2090,9 @@ export async function deployMind(input: DeployInput) {
     const telemetryToken = telemetryStep.token;
 
     // the account's workers.dev name: a new account has none, and a Worker needs one
-    if (!resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)) {
+    let workersSubdomain =
+      resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)?.subdomain ?? "";
+    if (!workersSubdomain) {
       let refusal = "";
       for (const candidate of [
         `iterate-${stageName}`,
@@ -2023,6 +2102,7 @@ export async function deployMind(input: DeployInput) {
           subdomain: candidate,
         });
         refusal = put.status === 200 ? "" : `${put.status}: ${put.error}`;
+        workersSubdomain = candidate;
         if (!refusal) break;
       }
       if (refusal)
@@ -2144,7 +2224,7 @@ export async function deployMind(input: DeployInput) {
     // except for retry notices and a line each 30 seconds that says what is still being made
     // (tail of `deploy.log` is still printed on failure).
     const onDeployLine = (line: string) => {
-      if (line.includes(ONE_MORE_TRY)) {
+      if (line.includes(ONE_MORE_TRY) || line.includes(WAITING_FOR_STORE)) {
         deploying.say(line);
         return;
       }
@@ -2169,10 +2249,11 @@ export async function deployMind(input: DeployInput) {
         2,
       )}\n`,
     );
-    const { code, consumerNotSeen } = await deployStack(
+    const { code, consumerNotSeen, storeNotServed } = await deployStack(
       {
         source: ready,
         stageName,
+        storeAddress: stateStoreAddress(stageName, workersSubdomain),
         config: configFile,
         token: access.token,
         telemetryToken,
@@ -2185,6 +2266,10 @@ export async function deployMind(input: DeployInput) {
     ).finally(() => clearInterval(stillAt));
     if (code !== 0) {
       deploying.fail(`The deploy failed (exit ${code}).`);
+      if (storeNotServed)
+        throw new Error(
+          `The mind's new state store is at ${storeNotServed}, and Cloudflare does not serve this address yet; run the command again in a few minutes. It goes on with this deploy's config. The deploy's whole log: ${log}.`,
+        );
       console.log(readFileSync(log, "utf8").trimEnd().split("\n").slice(-40).join("\n"));
       throw new Error(
         `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.${consumerNotSeen ? " The queue may already have its consumer: run the command again." : ""}`,

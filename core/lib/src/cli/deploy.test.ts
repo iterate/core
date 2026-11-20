@@ -41,6 +41,10 @@ import {
   ONE_MORE_TRY,
   saysTheConsumerIsNotSeenYet,
   saysTheStateStoreRefused,
+  stateStoreAddress,
+  STORE_WAIT_MS,
+  waitForStore,
+  WAITING_FOR_STORE,
   stageNameOf,
   telemetryTokenStep,
   unfinishedDeployIn,
@@ -552,6 +556,89 @@ test("the deploy runs again by itself after the state store's refusal, and after
   expect(saysTheStateStoreRefused("StateStoreError: the store did not answer")).toBe(true);
   expect(saysTheStateStoreRefused("error: Authentication error (code 10000)")).toBe(false);
   expect(saysTheStateStoreRefused("[15:25:30.212] INFO: Computing plan")).toBe(false);
+  // the error of a run that reads the store while Cloudflare does not serve its address
+  expect(
+    saysTheStateStoreRefused(
+      "HttpClientError: Decode: undeclared status code (404 GET https://iterate-blunfin-com-state.iterate-dev-preview.workers.dev/state/stacks)",
+    ),
+  ).toBe(true);
+  expect(
+    saysTheStateStoreRefused(
+      "HttpClientError: Decode: undeclared status code (404 GET https://api.cloudflare.com/client/v4/accounts)",
+    ),
+  ).toBe(false);
+});
+
+test("waitForStore goes on after three 200 answers in a row, 2 s apart, and says a line each 30 s", async () => {
+  expect(ADDRESS).toBe("https://iterate-blunfin-com-state.iterate-dev-preview.workers.dev");
+  const said: string[] = [];
+  // 404 for a minute, one 200, 404 again, then the address serves
+  const clock = storeClock([...Array<boolean>(30).fill(false), true, false, true, true, true]);
+  expect(await waitForStore(ADDRESS, (line) => said.push(line), clock)).toBe(true);
+  expect(clock.reads).toHaveLength(35);
+  expect(clock.reads.at(-1)).toBe(68_000);
+  expect(said).toEqual([
+    `0 s: ${WAITING_FOR_STORE} at ${ADDRESS}, for at most 6 min`,
+    `30 s: ${WAITING_FOR_STORE}`,
+    `1 min: ${WAITING_FOR_STORE}`,
+  ]);
+});
+
+test("waitForStore stops at its bound when the address never serves", async () => {
+  const said: string[] = [];
+  const clock = storeClock([]);
+  expect(await waitForStore(ADDRESS, (line) => said.push(line), clock)).toBe(false);
+  expect(clock.reads.at(-1)).toBe(STORE_WAIT_MS);
+  expect(said).toHaveLength(1 + STORE_WAIT_MS / 30_000 - 1);
+  expect(said.at(-1)).toBe(`5 min 30 s: ${WAITING_FOR_STORE}`);
+});
+
+test("after the state store's refusal the deploy waits for the store, then runs exactly once more", async () => {
+  const refused = { code: 1, storeRefused: true, consumerNotSeen: false };
+  const done = { code: 0, storeRefused: false, consumerNotSeen: false };
+  const said: string[] = [];
+  const run = {
+    stageName: "blunfin-com",
+    storeAddress: ADDRESS,
+    say: (line: string) => said.push(line),
+  };
+
+  // the store serves: one more run, and it deploys
+  let clock = storeClock([true, true, true]);
+  let outcomes = [refused, done];
+  let runs = 0;
+  const once = async () => {
+    runs++;
+    return outcomes.shift()!;
+  };
+  expect(await deployStack(run, once, clock)).toEqual({ code: 0, consumerNotSeen: false });
+  expect(runs).toBe(2);
+  expect(said).toEqual([
+    `The new state store refused the deploy: ${ONE_MORE_TRY} at most 6 min, when Cloudflare serves it`,
+    `0 s: ${WAITING_FOR_STORE} at ${ADDRESS}, for at most 6 min`,
+  ]);
+
+  // the store serves, and the second run is refused again: no third run, and it names the address
+  clock = storeClock([true, true, true]);
+  outcomes = [refused, refused, done];
+  runs = 0;
+  expect(await deployStack(run, once, clock)).toEqual({
+    code: 1,
+    consumerNotSeen: false,
+    storeNotServed: ADDRESS,
+  });
+  expect(runs).toBe(2);
+
+  // the store never serves: no second run
+  clock = storeClock([]);
+  outcomes = [refused, done];
+  runs = 0;
+  expect(await deployStack(run, once, clock)).toEqual({
+    code: 1,
+    consumerNotSeen: false,
+    storeNotServed: ADDRESS,
+  });
+  expect(runs).toBe(1);
 });
 
 // the line Alchemy prints when its read-back of a new queue consumer ends unbound
@@ -568,7 +655,11 @@ test("the deploy runs again by itself, once, when Alchemy did not yet see the qu
   const said: string[] = [];
   const pauses: number[] = [];
   const unseen = { code: 1, storeRefused: false, consumerNotSeen: true };
-  const run = { stageName: "ada-labs-com", say: (line: string) => said.push(line) };
+  const run = {
+    stageName: "ada-labs-com",
+    storeAddress: "https://iterate-ada-labs-com-state.ada.workers.dev",
+    say: (line: string) => said.push(line),
+  };
   const pause = async (ms: number) => pauses.push(ms);
   const recorded = (outcome: typeof unseen) => async (_: unknown, args?: string[]) => {
     runs.push(args);
@@ -576,7 +667,7 @@ test("the deploy runs again by itself, once, when Alchemy did not yet see the qu
   };
 
   // a second failure of the same kind ends the command: no third run
-  const twice = await deployStack(run, recorded(unseen), pause);
+  const twice = await deployStack(run, recorded(unseen), { pause });
   expect(twice).toEqual({ code: 1, consumerNotSeen: true });
   expect(runs).toEqual([undefined, deployArgsOf("ada-labs-com", true)]);
   expect(pauses).toEqual([60_000]);
@@ -586,7 +677,7 @@ test("the deploy runs again by itself, once, when Alchemy did not yet see the qu
 
   // the second run that finds the consumer ends the deploy
   const outcomes = [unseen, { code: 0, storeRefused: false, consumerNotSeen: false }];
-  expect(await deployStack(run, async () => outcomes.shift()!, pause)).toEqual({
+  expect(await deployStack(run, async () => outcomes.shift()!, { pause })).toEqual({
     code: 0,
     consumerNotSeen: false,
   });
@@ -594,7 +685,7 @@ test("the deploy runs again by itself, once, when Alchemy did not yet see the qu
   // any other failure is not run again
   runs.length = 0;
   const other = { code: 1, storeRefused: false, consumerNotSeen: false };
-  expect(await deployStack(run, recorded(other), pause)).toEqual({
+  expect(await deployStack(run, recorded(other), { pause })).toEqual({
     code: 1,
     consumerNotSeen: false,
   });
@@ -1189,3 +1280,22 @@ const configFileOf = (config?: object) => {
   if (config) writeFileSync(file, JSON.stringify(config));
   return file;
 };
+
+const ADDRESS = stateStoreAddress("blunfin-com", "iterate-dev-preview");
+
+/** A clock that only `pause` moves, and a store that answers as `answers` says, read by read. */
+function storeClock(answers: boolean[]) {
+  let at = 0;
+  const reads: number[] = [];
+  return {
+    reads,
+    pause: async (ms: number) => {
+      at += ms;
+    },
+    now: () => at,
+    answers: async () => {
+      reads.push(at);
+      return answers.shift() ?? false;
+    },
+  };
+}
