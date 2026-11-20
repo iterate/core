@@ -51,13 +51,13 @@ test("a row with a url alone is read as before", () => {
   const row = IntegrationConnection.parse({
     account: "@ada",
     actions: [
-      { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+      { label: "Manage", url: "https://dash.example.com/secrets" },
       { label: "Remove", url: "https://dash.example.com/remove/x?secret=x", confirm: "Remove?" },
     ],
   });
   expect(row).toMatchObject({
     actions: [
-      { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+      { label: "Manage", url: "https://dash.example.com/secrets" },
       { label: "Remove", url: "https://dash.example.com/remove/x?secret=x", confirm: "Remove?" },
     ],
   });

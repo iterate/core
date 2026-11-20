@@ -109,9 +109,12 @@ test("a passkey from before the address was a member's is no second passkey: the
 test("the way back to a page after a removal is the whole address that was checked", async () => {
   const stack = await stackOf();
   stack.addPasskey("passkey-laptop", "A laptop");
-  const kept = await stack.remove("passkey-laptop", "https://dash.example.com/?agent=/agents/a");
+  const kept = await stack.remove(
+    "passkey-laptop",
+    "https://dash.example.com/agents/agents/a?view=events",
+  );
   expect(kept.headers.get("location")).toBe(
-    `/keys?next=${encodeURIComponent("https://dash.example.com/?agent=/agents/a")}`,
+    `/keys?next=${encodeURIComponent("https://dash.example.com/agents/agents/a?view=events")}`,
   );
   stack.addPasskey("passkey-tablet", "A tablet");
   const elsewhere = (await stack.remove("passkey-tablet", "//evil.example/")).headers.get(

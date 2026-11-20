@@ -22,7 +22,6 @@ import {
   DashAnalytics,
   DashContexts,
   DashIntegrations,
-  DashMcp,
   DashRepo,
   DashSecrets,
 } from "@iterate-com/ui/components/dash/dash";
@@ -33,14 +32,12 @@ import {
   BookOpenIcon,
   BotIcon,
   ChartLineIcon,
-  CircleCheckIcon,
   CompassIcon,
   FolderGit2Icon,
   KeyRoundIcon,
   LayoutDashboardIcon,
   LockKeyholeIcon,
   LogOutIcon,
-  PlugIcon,
   ShieldCheckIcon,
   SparklesIcon,
   UsersIcon,
@@ -83,7 +80,7 @@ const pages = [
     },
   },
   { id: "contexts", name: "Contexts", icon: WaypointsIcon, component: DashContexts },
-  { id: "repo", name: "Config repo", icon: FolderGit2Icon, component: DashRepo },
+  { id: "repos", name: "Config repo", icon: FolderGit2Icon, component: DashRepo },
   { id: "secrets", name: "Secrets", icon: LockKeyholeIcon, component: DashSecrets },
   { id: "integrations", name: "Integrations", icon: BlocksIcon, component: DashIntegrations },
   // not every stack has telemetry: without it, the row says "Off"
@@ -94,7 +91,6 @@ const pages = [
     serves: "telemetry",
     component: DashAnalytics,
   },
-  { id: "mcp", name: "MCP", icon: PlugIcon, component: DashMcp },
 ];
 
 // The mind's apps, each on its own hostname of this page's zone: an app you add in worker.ts
@@ -117,7 +113,6 @@ const access = [
   { name: "Sessions", href: `${stack}/sessions`, icon: LogOutIcon },
   { name: "Members", href: `${stack}/members`, icon: UsersIcon },
   { name: "Other Minds", href: `${stack}/minds`, icon: CompassIcon },
-  { name: "Self-test", href: `${stack}/self-test`, icon: CircleCheckIcon },
 ];
 
 const links = [
@@ -130,6 +125,6 @@ const links = [
 const sidebarDefaultOpen = document.documentElement.dataset.sidebar !== "collapsed";
 
 render(
-  html`<${Dash} app="Dash" ...${{ itx, mind, pages, links, sidebarDefaultOpen }} />`,
+  html`<${Dash} app="Dash" name=${zone} ...${{ itx, mind, pages, links, sidebarDefaultOpen }} />`,
   document.getElementById("root"),
 );

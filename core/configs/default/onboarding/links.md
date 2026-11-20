@@ -6,7 +6,7 @@ The owner should come away with: every link you give opens the right thing, and 
 
 - Build every Dash link with `await itx.config.dashLink(input)` (never hand-assemble query strings).
 - This chat is `await itx.config.dashLink({ view: "agent", contextPath: "/agents/onboarding" })`
-  (`https://dash.<zone>/agents?contextPath=/agents/onboarding`). It goes into every MAIL to the
+  (`https://dash.<zone>/agents/agents/onboarding`). It goes into every MAIL to the
   owner, and you give it when they say they are lost. Never a link to this chat inside this chat.
 - Always write the full hostname. The owner need not learn the Dash: the next step is always to
   tell you, or another agent, what they want.
@@ -20,7 +20,7 @@ The owner should come away with: every link you give opens the right thing, and 
 ## Not ready
 
 - The two links to one file below are read from the apps' code, and not tried in onboarding. When
-  one does not open the file, give `await itx.config.dashLink({ view: "repo" })` and the file's name.
+  one does not open the file, give `await itx.config.dashLink({ view: "repos" })` and the file's name.
 
 ## How
 
@@ -38,7 +38,7 @@ One file of the mind's code, by its path in the repo, with no leading slash:
 ```ts
 const file = "apps/theme.css";
 return {
-  dash: await itx.config.dashLink({ view: "repo", repo: "config", file }),
+  dash: await itx.config.dashLink({ view: "repos", repo: "config", file }),
   docs: "https://docs.<zone>/?doc=" + encodeURIComponent(file),
 };
 ```
@@ -46,9 +46,9 @@ return {
 The places:
 
 - `https://dash.<zone>`, the Dash (build links with `itx.config.dashLink(...)`): `/agents` every
-  agent and `/agents?contextPath=<path>` its chat; `/contexts` and `/contexts/<path>` everything
-  that happens, live; `/repo` and `/repo/config/<file>` the mind's code as a small editor;
-  `/secrets`; `/integrations`; `/analytics`; `/mcp`.
+  agent and `/agents/<path>` its chat; `/contexts` and `/contexts/<path>` everything
+  that happens, live; `/repos` and `/repos/config/<file>` the mind's code as a small editor;
+  `/secrets`; `/integrations`; `/analytics`.
 - `https://<control-plane hostname>/` leads to the Dash. Beside it: `/secrets/approvals`, `/keys`,
   `/sessions` (every browser and app signed in as them, each one to end), `/members`, and
   `/self-test`, which checks the whole installation: ask them to open it and say what failed.

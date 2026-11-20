@@ -91,12 +91,18 @@ apps/<name>/
 ## The Dash
 
 The Dash's home has a composer that starts an agent, what waits for the member and the agents
-active last, and it says how to connect a coding agent over MCP. Its sidebar lists the agents active last, and ⌘K finds
-an agent, any context, or a path (type `/`). `apps/dash/public/app.js` is its contents, and it is yours to change: the list
+active last. Its sidebar lists the agents active last; clicking the mind header returns Home.
+`apps/dash/public/app.js` is its contents, and it is yours to change: the list
 of pages (the sidebar comes from it), the apps and access pages it links to, and what the mind says
 first in an agent's empty chat (`openers`). `Dash` and its
 pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
 own instead, and the file's header says how.
+
+Direction (Jonas, 2026-11-20):
+
+- "the main UI, i think, should basically be the agents, though"
+- "in general i only want a UI where we absolutely need one. where possible, we should just let people use their agents to interact with the systems"
+- "i don't think 'Access' as a collapsible header is a good solution / i think just Settings or sth might be better"
 
 **A page of your own, and a wrapper of your own around one of iterate's pages, is mounted anew
 each time the page's connection comes back** (a deploy cuts it several times a day): what it shows
@@ -153,7 +159,7 @@ their Dash chat with `/agents/onboarding`:
 3. **Verify & wake:** a loading gate that runs a real server-side test LLM inference request
    (`POST /verify-ai`), triggers the idempotent opener on `/agents/onboarding`, and waits for the
    onboarding agent's first assistant response before redirecting to
-   `https://dash.<zone>/agents?contextPath=/agents/onboarding`.
+   `https://dash.<zone>/agents/agents/onboarding`.
 
 The step "Connect to iterate Cloud" writes four events on `/apps/onboarding` (`contract.ts`), and
 every button of it is also the onboarding agent's call `itx.config.onboardingStep(step, action)`,

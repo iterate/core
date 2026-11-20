@@ -81,14 +81,6 @@ body,
   top: 250px;
   width: 48%;
 }
-.frame-sidebar .frame-row:nth-of-type(8) {
-  top: 282px;
-  width: 40%;
-}
-.frame-sidebar .frame-row:nth-of-type(9) {
-  top: 314px;
-  width: 24%;
-}
 .frame-sidebar .frame-fold {
   bottom: 64px;
   height: 28px;
