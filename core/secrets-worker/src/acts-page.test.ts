@@ -18,7 +18,7 @@ test.for([
       '<button type="button" class="outline" data-opens="lock-dialog">Unlock these rules</button>',
     title: "Unlock the rules for mail and calls?",
     signs: `<button type="button" data-lock="${GATE_UNLOCKED}">Unlock with passkey</button>`,
-    means: "can then add, change and remove these rules with no signature",
+    means: "can then add, change and remove these rules with no passkey",
   },
 ])(
   "rules locked: $locked. A real button beside the state opens a dialog that says what the press means, and the dialog's own button signs",
@@ -26,7 +26,7 @@ test.for([
     const html = actRules({ rules: [], proposed: [], held: [], locked });
     // the state and its button are the first thing under the part's heading
     expect(html.indexOf(state)).toBeGreaterThan(-1);
-    expect(html.indexOf(state)).toBeLessThan(html.indexOf("A mail, or a call of a verb"));
+    expect(html.indexOf(state)).toBeLessThan(html.indexOf("Mail and calls that match a rule"));
     // a button, not a button that is drawn as a link
     expect(html).toContain(`${opener}</div>`);
     const dialog = /<dialog id="lock-dialog"[^>]*>([\s\S]*?)<\/dialog>/.exec(html)?.[1] || "";

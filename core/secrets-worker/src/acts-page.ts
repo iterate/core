@@ -72,14 +72,14 @@ export function heldActs(gate: Gate): string {
       const act = actOfText(row.text);
       const caller =
         row.state === "approved"
-          ? " Approved: it is being done now. If this stays, it is done when its caller asks again."
+          ? " Approved: it is being done now. If it stays here, it is done when it is asked for again."
           : row.waited
-            ? " Its caller waits for your answer now."
-            : " Its caller stopped waiting. When you approve, it is done then, and the caller's context gets what came of it.";
+            ? " Whoever asked waits for your answer now."
+            : " Whoever asked stopped waiting. If you approve, it is done then, and they get the result.";
       return `<fieldset id="act-${escaped(row.digest)}">
 <legend><label><input type="checkbox" data-pick="${escaped(row.digest)}" disabled> ${escaped(act ? summaryOf(act) : "An act this page cannot read")}</label></legend>
 <div data-parts></div>
-<p class="muted">Waiting since ${new Date(row.at).toISOString()}.${caller}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>
+<p class="muted">Waiting since ${new Date(row.at).toISOString().slice(0, 16).replace("T", " ")} UTC.${caller}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>
 <details><summary>The exact text you sign for</summary><pre data-text></pre></details>
 <p class="muted" data-check>Checking…</p></fieldset>`;
     })
@@ -148,14 +148,14 @@ export function actRules(gate: Gate): string {
     .join("");
   return `<h2>Rules for mail and calls</h2>
 ${lock(gate.locked)}
-<p>A mail, or a call of a verb, that a rule names waits here for a signed yes. Its caller waits five minutes. After that you can still approve it for a day, and it is done then.</p>
-<p class="muted">A mail is held whatever sends it. A call of a verb is held when the mind's agents or its loaded code make it. It is not held if the mind's own Worker was changed to skip the rule, which the owner of a home lab can do.</p>
-${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.</p>`}
+<p>Mail and calls that match a rule wait on this page until a member approves them with a passkey. Everything else goes at once. Whoever asked waits five minutes; after that you can still approve for a day, and it is done then.</p>
+${rules ? `<ul>${rules}</ul>` : `<p><strong>No rules:</strong> every mail and every call goes without approval.</p>`}
+<p class="muted">A rule holds mail whatever sends it, and a call when this mind's agents or its loaded code make it. It holds nothing if the mind's own Worker was changed to skip it, which the owner of a home lab can do.</p>
 <form class="stack" data-act-rule>
 <h3>A new rule</h3>
-<label>What waits <input name="verb" value="email.send" size="44" required></label>
-<label>For a mail: only to these recipients, or leave empty for every mail <input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
-<p class="muted">email.send is a mail. itx.whatsapp.sendMessage is one verb, and itx.whatsapp.* every verb under it.</p>
+<label>What needs approval <input name="verb" value="email.send" size="44" required></label>
+<label>Mail only: to these recipients (empty for all mail) <input name="to" placeholder="*@example.com, jo@example.org" size="44"></label>
+<p class="muted">email.send is mail. itx.whatsapp.sendMessage is one call, and itx.whatsapp.* is every call under it.</p>
 <p class="actions"><button type="submit">Add the rule</button></p></form>`;
 }
 
@@ -167,17 +167,17 @@ ${rules ? `<ul>${rules}</ul>` : `<p class="muted">No rule for mail or calls yet.
  *  the rules stand now. */
 function lock(locked: boolean): string {
   const state = locked
-    ? `<p><strong>These rules are locked.</strong> The mind's own agents and code can only ask for a rule. A change that holds less takes a passkey.</p><button type="button" class="outline" data-opens="lock-dialog">Unlock these rules</button>`
-    : `<p><strong>These rules are open.</strong> Any member, and the mind's own agents and code, can add, change and remove them with no signature.</p><button type="button" data-opens="lock-dialog">Lock these rules</button>`;
+    ? `<p><strong>These rules are locked.</strong> This mind's agents and code can only propose a rule. A change that lets more through takes a passkey.</p><button type="button" class="outline" data-opens="lock-dialog">Unlock these rules</button>`
+    : `<p><strong>These rules are open.</strong> Any member, and this mind's agents and code, can add, change and remove them with no passkey.</p><button type="button" data-opens="lock-dialog">Lock these rules</button>`;
   const means = locked
     ? [
-        "Any member, and the mind's own agents and code, can then add, change and remove these rules with no signature.",
-        "So an agent can take away the rule that holds its own mail or call.",
+        "Any member, and this mind's agents and code, can then add, change and remove these rules with no passkey.",
+        "So an agent can remove the rule that holds its own mail or call.",
         "You can lock the rules again at any time.",
       ]
     : [
-        "The mind's own agents and code can no longer add, change or remove these rules. They can only ask for a rule, and a member approves it here.",
-        "A member can still add a rule that holds more, with no key. A change that holds less takes a passkey.",
+        "This mind's agents and code can no longer add, change or remove these rules. They can only propose a rule, and a member approves it here.",
+        "A member can still make the rules stricter with no passkey. A change that lets more through takes a passkey.",
         "To unlock, a member presses Unlock here and signs with a passkey.",
       ];
   return `<div class="state">${state}</div>
