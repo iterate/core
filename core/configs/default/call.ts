@@ -12,8 +12,7 @@
 //   the call (call/rules.ts `live`) and the live links, with no secret's hash.
 // - THE METHODS read who asked from the kernel (`onBehalfOf()`, iterate/sdk). `join`, `signal`,
 //   `leave`, `transcription` and `said` are person methods too: a guest's one-context view may
-//   call them, and the call checks the guest's link at each. `voiceAgent` is a member's alone;
-//   `ring` (a one-time code for the page a ring opens) the mind's code's or a member's.
+//   call them, and the call checks the guest's link at each. `voiceAgent` is a member's alone.
 // - WHAT IT REACHES: the agent's own context (rows, lent stubs, the quiet notes, its schedule),
 //   the audit log `<agent>/call`, and the mind's root for `fetch` and secrets, which fill each
 //   placeholder on the way out.
@@ -140,7 +139,6 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
     "said",
     "delegate",
     "admits",
-    "ring",
   ];
   static override personMethods = ["join", "signal", "leave", "transcription", "said", "admits"];
 
@@ -246,12 +244,6 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
   /** The voice agent's request for the agent: `{ delegation, transcript }`, from its host page. */
   delegate(page: unknown, request: unknown, admission?: unknown) {
     return this.#call.delegate(this.onBehalfOf(), page, request, admission);
-  }
-  /** A ring of a member's device: `{ code, until }`, a one-time code for the page it opens, which
-   *  then joins with the microphone on (`join`'s `ring`). `{ voiceAgent: true }`: and the voice
-   *  agent. The mind's code or a member, never a guest. */
-  ring(input?: unknown) {
-    return this.#call.ring(this.onBehalfOf(), input);
   }
   /** The voice agent: `{ start: sdpOffer }` (a member, from the host page), or `{ stop: why }`. */
   voiceAgent(page: unknown, act: unknown, admission?: unknown) {

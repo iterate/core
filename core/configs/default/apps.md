@@ -275,12 +275,6 @@ Meet (below) is the template's page for it.
   the Mac: `(await mac.state()).presence` is `{ idleSeconds, screenLocked, displayAsleep }`; idle
   under a few minutes, not locked and a display awake is the sign.
 
-  To have the page join with the microphone on, ring with the call's one-time code. The call's
-  `ring({ voiceAgent? })` (the mind's code or a member, never a guest) answers `{ code, until }`: two
-  minutes, one join, kept by the call as a hash alone. A member's join with that code uses it up,
-  and the page opens the microphone at once, and invites the voice agent when the ring asked: the
-  Accept was the person's press. A wrong, used or old code is no error: the join stays muted.
-
   ```js
   const mac = itx.jane.mac; // the Macs: (await itx.rewriteRules.list()).filter((rule) => rule.description?.includes("iterate menu-bar app"))
   await mac.call.ring({
@@ -288,10 +282,6 @@ Meet (below) is the template's page for it.
     from: "Lunch planner",
     reason: "Friday's table needs a yes",
   });
-  // with the microphone on: turn the call on, take a code, ring with it
-  await itx.config.startMeeting({ path: "/agents/lunch" });
-  const { code } = await itx.cd("/agents/lunch").facets.get("call").ring({ voiceAgent: true });
-  await mac.call.ring({ agent: "/agents/lunch", from: "Lunch planner", code });
   await mac.banner.show({
     title: "Design review is starting",
     body: "Misha asks you to join",
