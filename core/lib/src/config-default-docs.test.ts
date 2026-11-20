@@ -1,9 +1,11 @@
 // The default config's Docs processors (core/configs/default/apps/docs/processors/classes.ts): one open doc's
 // processor over an in-memory log, node:sqlite and a fake repo; the comments it reduces; the root's
-// processor that tells open docs of a commit; where a quote is found again; and that worker.ts never
-// reaches the packages the processors need. The page that drives it is out of scope here.
+// processor that tells open docs of a commit; where a quote is found again; where a merge finds
+// node-diff3; a stored HTML note's answer; and that worker.ts never reaches the packages the
+// processors need. The page that drives it is out of scope here.
 import { readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
+import * as nodeDiff3 from "node-diff3";
 import * as Y from "yjs";
 import {
   findQuote,
@@ -31,6 +33,8 @@ import {
   toBase64,
 } from "../../configs/default/apps/docs/processors/frames.ts";
 import { DocsProcessor } from "../../configs/default/apps/docs/processors/root.ts";
+import { isNotePath, noteResponse } from "../../configs/default/apps/docs/notes.ts";
+import { diff3 } from "../../configs/default/apps/docs/processors/merge.ts";
 import type { IterateContextApi } from "./api.ts";
 import { ProcessorEngine, type StreamEventInput } from "./stream/processor.ts";
 import {
@@ -415,6 +419,60 @@ test.for([
   const found = findQuote(text, quote);
   const slice = found && { text: text.slice(found.from, found.to), ...found };
   expect({ found: slice }).toMatchObject({ found: expected });
+});
+
+// ── node-diff3, wherever its loader put it ──
+
+test("the merge finds diff3Merge on globalThis.Diff3 when the package's default is an empty object, as esm.sh's browser build serves it", () => {
+  const browserBuild = [{}, {}, { diff3Merge: nodeDiff3.diff3Merge }];
+  expect(diff3(browserBuild)).toMatchObject({ diff3Merge: nodeDiff3.diff3Merge });
+  expect(() => diff3([{}, {}, undefined])).toThrow(/node-diff3 has no diff3Merge/);
+  // in Node, the named export
+  expect(diff3()).toMatchObject({ diff3Merge: nodeDiff3.diff3Merge });
+});
+
+// ── a stored HTML note ──
+
+test("a note is the mind's file inline, fenced so it cannot act as the member; any other name, method or a missing file is not found", async () => {
+  const stored: Record<string, string> = { "/notes/plan.html": "<h1>Plan</h1>" };
+  const read = async (path: string) => {
+    if (!(path in stored)) throw new Error(`files: nothing at "${path}"`);
+    return new TextEncoder().encode(stored[path]);
+  };
+  const ask = (path: string, method = "GET") =>
+    noteResponse(new Request(`https://docs.example.com${path}`, { method }), read);
+
+  const note = await ask("/notes/plan.html");
+  expect(note).toMatchObject({ status: 200 });
+  expect(await note.text()).toBe("<h1>Plan</h1>");
+  expect(Object.fromEntries(note.headers)).toMatchObject({
+    "content-type": "text/html; charset=utf-8",
+    "content-security-policy": expect.stringMatching(/^sandbox; default-src 'none'/),
+    "x-content-type-options": "nosniff",
+    "cache-control": "private, no-store",
+  });
+  expect(await (await ask("/notes/plan.html", "HEAD")).text()).toBe("");
+  expect(isNotePath("/notes/plan.html")).toBe(true);
+  expect(isNotePath("/processors.json")).toBe(false);
+
+  const statuses = await Promise.all(
+    [
+      ["/notes/missing.html"],
+      ["/notes/Plan.html"],
+      ["/notes/../secrets.html"],
+      ["/notes/sub/plan.html"],
+      ["/notes/plan.md"],
+      ["/notes/plan.html", "POST"],
+    ].map(async ([path, method]) => (await ask(path!, method)).status),
+  );
+  expect(statuses).toEqual([404, 404, 404, 404, 404, 404]);
+
+  // any other failure of the read is a fault, not a missing note
+  await expect(
+    noteResponse(new Request("https://docs.example.com/notes/plan.html"), async () => {
+      throw new Error("files: the bucket is down");
+    }),
+  ).rejects.toThrow(/bucket is down/);
 });
 
 // ── what worker.ts loads ──

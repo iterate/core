@@ -29,6 +29,12 @@ tab closes. The first person who typed is the commit's author, the others are `C
   `docs/comment-reopened` (`{ thread }`) follow it. `apps/docs/processors/comments.ts` has every
   type and its fields. A doc must have been opened once in the page before it takes comments: the
   page is what starts its processor.
+- **To give a member a page to read in the browser,** write an HTML file to the mind's files at
+  `/notes/<name>.html` (lower-case letters, digits and hyphens) and send the link
+  `https://docs.<zone>/notes/<name>.html`. A file's own link downloads it; this one shows it.
+  The page runs no script and loads nothing from elsewhere (`apps/docs/notes.ts`): put the styles
+  in the file and images as `data:` URLs.
+  `itx.files.get("/notes/plan.html").put({ contentType: "text/html", data: new TextEncoder().encode(html) })`.
 - **To take the app out of a mind, disable its processors first.** Each doc that was opened has
   a processor row `doc` on its context, and the root has the row `docs`, which gets every commit
   of every repo. A row outlives the code it names, and then each event goes to a class that no

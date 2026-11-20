@@ -111,6 +111,7 @@ test.for(["docs", "dash", "onboarding"])(
       "/icon.svg.map",
       "/steps.json",
       "/steps/connect-iterate-cloud/connect",
+      "/notes/plan.html",
     ])
       expect(await ask(path)).toBe(refusal);
   },

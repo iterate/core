@@ -1,12 +1,13 @@
 // app.ts — THE DOCS APP, as worker.ts mounts it: public/app.js says what the page does. This file
 // serves the page and answers which version of the processors (processors/classes.ts) this
-// commit holds.
+// commit holds. One more path, /notes/<name>.html, answers a stored HTML note inline (notes.ts).
 import { type AppDescription, serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
 import { openFile } from "../open-files.ts";
 import index from "./index.html";
+import { isNotePath, noteResponse } from "./notes.ts";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import processors from "./processors/";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -30,9 +31,16 @@ export function docsApp() {
      *  (../open-files.ts). */
     open: (request: Request) => openFile(request, DOCS),
     /** Every request on the app's host. worker.ts guards it, so a member alone gets here. */
-    async fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth">) {
+    async fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth" | "getItx">) {
+      const { pathname } = new URL(request.url);
+      // A stored HTML note, read in the browser: /notes/<name>.html is the mind's file of that
+      // path, fenced so that it cannot act as the member (notes.ts).
+      if (isNotePath(pathname)) {
+        using itx = host.getItx();
+        return await noteResponse(request, (path) => itx.files.get(path).bytes());
+      }
       // Where the processors' classes are and which version of them this commit holds.
-      if (new URL(request.url).pathname === "/processors.json")
+      if (pathname === "/processors.json")
         return Response.json({
           mainModule: PROCESSORS_MODULE,
           version: await (version ||= versionOf(processors)),

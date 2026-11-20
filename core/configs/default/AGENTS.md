@@ -52,7 +52,8 @@ that names your task BEFORE the task, not after a failure:
   [sandboxes.md](sandboxes.md).
 - Before you build a page for people who are not members, choose the ways to sign in, or turn the
   guestbook on: [people.md](people.md).
-- Before you edit or comment on a doc as an agent, or take the Docs app out:
+- Before you edit or comment on a doc as an agent, show a member an HTML page you wrote, or take
+  the Docs app out:
   [docs-app.md](docs-app.md).
 - Before you write a kind of agent, or work with the agents under `/agents/people/`:
   [agent-kinds.md](agent-kinds.md).
