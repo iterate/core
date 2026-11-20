@@ -8,7 +8,9 @@ import { z } from "zod";
 import { cloudCredit, type SecretKind } from "./cloud-credit.ts";
 import type { OnboardingItx } from "./steps.ts";
 
-const TEST_MODEL = "gpt-6.1-sol";
+/** The agents' default model (`llm.model` in core/lib/src/agents/contract.ts): the check proves
+ *  the model the agents will ask for. */
+const TEST_MODEL = "gpt-6.2-sol";
 
 export type VerifyAiItx = OnboardingItx & Pick<IterateConfigProcessEventArgs["itx"], "ai">;
 

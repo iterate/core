@@ -19,10 +19,11 @@ const deleteRequested = { type: "events.iterate.com/agent/delete-requested", pay
 const deleted = { type: "events.iterate.com/agent/deleted", payload: { path: "/agents/support" } };
 /** Born: the request, then the certificate (offsets 1 and 2 of every row below). */
 const born = [requested, created];
-/** The config of an agent nothing has configured: the contract's defaults. */
+/** The config of an agent nothing has configured: the contract's defaults. The model is the
+ *  standard text model, Sol 6-2, everywhere (Jonas, 20 Nov 2026). */
 const defaultConfig = {
   llm: {
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     reasoningEffort: "medium",
     apiKeys: [],
     streamIdleTimeoutMs: 60_000,
@@ -485,6 +486,28 @@ test.for<{
       },
     ],
     state: { config: defaultConfig },
+  },
+  {
+    // a mind's defaultConfig at birth names keys, not a model: the log holds no model, so a
+    // re-reduce (a contract version bump) gives the agent the default of the code that runs
+    name: "a log that names no model runs on the default, Sol 6-2; the stack of keys is kept",
+    events: [
+      ...born,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { apiKeys: ['getSecret("/secrets/openai")', "ai-gateway"] } } },
+      },
+    ],
+    state: {
+      config: {
+        ...defaultConfig,
+        llm: {
+          ...defaultConfig.llm,
+          model: "gpt-6.2-sol",
+          apiKeys: ['getSecret("/secrets/openai")', "ai-gateway"],
+        },
+      },
+    },
   },
   {
     name: "words with dont-trigger-request are seen, never answered; a malformed item is skipped",

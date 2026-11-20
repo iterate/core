@@ -213,7 +213,7 @@ const RUN_SCRIPTS = {
   }
 }`,
   model: `async (itx) => {
-  const answer = await itx.ai.run("openai/gpt-6.1-sol", { input: "Reply with the one word: ok", max_output_tokens: 200 }, { returnRawResponse: true, gateway: { id: "default", skipCache: true } });
+  const answer = await itx.ai.run("openai/gpt-6.2-sol", { input: "Reply with the one word: ok", max_output_tokens: 200 }, { returnRawResponse: true, gateway: { id: "default", skipCache: true } });
   const body = await answer.text();
   if (answer.ok) return { pass: true, detail: "The model answered through the account's AI Gateway." };
   return { pass: false, detail: "No model yet: the AI Gateway answered " + answer.status + ". " + body.slice(0, 200) };

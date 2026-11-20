@@ -101,8 +101,9 @@ const Sections = z.record(z.string(), z.string().nullable());
 
 export const AgentContract = defineProcessorContract({
   slug: "agent",
-  // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts).
-  version: "19",
+  // Bumping the version re-reduces every agent's log from offset 0 (stream/processor.ts). 20: an
+  // agent born before takes the default model again, unless its log sets one.
+  version: "20",
   description:
     "An agent: a conversation on its own context, driven by a model that acts through one tool, run(script), against itx; each request's input extends the previous one, so the provider's prompt cache holds the conversation.",
   /** THE REDUCED STATE — what the reduce keeps between events: where creation stands (as the OFFSET
@@ -133,11 +134,13 @@ export const AgentContract = defineProcessorContract({
     config: z
       .object({
         llm: z
-          // OpenAI's gpt-6.1-sol at medium reasoning effort by default: a fifth of
-          // gpt-6-astra's input price and a tenth of its cached price. `reasoningEffort` is the
-          // Responses API's `reasoning.effort`; reasoning tokens are billed as output.
+          // The standard text model, everywhere: OpenAI's gpt-6.2-sol (Sol 6-2) at medium
+          // reasoning effort (Jonas, 20 Nov 2026). It costs what gpt-6.1-sol costs, a fifth of
+          // gpt-6-astra's input price. `reasoningEffort` is the Responses API's
+          // `reasoning.effort` (6.2-sol takes low to xhigh, not none); reasoning tokens are
+          // billed as output.
           .object({
-            model: z.string().min(1).default("gpt-6.1-sol"),
+            model: z.string().min(1).default("gpt-6.2-sol"),
             reasoningEffort: z.string().min(1).default("medium"),
             // Tried in order (responses-keys.ts): each a key, or AI_GATEWAY for the deployment's AI
             // Gateway. A key whose secret is not set is passed over without a request; the agent

@@ -46,7 +46,7 @@ const ACCOUNT_KEY = "chatgpt/account";
 const PENDING_KEY = "chatgpt/pending";
 /** The agents' default model: `llm.model` in agents/contract.ts. The contract module is not
  *  imported, so the CLI's bundle stays without the agents' code. */
-const TEST_MODEL = "gpt-6.1-sol";
+const TEST_MODEL = "gpt-6.2-sol";
 const WAIT_MS = 15 * 60_000;
 
 export type Account = { id: string; email?: string; plan?: string; at: string };

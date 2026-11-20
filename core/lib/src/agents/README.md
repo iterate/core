@@ -163,6 +163,11 @@ context holds it awake with no model call, and asking again within 60 s keeps th
 bridge does this for a whole call. Measured on a 20,000-token agent, a hand-over reaches the model in
 about 0.4 s with everything warm, 1.1 s on a new socket, and 2 s after the context slept.
 
+## The model
+
+The standard text model is Sol 6-2, `gpt-6.2-sol` at medium reasoning effort, everywhere (Jonas, 20
+Nov 2026): it is `llm.model`'s default, and a helper that calls a text model by hand names it too.
+
 ## Your own credentials
 
 `llm.apiKeys` is an ordered list of credentials. Each entry is the text after `Bearer `, normally a

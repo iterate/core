@@ -1719,7 +1719,7 @@ test("the two paths keep the mind's handle until their answer is made: a handle 
   expect(await verifyRes.json()).toEqual({
     ok: true,
     provider: "ai-gateway",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
   });
 });
 
@@ -1743,7 +1743,7 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
   expect(await verifyAi(chatgptItx)).toEqual({
     ok: true,
     provider: "chatgpt",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     reply: "ok",
     usage: { inputTokens: 18, outputTokens: 3 },
   });
@@ -1762,7 +1762,7 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
   expect(await verifyAi(cloudItx)).toEqual({
     ok: true,
     provider: "iterate-cloud",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     reply: "ok",
     usage: { inputTokens: 18, outputTokens: 3 },
   });
@@ -1780,7 +1780,7 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
   expect(await verifyAi(ownItx)).toEqual({
     ok: true,
     provider: "openai",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     reply: "ok",
   });
 
@@ -1791,7 +1791,7 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
   expect(await verifyAi(gwItx)).toEqual({
     ok: true,
     provider: "ai-gateway",
-    model: "gpt-6.1-sol",
+    model: "gpt-6.2-sol",
     reply: "ok",
     usage: { inputTokens: 18, outputTokens: 3 },
   });
