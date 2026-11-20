@@ -124,6 +124,13 @@ one agent's chat and call, with a name and no account: its first open turns the 
 (the call's facet holds the links, `call/share.ts`), and a link opens Meet's guest page,
 `https://meet.<zone>/join<agent>#<secret>`. The link is shown once; the log keeps its secret's
 hash alone. A link lives an hour, a day or 7 days, and ends sooner when a member ends it there.
+The Agents row's `share` gives a kit build that knows it Share of its own, beside the call's
+controls: the same links and, below them, "Add to calendar" (Google Calendar's form or an .ics
+file), which holds the agent's page or the link just made. agent-share.js then draws nothing.
+`share.make` and `share.end` in `app.js` make and end a link with `share-links.js`, the one module
+that makes a link: Meet's page and `itx.config.shareAgent` (`call/share-api.ts`) use it too. The
+member's agent makes, lists and ends links with `itx.config.shareAgent`, `shareLinks` and
+`endShare` ([AGENTS.md](AGENTS.md)).
 
 **An agent's tools in the page are off.** `pageTools: true` on the Agents row of `app.js` makes
 each member's open agent page lend that agent `itx.page.<person>.<tab>` while the page is open:

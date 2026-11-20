@@ -2,7 +2,11 @@
 // are not members into this one agent's chat and call, as guests. app.js draws <AgentShare>
 // beside the kit's Agents page.
 //
-// WHERE IT GOES. The kit has no place for a page's own buttons in the agent's header. Its header
+// IT GIVES WAY TO THE KIT'S SHARE: a kit build that knows the Agents row's `share` (app.js) draws
+// Share itself, in a place `[data-slot=agent-header-share]`, and this file then draws nothing. Take
+// this file out once index.html pins such a build.
+//
+// WHERE IT GOES. The pinned kit has no place for a page's own buttons in the agent's header. Its header
 // has, with `presence` on (app.js), a span `[data-slot=agent-header-aside]` before Chat | Events.
 // `useHeaderSlot` puts ONE span of ours before it, and the button is a portal into that span. The
 // kit draws the header anew (from "reading" to the chat, for another agent), so a
@@ -61,7 +65,10 @@ function useHeaderSlot(width) {
   useLayoutEffect(() => {
     let mine = null;
     const place = () => {
-      const aside = document.querySelector("[data-page-header] [data-slot=agent-header-aside]");
+      // a kit that draws Share itself (the Agents row's `share`, app.js) has its own place: none here
+      const kitShares = document.querySelector("[data-page-header] [data-slot=agent-header-share]");
+      const aside =
+        !kitShares && document.querySelector("[data-page-header] [data-slot=agent-header-aside]");
       if (mine?.isConnected && mine.nextElementSibling === aside) return;
       mine?.remove();
       mine = null;

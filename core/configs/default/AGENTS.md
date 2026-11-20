@@ -193,7 +193,17 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   written together in a browser ([docs-app.md](docs-app.md)).
 - `apps/meet/` is Meet, on `meet.<zone>`: start a meeting (`itx.config.startMeeting`), and any
   agent's chat with its call, for members and the guests they let in by a link
-  ([apps.md](apps.md), "Meet").
+  ([apps.md](apps.md), "Meet"). The Dash's agent page does the same for a member: Share makes,
+  lists and ends links, and makes a calendar invite. A guest always comes in on Meet's page.
+- **Links for guests, as the member's agent.** When a member asks you to let someone into an
+  agent's conversation or call, make a link and give the member its URL:
+  `const { url, until, link } = await itx.config.shareAgent({ agent: "/agents/standup", lifetimeMs: 3_600_000 })`.
+  The link lives a day when you give no `lifetimeMs`, and 7 days at most. It turns the agent's call
+  on when it is off. The URL holds the secret, and nothing else does: give it to the member, and
+  write it nowhere else. `await itx.config.shareLinks({ agent })` lists the live links with who
+  made each and the guests who came by it. `await itx.config.endShare({ agent, link })` ends one.
+  A guest reads the whole conversation and can write to the agent, so make a link only on a
+  member's word.
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
   steps as cards above the chat with `/agents/onboarding`, each button also the agent's
   `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding").

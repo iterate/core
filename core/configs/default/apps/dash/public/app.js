@@ -48,6 +48,7 @@ import {
 } from "@iterate-com/ui/icons";
 import { CALL_FACET } from "./call-facet.js";
 import { AgentShare } from "./agent-share.js";
+import { endLink, makeLink } from "./share-links.js";
 
 // The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
 // dialled in its head, when it is there. The Dash draws in the frame that index.html drew, and
@@ -66,7 +67,8 @@ const mind = new URL(stack).hostname;
 const zone = location.hostname.split(".").slice(1).join(".");
 
 /** THE AGENTS PAGE, the kit's, with Share in the agent's header (agent-share.js): links that let
- *  guests into one agent's chat and call. */
+ *  guests into one agent's chat and call. A kit build that draws Share itself (the row's `share`
+ *  below) has a place for it, and agent-share.js then draws nothing. */
 function Agents(props) {
   const path = usePageParam("agent");
   return html`
@@ -93,6 +95,24 @@ const pages = [
     // a call on any agent's page: "Start a call" turns the call facet on for the agent (call.ts)
     call: {
       enable: (itx, path) => itx.cd(path).processors.enable("call", CALL_FACET),
+    },
+    // SHARE beside the call's controls: links that let people who are not members into one agent's
+    // chat and call, the live ones with their guests, End, and a calendar invite. The link is made
+    // by share-links.js, the one module that Meet and `itx.config.shareAgent` use too, and appended
+    // through the member's own stub, so the link names the member as its maker. A guest comes in on
+    // Meet's guest page. Take this out, and the agent's header has no Share.
+    share: {
+      make: async (itx, path, lifetimeMs) => {
+        const { event, url, until, link } = await makeLink({
+          zone,
+          agent: path,
+          lifetimeMs,
+          now: Date.now(),
+        });
+        await itx.cd(path).append(event);
+        return { url, until, link };
+      },
+      end: (itx, path, link) => itx.cd(path).append(endLink(link)),
     },
     // AN AGENT'S TOOLS IN THIS PAGE are off. `pageTools: true` here lends the agent whose page a
     // member has open a banner in that tab, and, inside what index.html marks with

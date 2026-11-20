@@ -8,7 +8,19 @@ import { expect, test } from "vitest";
 import { z } from "zod";
 import { dashLink, DashLinkInput, dashLinks } from "../../configs/default/apps/dash/links.ts";
 import { CALL_FACET } from "../../configs/default/call.ts";
-import { isLive, reduceShare, type ShareEvent } from "../../configs/default/call/share.ts";
+import {
+  isLive,
+  LONGEST_LIFETIME_MS,
+  reduceShare,
+  type ShareEvent,
+  type ShareState,
+} from "../../configs/default/call/share.ts";
+import {
+  endShare,
+  shareAgent,
+  type ShareItx,
+  shareLinks as listShares,
+} from "../../configs/default/call/share-api.ts";
 // @ts-expect-error -- a plain browser module of the Dash, with no types
 import { CALL_FACET as DASH_CALL_FACET } from "../../configs/default/apps/dash/public/call-facet.js";
 // @ts-expect-error -- a plain browser module of the Dash, with no types
@@ -29,6 +41,7 @@ test("the Dash's Share makes a link that the call's share rules take: Meet's gue
     hashOfSecret(secret: string): Promise<string>;
     agentPathOf(value: unknown): string | null;
     LIFETIMES: { ms: number }[];
+    LONGEST_LIFETIME: number;
   };
   const now = Date.parse("2026-11-20T12:00:00.000Z");
   const { event, url } = await links.makeLink({
@@ -53,12 +66,66 @@ test("the Dash's Share makes a link that the call's share rules take: Meet's gue
   expect(isLive(ended.links[0]!, now + 1)).toBe(false);
   // the longest choice is within the share rules' own limit
   expect(Math.max(...links.LIFETIMES.map((choice) => choice.ms))).toBe(7 * 24 * 3_600_000);
+  expect(links).toMatchObject({ LONGEST_LIFETIME: LONGEST_LIFETIME_MS });
   // an agent's path only, as written
   expect(
     ["/agents/standup", "/agents/meet/a-b", "/", "/agents", "/agents/../x", "/docs/a"].map(
       links.agentPathOf,
     ),
   ).toEqual(["/agents/standup", "/agents/meet/a-b", null, null, null, null]);
+});
+
+test("the Dash and Meet make a link with one module: their two share-links.js are byte for byte the same", () => {
+  const read = (app: string) =>
+    readFileSync(
+      new URL(`../../configs/default/apps/${app}/public/share-links.js`, import.meta.url),
+    );
+  expect(read("meet").equals(read("dash"))).toBe(true);
+});
+
+test("itx.config.shareAgent makes the pages' link: the call turned on, the hash alone in the log, 7 days at most, admitted by the call; endShare ends it", async () => {
+  const mind = fakeShareMind();
+  const answer = await shareAgent(mind.itx, {
+    agent: "/agents/standup",
+    lifetimeMs: 30 * 24 * 3_600_000,
+  });
+  const [page, secret] = answer.url.split("#");
+  expect(page).toBe("https://meet.example.com/join/agents/standup");
+  // the call was off: turned on first, with the config's spec
+  expect(mind).toMatchObject({ enabled: [["/agents/standup", "call", CALL_FACET]] });
+  const [made] = mind.appended;
+  expect(made).toMatchObject({
+    type: "share/link-made",
+    payload: { link: answer.link, secretHash: await shareLinks.hashOfSecret(secret!) },
+  });
+  expect(JSON.stringify(mind.appended)).not.toContain(secret);
+  // a month asked for, 7 days given: the share rules' own limit
+  expect(answer.until - mind.madeAt).toBeLessThanOrEqual(LONGEST_LIFETIME_MS);
+  expect(answer.until - mind.madeAt).toBeGreaterThan(LONGEST_LIFETIME_MS - 60_000);
+  expect(await listShares(mind.itx, { agent: "/agents/standup" })).toEqual([
+    expect.objectContaining({ link: answer.link, madeBy: { actor: "user_1", name: "jonas" } }),
+  ]);
+  expect(JSON.stringify(await listShares(mind.itx, { agent: "/agents/standup" }))).not.toContain(
+    "secretHash",
+  );
+  await endShare(mind.itx, { agent: "/agents/standup", link: answer.link });
+  expect(await listShares(mind.itx, { agent: "/agents/standup" })).toEqual([]);
+  // no link to a context that is no agent, nor to a path that is no agent's
+  await expect(shareAgent(mind.itx, { agent: "/repos/config" })).rejects.toThrow(
+    "/repos/config is no agent's path.",
+  );
+  await expect(shareAgent(mind.itx, { agent: "/agents/nobody" })).rejects.toThrow(
+    "/agents/nobody is no agent of this mind.",
+  );
+  // a link the call does not admit (made for a guest) is ended and refused
+  // a guest's stamp, which the fold reads as no member's (iterate/principal `kind`)
+  mind.stamp = {
+    onBehalfOf: { principal: { actor: "guest:g", kind: "guest" } as { actor: string } },
+  };
+  await expect(shareAgent(mind.itx, { agent: "/agents/standup" }, { foldMs: 0 })).rejects.toThrow(
+    "admits nobody",
+  );
+  expect(mind.appended.at(-1)).toMatchObject({ type: "share/link-ended" });
 });
 
 test("no file of the template names a path of the Dash that acts: the Integrations page's buttons call the mind's config", () => {
@@ -133,3 +200,40 @@ test("dashLinks and dashLink validate structured inputs and reject unsafe destin
     dashLink("example.com", { view: "unknown" } as unknown as DashLinkInput),
   ).toThrow();
 });
+
+/** One agent, `/agents/standup`, whose call folds what is appended by call/share.ts, with the stamp
+ *  `stamp` (a member's, unless a test says another). */
+function fakeShareMind() {
+  const mind = {
+    appended: [] as { type: string; payload: { link: string } }[],
+    enabled: [] as unknown[][],
+    madeAt: 0,
+    stamp: { principal: { actor: "user_1", name: "jonas" } } as ShareEvent["source"],
+    state: { links: [] } as ShareState,
+    callOn: false,
+  };
+  const itx: ShareItx = {
+    url: async () => "https://example.com/",
+    cd: (path) => ({
+      append: async (event) => {
+        const typed = event as (typeof mind.appended)[number];
+        if (typed.type === "share/link-made") mind.madeAt = Date.now();
+        mind.appended.push(typed);
+        const createdAt = new Date().toISOString();
+        mind.state = reduceShare(mind.state, { ...typed, createdAt, source: mind.stamp });
+      },
+      processors: {
+        list: async () =>
+          path === "/agents/standup"
+            ? [{ name: "agent" }, ...(mind.callOn ? [{ name: "call" }] : [])]
+            : [],
+        enable: async (name, spec) => {
+          mind.enabled.push([path, name, spec]);
+          mind.callOn = true;
+        },
+      },
+      facets: { get: () => ({ snapshot: async () => ({ state: mind.state }) }) },
+    }),
+  };
+  return Object.assign(mind, { itx });
+}

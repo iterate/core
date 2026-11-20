@@ -21,6 +21,7 @@ import {
 } from "./apps/onboarding/steps.ts";
 import { meetApp } from "./apps/meet/app.ts";
 import { startMeeting } from "./apps/meet/meeting.ts";
+import { endShare, shareAgent, type ShareItx, shareLinks } from "./call/share-api.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 // Voice devices and the phone line (apps.md, "Voice devices") are off: take the "// " off this
 // line and off `installVoice` in the init case below, in the commit that adds the package.
@@ -473,6 +474,29 @@ export default class extends IterateConfigEntrypoint {
     return await startMeeting(itx, options);
   }
 
+  /** `itx.config.shareAgent({ agent, lifetimeMs? })`: a link that lets people who are not members
+   *  into the agent's chat and call as guests, as the Dash's Share and Meet's Guests make one. It
+   *  turns the agent's call on when it is off, lives a day unless `lifetimeMs` says otherwise (7
+   *  days at most), and answers `{ url, until, link }` once the call admits by it. The secret is
+   *  in `url` alone: the log keeps its hash (call/share-api.ts). */
+  async shareAgent(input: { agent: string; lifetimeMs?: number }) {
+    using itx = this.getItx();
+    return await shareAgent(shareItx(itx), input);
+  }
+
+  /** `itx.config.shareLinks({ agent })`: the agent's live links, each with who made it, its end
+   *  and the guests who came by it. */
+  async shareLinks(input: { agent: string }) {
+    using itx = this.getItx();
+    return await shareLinks(shareItx(itx), input);
+  }
+
+  /** `itx.config.endShare({ agent, link })`: ends one link before its time; its guests are out. */
+  async endShare(input: { agent: string; link: string }) {
+    using itx = this.getItx();
+    return await endShare(shareItx(itx), input);
+  }
+
   /** `itx.config.onboardingStep(step, action)`: one press of a button of the onboarding app, as
    *  the onboarding agent makes it from the owner's plain words (apps/onboarding/steps.ts;
    *  onboarding/connect-iterate-cloud.md). It answers `{ status, words, link? }`. */
@@ -550,6 +574,12 @@ export default class extends IterateConfigEntrypoint {
 }
 
 type Itx = IterateConfigProcessEventArgs<"agents">["itx"];
+
+/** The root's `itx` as call/share-api.ts reads it. A cast, needed and safe: the root's types say
+ *  that some calls (`processors.list`) answer a value where the call over RPC answers its promise,
+ *  and that file awaits each. It calls only `url`, `cd(path).append`, `processors.list`,
+ *  `processors.enable` and the call facet's `snapshot`, which the root's itx has. */
+const shareItx = (itx: object) => itx as ShareItx;
 
 /** iterate Cloud's DELIVERIES (cloud-deliveries.ts): `processEvent` hands every event here, and
  *  `processMindEvent` iterate.iterate.com's deliveries in the mind form. Each case reads its

@@ -37,6 +37,8 @@ import {
   useIterateContext,
 } from "@iterate-com/ui/live";
 import { googleCalendarUrl, icsOf, localInput, nextQuarter } from "./invite.js";
+// the template's one link-making for guests: the twin of the Dash's file (its header says why)
+import { endLink, makeLink } from "./share-links.js";
 
 const [, ROUTE = "", ...REST] = location.pathname.split("/");
 const AGENT = `/${REST.join("/")}`;
@@ -319,21 +321,14 @@ function Guests({ stub, links, onMade }) {
   const [error, setError] = useState("");
   const make = async () => {
     setError("");
-    const bytes = crypto.getRandomValues(new Uint8Array(24));
-    const secret = btoa(String.fromCharCode(...bytes))
-      .replaceAll("+", "-")
-      .replaceAll("/", "_")
-      .replace(/=+$/, "");
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret));
-    const secretHash = [...new Uint8Array(digest)]
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    const url = `${location.origin}/join${AGENT}#${secret}`;
-    // 7 days at most, whatever the select holds: the share links' own limit
-    const until = Date.now() + Math.min(Number(hours) || 24, 168) * 3_600_000;
-    const link = crypto.randomUUID();
     try {
-      await stub.append({ type: "share/link-made", payload: { link, secretHash, until } });
+      const { event, url, until, link } = await makeLink({
+        zone: location.hostname.split(".").slice(1).join("."),
+        agent: AGENT,
+        lifetimeMs: (Number(hours) || 24) * 3_600_000,
+        now: Date.now(),
+      });
+      await stub.append(event);
       await navigator.clipboard.writeText(url).catch(() => {});
       setMade(url);
       onMade({ url, until, link });
@@ -341,10 +336,6 @@ function Guests({ stub, links, onMade }) {
       setError(messageOf(failure));
     }
   };
-  const end = (link) =>
-    stub
-      .append({ type: "share/link-ended", payload: { link } })
-      .catch((failure) => setError(messageOf(failure)));
   return html`
     <section className="meet-band">
       <h2 className="meet-subtitle">Guests</h2>
@@ -375,7 +366,14 @@ function Guests({ stub, links, onMade }) {
                 By ${link.madeBy}, until
                 ${when(link.until)}${link.guests.length ? `; came: ${link.guests.join(", ")}` : ""}
               </span>
-              <${Button} size="sm" variant="ghost" onClick=${() => end(link.link)}>End<//>
+              <${Button}
+                size="sm"
+                variant="ghost"
+                onClick=${() =>
+                  stub.append(endLink(link.link)).catch((failure) => setError(messageOf(failure)))}
+              >
+                End
+              <//>
             </li>
           `,
         )}
