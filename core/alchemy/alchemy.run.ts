@@ -12,6 +12,7 @@ import { ArtifactsRepoSubscriptionProvider } from "./src/artifacts-repo-subscrip
 import { CatalogTablesOfSinksProvider } from "./src/catalog-tables-of-sinks.ts";
 import { loadMindConfig, namesOf } from "./src/config.ts";
 import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
+import { ContainerSnapshotProviders } from "./src/container-snapshots.ts";
 import { CallsWithoutWriteProviders } from "./src/realtime.ts";
 import { RetiredCloudflareOAuthClientProvider } from "./src/retired-cloudflare-oauth-client.ts";
 import { mindStack, refuseDeploy } from "./src/stack.ts";
@@ -60,6 +61,9 @@ export default Alchemy.Stack(
       // Alchemy's own providers of the SFU app and TURN key, where a credential without "Calls
       // Write" leaves them not made (src/realtime.ts): these win over `Cloudflare.providers()`
       CallsWithoutWriteProviders(),
+      // Alchemy's own provider of the sandbox's container application, where a destroy deletes it
+      // although the registry refuses its saved snapshots, and names them (src/container-snapshots.ts)
+      ContainerSnapshotProviders(),
     ).pipe(Layer.provideMerge(Cloudflare.providers())),
     // The state, with the generated keys, lives in the mind's own account. Alchemy opens it for
     // a deploy and for a destroy, and a destroy does not run the stack's program: so both are
