@@ -153,7 +153,7 @@ their Dash chat with `/agents/onboarding`:
 3. **Verify & wake:** a loading gate that runs a real server-side test LLM inference request
    (`POST /verify-ai`), triggers the idempotent opener on `/agents/onboarding`, and waits for the
    onboarding agent's first assistant response before redirecting to
-   `https://dash.<zone>/?agent=/agents/onboarding`.
+   `https://dash.<zone>/agents?contextPath=/agents/onboarding`.
 
 The step "Connect to iterate Cloud" writes four events on `/apps/onboarding` (`contract.ts`), and
 every button of it is also the onboarding agent's call `itx.config.onboardingStep(step, action)`,

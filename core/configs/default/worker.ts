@@ -9,6 +9,7 @@ import {
 import { installAgents } from "iterate/agents/install";
 import { makeAgentKind, publishAgentKinds } from "iterate/agents/kinds";
 import { dashApp } from "./apps/dash/app.ts";
+import { dashLink, type DashLinkInput } from "./apps/dash/links.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import {
@@ -412,6 +413,17 @@ export default class extends IterateConfigEntrypoint {
         );
       }
     }
+  }
+
+  /** `itx.config.dashLink(input)`: a canonical URL to a view in this mind's Dash
+   *  (`apps/dash/links.ts`). Takes a structured destination (`{ view: "agent", contextPath }`,
+   *  `{ view: "context", contextPath }`, `{ view: "repo", repo?, file? }`, `{ view: "page", page,
+   *  rest? }`, or a named view like `"home"`, `"secrets"`, `"integrations"`). The origin is always
+   *  this mind's Dash; the returned URL grants no permission. */
+  async dashLink(input: DashLinkInput) {
+    using itx = this.getItx();
+    const apex = new URL(await itx.url()).hostname;
+    return dashLink(apex, input);
   }
 
   /** `itx.config.slack(method, args)`: any method of Slack's Web API, as the workspace's bot

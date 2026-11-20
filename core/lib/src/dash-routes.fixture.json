@@ -1,0 +1,169 @@
+[
+  {
+    "name": "root",
+    "href": "/",
+    "keys": {},
+    "link": { "view": "home" }
+  },
+  {
+    "name": "secrets page",
+    "href": "/secrets",
+    "keys": { "page": "secrets" },
+    "link": { "view": "secrets" }
+  },
+  {
+    "name": "integrations page",
+    "href": "/integrations",
+    "keys": { "page": "integrations" },
+    "link": { "view": "integrations" }
+  },
+  {
+    "name": "analytics page",
+    "href": "/analytics",
+    "keys": { "page": "analytics" },
+    "link": { "view": "analytics" }
+  },
+  {
+    "name": "mcp page",
+    "href": "/mcp",
+    "keys": { "page": "mcp" },
+    "link": { "view": "mcp" }
+  },
+  {
+    "name": "agents overview",
+    "href": "/agents",
+    "keys": { "page": "agents" },
+    "link": { "view": "agents" }
+  },
+  {
+    "name": "agents path remainder",
+    "href": "/agents/drafts/1",
+    "keys": { "page": "agents", "rest": "drafts/1" },
+    "link": { "view": "agents", "rest": "drafts/1" }
+  },
+  {
+    "name": "agent under /agents/",
+    "href": "/agents?contextPath=/agents/onboarding",
+    "keys": { "agent": "/agents/onboarding" },
+    "link": { "view": "agent", "contextPath": "/agents/onboarding" }
+  },
+  {
+    "name": "agent outside /agents/",
+    "href": "/agents?contextPath=/people/ada",
+    "keys": { "agent": "/people/ada" },
+    "link": { "view": "agent", "contextPath": "/people/ada" }
+  },
+  {
+    "name": "agent at root",
+    "href": "/agents?contextPath=/",
+    "keys": { "agent": "/" },
+    "link": { "view": "agent", "contextPath": "/" }
+  },
+  {
+    "name": "agent with special characters",
+    "href": "/agents?contextPath=/agents/ada%2Bnotes@example.com/a:b,c%3Bd%3De%26f%23g%3Fh%2520i%27j%20k",
+    "keys": { "agent": "/agents/ada+notes@example.com/a:b,c;d=e&f#g?h%20i'j k" },
+    "link": {
+      "view": "agent",
+      "contextPath": "/agents/ada+notes@example.com/a:b,c;d=e&f#g?h%20i'j k"
+    }
+  },
+  {
+    "name": "agent with trailing dot",
+    "href": "/agents?contextPath=/agents/a%2E",
+    "keys": { "agent": "/agents/a." },
+    "link": { "view": "agent", "contextPath": "/agents/a." }
+  },
+  {
+    "name": "agent with trailing comma",
+    "href": "/agents?contextPath=/agents/a%2C",
+    "keys": { "agent": "/agents/a," },
+    "link": { "view": "agent", "contextPath": "/agents/a," }
+  },
+  {
+    "name": "agent with trailing colon",
+    "href": "/agents?contextPath=/agents/a%3A",
+    "keys": { "agent": "/agents/a:" },
+    "link": { "view": "agent", "contextPath": "/agents/a:" }
+  },
+  {
+    "name": "contexts overview",
+    "href": "/contexts",
+    "keys": { "page": "contexts" },
+    "link": { "view": "contexts" }
+  },
+  {
+    "name": "context path",
+    "href": "/contexts/repos/config",
+    "keys": { "page": "contexts", "context": "/repos/config" },
+    "link": { "view": "context", "contextPath": "/repos/config" }
+  },
+  {
+    "name": "context with page's name",
+    "href": "/contexts/secrets",
+    "keys": { "page": "contexts", "context": "/secrets" },
+    "link": { "view": "context", "contextPath": "/secrets" }
+  },
+  {
+    "name": "context with email and dot",
+    "href": "/contexts/agents/canvas2/ada@example.com/notes.md",
+    "keys": { "page": "contexts", "context": "/agents/canvas2/ada@example.com/notes.md" },
+    "link": { "view": "context", "contextPath": "/agents/canvas2/ada@example.com/notes.md" }
+  },
+  {
+    "name": "context with trailing dot",
+    "href": "/contexts/agents/a%2E",
+    "keys": { "page": "contexts", "context": "/agents/a." },
+    "link": { "view": "context", "contextPath": "/agents/a." }
+  },
+  {
+    "name": "root context",
+    "href": "/contexts?contextPath=/",
+    "keys": { "page": "contexts", "context": "/" },
+    "link": { "view": "context", "contextPath": "/" }
+  },
+  {
+    "name": "unsayable context with dot-dot segment",
+    "href": "/contexts?contextPath=/a/../b",
+    "keys": { "page": "contexts", "context": "/a/../b" },
+    "link": { "view": "context", "contextPath": "/a/../b" }
+  },
+  {
+    "name": "default repo",
+    "href": "/repo",
+    "keys": { "page": "repo" },
+    "link": { "view": "repo" }
+  },
+  {
+    "name": "explicit config repo",
+    "href": "/repo/config",
+    "keys": { "page": "repo", "repo": "config" },
+    "link": { "view": "repo", "repo": "config" }
+  },
+  {
+    "name": "other repo",
+    "href": "/repo/docs",
+    "keys": { "page": "repo", "repo": "docs" },
+    "link": { "view": "repo", "repo": "docs" }
+  },
+  {
+    "name": "repo file with dot",
+    "href": "/repo/config/worker.ts",
+    "keys": { "page": "repo", "repo": "config" },
+    "view": { "file": "worker.ts" },
+    "link": { "view": "repo", "repo": "config", "file": "worker.ts" }
+  },
+  {
+    "name": "nested repo file named like a static asset",
+    "href": "/repo/config/apps/dash/app.js",
+    "keys": { "page": "repo", "repo": "config" },
+    "view": { "file": "apps/dash/app.js" },
+    "link": { "view": "repo", "repo": "config", "file": "apps/dash/app.js" }
+  },
+  {
+    "name": "custom page with remainder",
+    "href": "/notes/2026/standup",
+    "keys": { "page": "notes", "rest": "2026/standup" },
+    "link": { "view": "page", "page": "notes", "rest": "2026/standup" }
+  }
+]

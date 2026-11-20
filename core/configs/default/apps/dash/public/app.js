@@ -1,6 +1,6 @@
 // app.js — THE DASH'S PAGE: which pages there are and in what order, their names and icons,
 // and the apps and the pages about access it links to. `Dash` from @iterate-com/ui draws them:
-// how the sidebar, the URL, ⌘K and the two ids `agents` and `contexts` work is in its source,
+// how the sidebar, the URL and the two ids `agents` and `contexts` work is in its source,
 // packages/ui/src/components/dash/dash.tsx (links below).
 //
 // A PAGE OF YOUR OWN is a row with a component, which gets `{ itx, mind, principal, page, agents }`:
@@ -121,8 +121,8 @@ const access = [
 ];
 
 const links = [
-  { title: "Apps", rows: apps },
-  { title: "Access", rows: access },
+  { title: "Apps", rows: apps, collapsed: true },
+  { title: "Access", rows: access, collapsed: true },
 ];
 
 // The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open,

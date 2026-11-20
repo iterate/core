@@ -6,15 +6,14 @@
 // contexts' catalog, and the config repo's tip. The agent's model and its log's head offset are
 // left out: only the agent's own state holds them, and a read of that is the whole conversation.
 
+import { dashLinks } from "./apps/dash/links.ts";
+
 /** The command, as a person types it: the whole message, nothing before or after it. */
 export const DEBUG_COMMAND = "!debug";
 
-/** THE ONE LINK TO AN AGENT IN THE DASH: `https://dash.<apex><agent path>`, each segment encoded.
- *  The Dash's addresses are paths (its index.html says `data-addresses="paths"`); when they change,
- *  this function changes, and every entry point follows. */
-// Coming form (the Dash route work, not live yet): `https://dash.<apex>/agents?contextPath=<path>`.
+/** The canonical link to an agent in the Dash (`apps/dash/links.ts`). */
 export function dashAgentLink(apex: string, agentPath: string) {
-  return `https://dash.${apex}${agentPath.split("/").map(encodeURIComponent).join("/")}`;
+  return dashLinks(apex).agent(agentPath);
 }
 
 /** How many rows the catalog read asks for: the agent's own row and the contexts below it. */

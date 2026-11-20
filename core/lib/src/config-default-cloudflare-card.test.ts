@@ -32,7 +32,7 @@ test("right after a publish, a connected mind shows the connection: who consente
     status: { kind: "ok", text: "Connected" },
     actions: [
       { label: "Connect again", call: { name: "cloudflareConnect" } },
-      { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+      { label: "Manage", url: "https://dash.example.com/secrets" },
     ],
   });
   // the connection reads the account and changes nothing in it: the card says so

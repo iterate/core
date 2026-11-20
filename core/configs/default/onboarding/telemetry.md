@@ -21,7 +21,7 @@ rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
   The host is no column.
 - A request shows up a few minutes later, usually one to four. Ask again before you say it is not
   there.
-- The Analytics page: `https://dash.<zone>/?page=analytics`.
+- The Analytics page: `https://dash.<zone>/analytics`.
 - Cloudflare's own logs and traces, when a member has connected the mind to its Cloudflare
   account (`(await itx.secrets.describe("/secrets/cloudflare")).set`; `onboarding/connect.md`):
   `await itx.config.cloudflareLastHour()` answers the mind's own Workers' requests and errors
@@ -60,5 +60,5 @@ return rows;
 ## Say
 
 - "That was you, at 14:02, opening your website. Your mind keeps every request like that:
-  https://dash.<zone>/?page=analytics."
+  https://dash.<zone>/analytics."
 - "When something breaks, I can read exactly what happened."

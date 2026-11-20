@@ -4,7 +4,7 @@
 //           and below it the optional card "Connect Cloudflare" (steps/connect-cloudflare.ts)
 //   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/onboarding's
 //           first assistant response, then show the verified result and clear Done state with link
-//           into https://dash.<zone>/?agent=/agents/onboarding)
+//           into https://dash.<zone>/agents?contextPath=/agents/onboarding)
 import { html, render, useCallback, useEffect, useRef, useState } from "@iterate-com/ui/page";
 import { Badge } from "@iterate-com/ui/components/ui/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
@@ -59,7 +59,7 @@ const hostSession =
   window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
 const mind = new URL((await hostSession).issuer).hostname;
 const zone = location.hostname.split(".").slice(1).join(".");
-const dashOnboardingUrl = `https://dash.${zone}/?agent=${AGENT}`;
+const dashOnboardingUrl = `https://dash.${zone}/agents?contextPath=${AGENT}`;
 
 async function ask(path, method = "GET") {
   const response = await fetch(path, { method });

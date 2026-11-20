@@ -58,7 +58,7 @@ test("the one link is the MCP server's consent page, for the mind as its own cli
       extra: { resource: MCP },
       straightToProvider: true,
       // the consent brings the member back to the chat of the agent that asked
-      next: "https://dash.example.com/?agent=%2Fagents%2Fonboarding",
+      next: "https://dash.example.com/agents?contextPath=/agents/onboarding",
     },
   });
   expect(Object.keys(begun?.options || {})).not.toContain("clientSecret");
@@ -84,7 +84,7 @@ test("the one link is the MCP server's consent page, for the mind as its own cli
   // a connect that no agent asked for comes back to the page with the card, tells nobody, and
   // leaves the first attempt's note as it is
   await cloudflareConnect(mind.itx);
-  expect(mind.begun[1]?.options.next).toBe("https://dash.example.com/?page=integrations");
+  expect(mind.begun[1]?.options.next).toBe("https://dash.example.com/integrations");
   expect(JSON.parse(mind.kv["cloudflare/connect-tell"] || "")).toMatchObject([
     { nonce: "attempt-1" },
   ]);

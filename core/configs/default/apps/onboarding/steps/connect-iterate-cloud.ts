@@ -15,6 +15,7 @@
 // reason; not "spent"), not asked (the offer, with what is left of a grant this mind has).
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
+import { dashLinks } from "../../dash/links.ts";
 import { ITERATE_HOSTNAME, ITERATE_MIND } from "../../../cloud-deliveries.ts";
 import { Balance, CREDIT_SECRETS } from "../cloud-credit.ts";
 import type { StepState } from "../contract.ts";
@@ -316,7 +317,7 @@ function words(state: StepState, context: StepContext): Card {
         ...(half ? [{ label: "Try again", action: "connect", primary: true }] : []),
         {
           label: "Try a voice call",
-          href: `https://dash.${context.zone}/?agent=/agents/onboarding`,
+          href: dashLinks(context.zone).agent("/agents/onboarding"),
           ...(!half && { primary: true }),
         },
         openCloud(context),

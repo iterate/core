@@ -67,4 +67,4 @@ A mail:
 > I added them from your note this morning: https://<zone>/. Next: shall I take orders by mail
 > too? Just reply.
 >
-> Our chat: https://dash.<zone>/?agent=/agents/onboarding
+> Our chat: https://dash.<zone>/agents?contextPath=/agents/onboarding

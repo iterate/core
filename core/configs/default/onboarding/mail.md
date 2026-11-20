@@ -40,7 +40,8 @@ await itx.email.send({
   text: [
     "This is your mind, writing from your own domain.",
     "Answer this mail from your phone, with anything, and I will tell you in the chat what you wrote.",
-    "The chat: https://dash.<zone>/?agent=/agents/onboarding",
+    "The chat: " +
+      (await itx.config.dashLink({ view: "agent", contextPath: "/agents/onboarding" })),
   ].join("\n\n"),
 });
 ```

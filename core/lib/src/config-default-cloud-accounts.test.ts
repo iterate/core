@@ -61,7 +61,7 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
           label: "Connect again",
           call: { name: "connectCloudAccount", args: ["google", "google"] },
         },
-        { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+        { label: "Manage", url: "https://dash.example.com/secrets" },
         removeOf("google"),
       ],
     },
@@ -71,7 +71,7 @@ test("a mind whose stack names a Cloud gets the section: a card for each app the
       account: "acme",
       details: { Kind: "App installation", Secret: "/secrets/github-installation-7" },
       actions: [
-        { label: "Manage", url: "https://dash.example.com/?page=secrets" },
+        { label: "Manage", url: "https://dash.example.com/secrets" },
         removeOf("github-installation-7"),
       ],
     }),
@@ -170,7 +170,7 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: one li
   });
   // one card: no icon, no description, no status, no button; each row has its own dot
   expect(cards).toEqual({ secrets: { title: "Secrets (5)", section: "keys", actions: [] } });
-  const manage = [{ label: "Manage", url: "https://dash.example.com/?page=secrets" }];
+  const manage = [{ label: "Manage", url: "https://dash.example.com/secrets" }];
   expect(rows).toEqual({
     // a grant through an app of the mind's own says so
     "secrets/google-own-app": {
@@ -238,7 +238,7 @@ test("every other secret stands under 'Keys and accounts', Cloud or none: one li
 test("a row an older template made gets today's buttons at the next publish, with no service asked, once", async () => {
   const mind = cloudMind();
   await cloudAccountsEvent(mind.itx, PUBLISHED);
-  const manage = { label: "Manage", url: "https://dash.example.com/?page=secrets" };
+  const manage = { label: "Manage", url: "https://dash.example.com/secrets" };
   // what the template before "Connect again" left: a person's rows with "Manage" alone, one of
   // them a refusal
   const registry = mind.itx.cd("/integrations");
@@ -607,7 +607,7 @@ test("each account connected from a card gets the first free name, 'Connect agai
         client: { cloud: "x", origin: CLOUD },
         install: false,
         // back to the Integrations page, where the button was pressed
-        next: "https://dash.example.com/?page=integrations",
+        next: "https://dash.example.com/integrations",
       },
     },
   ]);

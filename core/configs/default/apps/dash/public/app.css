@@ -32,7 +32,7 @@ body,
   background: var(--muted);
 }
 
-/* the sidebar: the mind's name and Search, some rows, and Collapse and the account at its foot */
+/* the sidebar: the mind's name, some rows, and Collapse and the account at its foot */
 .frame-sidebar {
   position: relative;
   flex: none;
@@ -53,52 +53,49 @@ body,
 .frame-sidebar .frame-mind {
   height: 48px;
 }
-.frame-search {
-  top: 64px;
-}
 .frame-sidebar .frame-row {
   right: auto;
   left: 16px;
   width: 55%;
   height: 12px;
 }
-.frame-row:nth-of-type(3) {
-  top: 122px;
+.frame-row:nth-of-type(2) {
+  top: 82px;
 }
-.frame-sidebar .frame-row:nth-of-type(4) {
-  top: 162px;
+.frame-sidebar .frame-row:nth-of-type(3) {
+  top: 122px;
   width: 30%;
 }
-.frame-sidebar .frame-row:nth-of-type(5) {
-  top: 194px;
+.frame-sidebar .frame-row:nth-of-type(4) {
+  top: 154px;
   width: 42%;
 }
-.frame-row:nth-of-type(6) {
-  top: 226px;
+.frame-row:nth-of-type(5) {
+  top: 186px;
 }
-.frame-sidebar .frame-row:nth-of-type(7) {
-  top: 258px;
+.frame-sidebar .frame-row:nth-of-type(6) {
+  top: 218px;
   width: 36%;
 }
-.frame-sidebar .frame-row:nth-of-type(8) {
-  top: 290px;
+.frame-sidebar .frame-row:nth-of-type(7) {
+  top: 250px;
   width: 48%;
 }
-.frame-sidebar .frame-row:nth-of-type(9) {
-  top: 322px;
+.frame-sidebar .frame-row:nth-of-type(8) {
+  top: 282px;
   width: 40%;
 }
-.frame-sidebar .frame-row:nth-of-type(10) {
-  top: 354px;
+.frame-sidebar .frame-row:nth-of-type(9) {
+  top: 314px;
   width: 24%;
 }
 .frame-sidebar .frame-fold {
-  bottom: 70px;
+  bottom: 64px;
   height: 28px;
 }
 .frame-sidebar .frame-account {
   bottom: 8px;
-  height: 54px;
+  height: 48px;
 }
 /* the rail: each part is its icon's square */
 [data-sidebar="collapsed"] .frame-sidebar {
@@ -109,15 +106,12 @@ body,
 [data-sidebar="collapsed"] .frame-sidebar .frame-account {
   height: 32px;
 }
-[data-sidebar="collapsed"] .frame-search {
-  top: 48px;
-}
 [data-sidebar="collapsed"] .frame-sidebar .frame-row {
   width: 16px;
   height: 16px;
   margin-top: -10px;
 }
-[data-sidebar="collapsed"] .frame-sidebar .frame-row:nth-of-type(3) {
+[data-sidebar="collapsed"] .frame-sidebar .frame-row:nth-of-type(2) {
   margin-top: -18px;
 }
 [data-sidebar="collapsed"] .frame-sidebar .frame-fold {
@@ -223,7 +217,7 @@ body,
   display: block;
 }
 
-/* under 768px: no sidebar, and a header row on every page with the sidebar's and Search's buttons */
+/* under 768px: no sidebar, and a header row on every page with the sidebar's button */
 @media (max-width: 767px) {
   .frame-sidebar {
     display: none;
@@ -239,9 +233,6 @@ body,
     width: 20px;
     height: 20px;
   }
-  .frame-header .frame-button:nth-of-type(2) {
-    left: 56px;
-  }
   .frame-header .frame-path,
   .frame-header .frame-tabs {
     display: none;
@@ -254,7 +245,7 @@ body,
     top: 16px;
   }
   [data-page="agent"] .frame-header .frame-path {
-    left: 92px;
+    left: 52px;
     display: block;
     width: 30%;
   }

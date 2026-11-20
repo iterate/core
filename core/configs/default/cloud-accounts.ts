@@ -51,6 +51,7 @@
 // of them and a dash, are this file's: it replaces or removes any other card registered there.
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
+import { dashLinks } from "./apps/dash/links.ts";
 import { ITERATE_CLOUD } from "./cloud-deliveries.ts";
 import { CLOUD_SCOPES } from "./cloud-scopes.ts";
 
@@ -218,7 +219,7 @@ export async function cloudAccountsEvent(
     const secrets = await itx.secrets.list();
     // The Dash on the mind's first zone (`itx.url()` is that zone's apex): it serves each card's
     // mark, and each button of these cards leads to a page of it.
-    const dash = `https://dash.${new URL(await itx.url()).hostname}`;
+    const dash = dashLinks(new URL(await itx.url()).hostname);
     await keepCloudSection(itx, registry, secrets, changed, dash);
     await keepKeysSection(registry, secrets, dash);
   }
@@ -233,7 +234,7 @@ async function keepCloudSection(
   registry: Registry,
   secrets: Secret[],
   changedSecret: string | undefined,
-  dash: string,
+  dash: ReturnType<typeof dashLinks>,
 ): Promise<void> {
   const cloud = await cloudOf(itx);
   // no Cloud, or one that did not answer: a section that stands is left as it is
@@ -268,7 +269,7 @@ async function keepCloudSection(
     await keepCard(registry, integration, {
       title: app.title,
       description: app.about,
-      icon: `${dash}/brands/${name}.svg`,
+      icon: `${dash.origin}/brands/${name}.svg`,
       section: SECTION,
       ...(connected > 0 && {
         status: { kind: "ok", text: connected === 1 ? "Connected" : `${connected} accounts` },
@@ -302,7 +303,11 @@ async function keepCloudSection(
  *  `<integration>/<connection>`, and by the contract's convention its secret at
  *  `/secrets/<integration>-<connection>`, sometimes with a prefix (`own-google-042a1be3` for the
  *  row `google/042a1be3`). Such a secret is that row's, and is not here again. */
-async function keepKeysSection(registry: Registry, secrets: Secret[], dash: string): Promise<void> {
+async function keepKeysSection(
+  registry: Registry,
+  secrets: Secret[],
+  dash: ReturnType<typeof dashLinks>,
+): Promise<void> {
   const list = `${KEYS}-secrets`;
   const ours = [`${SECTION}-`, `${KEYS}-`, `${LENT}-`];
   const packaged = Object.keys(registry.connections)
@@ -342,7 +347,7 @@ async function keepKeysSection(registry: Registry, secrets: Secret[], dash: stri
         ...(installation && { Kind: "App installation" }),
         ...(hosts.length > 0 && { Hosts: hosts.join(", ").slice(0, 200) }),
       },
-      actions: [{ label: "Manage", url: `${dash}/?page=secrets` }],
+      actions: [{ label: "Manage", url: dash.secrets() }],
     };
   }
 
@@ -739,13 +744,13 @@ export async function connectCloudAccount(
   for (let n = 2; taken.has(path); n += 1) path = `/secrets/${app}-${n}`;
   if (again && (again === app || again.startsWith(`${app}-`)) && taken.has(`/secrets/${again}`))
     path = `/secrets/${again}`;
-  const dash = `https://dash.${new URL(await itx.url()).hostname}`;
+  const dash = dashLinks(new URL(await itx.url()).hostname);
   const { authorizationUrl } = await itx.secrets.beginOAuth(path, {
     client: { cloud: app, origin: ITERATE_CLOUD },
     install: app === "github",
     ...(Object.hasOwn(CLOUD_SCOPES, app) && CLOUD_SCOPES[app] && { scope: CLOUD_SCOPES[app] }),
     // back to the page whose button began it: the vault takes an absolute URL of the mind's
-    next: `${dash}/?page=integrations`,
+    next: dash.integrations(),
   });
   return { secret: path, link: authorizationUrl };
 }
@@ -801,7 +806,7 @@ function rowActionsOf(
   app: CloudApp,
   secret: Secret,
   row: Json,
-  dash: string,
+  dash: ReturnType<typeof dashLinks>,
 ): Json[] {
   const name = secret.path.split("/").at(-1);
   const account = typeof row.account === "string" ? row.account : secret.path;
@@ -809,7 +814,7 @@ function rowActionsOf(
     ...(secret.refresh === "github-app-installation"
       ? []
       : [{ label: "Connect again", call: { name: CONNECT, args: [client, name] } }]),
-    { label: "Manage", url: `${dash}/?page=secrets` },
+    { label: "Manage", url: dash.secrets() },
     {
       label: "Remove",
       call: { name: "removeCloudAccount", args: [secret.path] },

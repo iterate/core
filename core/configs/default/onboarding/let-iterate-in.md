@@ -36,7 +36,7 @@ answers after onboarding. It is the owner's choice, and the first thing they sig
      path: `/minds/${ITERATE}`,
      type: "events.iterate.com/mind-meld/configured",
      payload: { append: [`/minds/${ITERATE}/`], name: "iterate.iterate.com" },
-     next: "https://dash.<zone>/?agent=/agents/onboarding",
+     next: await itx.config.dashLink({ view: "agent", contextPath: "/agents/onboarding" }),
    });
    ```
    `next`, a page on a hostname of this mind's own zone, brings the owner back here after they sign. The page is

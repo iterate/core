@@ -40,6 +40,7 @@ import {
 } from "iterate/api";
 import { errorCode, jsonEqual } from "iterate/lib";
 import { z } from "zod";
+import { dashLinks } from "./apps/dash/links.ts";
 
 const CLOUDFLARE_GRANT = "/secrets/cloudflare";
 const CLOUDFLARE_API = "https://api.cloudflare.com";
@@ -80,14 +81,10 @@ export async function cloudflareConnect(
     throw new Error('cloudflareConnect: tell is the path of an agent, like "/agents/onboarding"');
   const apex = new URL(await itx.url());
   const zone = apex.hostname;
-  const dash = `https://dash.${zone}`;
+  const dash = dashLinks(zone);
   // after the consent: `next` (the page whose button began it), else back to the chat that
   // asked, else to the page with the card
-  const next =
-    options.next ||
-    (options.tell
-      ? `${dash}/?agent=${encodeURIComponent(options.tell)}`
-      : `${dash}/?page=integrations`);
+  const next = options.next || (options.tell ? dash.agent(options.tell) : dash.integrations());
   const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(CLOUDFLARE_GRANT, {
     authorizationEndpoint: `${MCP_ORIGIN}/authorize`,
     tokenEndpoint: `${MCP_ORIGIN}/token`,
@@ -740,8 +737,8 @@ async function keepCard(
     .snapshot();
   const { integrations, connections } = Registry.parse(state);
   // the Dash on the mind's first zone (`itx.url()` is that zone's apex)
-  const dash = `https://dash.${new URL(await itx.url()).hostname}`;
-  const icon = `${dash}/brands/cloudflare.svg`;
+  const dash = dashLinks(new URL(await itx.url()).hostname);
+  const icon = `${dash.origin}/brands/cloudflare.svg`;
   let card: Record<string, unknown>;
   let row: Record<string, unknown> | null = null;
   if (!check) {
@@ -783,7 +780,7 @@ async function keepCard(
                 : { kind: "error", text: "Cloudflare did not answer the last check" },
       actions: [
         { label: "Connect again", call: { name: "cloudflareConnect" } },
-        { label: "Manage", url: `${dash}/?page=secrets` },
+        { label: "Manage", url: dash.secrets() },
       ],
     };
     row = {
