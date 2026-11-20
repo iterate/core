@@ -27,7 +27,8 @@ sign-up record and the research. The brief holds:
 - "Make ONE page, the homepage. Add `site.ts` at the top of `/repos/config`; it exports a function
   that answers a `Request` with the page: HTML with its CSS inline, no package, no script or image
   from another site. In `worker.ts` change ONLY what the `default` case answers for the page: call your
-  function there. Its `/me` answer stays, and so does every other case. Read the guide `apps.md` first.
+  function there. Its `/me` answer and the profile's answers (`serveProfile`) stay, and so does
+  every other case. Read the guide `apps.md` first.
   Start every commit message with `Website:`.";
 - "The page is PUBLIC: no `this.auth.require`, no `requirePerson`. It shows the mind's name and
   what it is for. It may use what is ALREADY PUBLIC about the owner, and nothing else: of the web

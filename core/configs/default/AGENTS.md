@@ -186,6 +186,21 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
 - `apps/guestbook/` is an app for end users on `guestbook.<zone>`, off in a new mind
   ([people.md](people.md), "The guestbook").
 
+## The mind's public profile
+
+What the mind says of itself to the world is the folder `profile/`: `profile/profile.json` holds
+`name` and `description` (plain text), and `profile/icon.svg` is its logo and favicon, one square
+SVG. The mind's website answers them to anyone, at `/.well-known/iterate-profile` (those fields
+and the icon's address, nothing else), `/favicon.svg` and `/favicon.ico`; the homepage and the
+Dash's header show them, and every app's icon is that one file (`profile.ts`,
+`apps/open-files.ts`). Read it with `await itx.config.profile()`. To change it
+on the owner's word, commit the file:
+`await repo.commitFiles({ message, parent: await repo.tip(), changes: [{ path: "profile/profile.json", content }] })`,
+with `repo = itx.repos.get("/repos/config")`. It is public: write there only what the owner
+wants the world to read. It is not the mind's identity: `/.well-known/iterate` is the signed key
+history, which the platform answers and which proves who a mind is; the profile is unsigned and
+proves nothing. Show another mind's icon as an image only, never as markup in a page.
+
 ## Accounts through iterate Cloud
 
 iterate Cloud is at `https://cloud.iterate.com`. A member connects GitHub, Google (Gmail), Slack

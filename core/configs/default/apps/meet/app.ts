@@ -16,15 +16,11 @@
 // `<agent>` is the agent's path (`/agents/meet/2026-11-19-1030-standup`). Before anyone who is no
 // member reaches an agent's context, the mind's catalog must list it: a stranger makes no context.
 // Only the guest's routes take a guest (`{ guests: true }`); each counts before it reads.
-import {
-  type AppDescription,
-  type IterateConfigEntrypoint,
-  serveAppDescription,
-  serveFiles,
-} from "iterate/sdk";
+import { type AppDescription, type IterateConfigEntrypoint, serveFiles } from "iterate/sdk";
 import { errorCode, reportIssue } from "iterate/lib";
 import { z } from "zod";
 import { GUEST_JOINED, isLive, isLiveGuest, type ShareState } from "../../call/share.ts";
+import { openFile } from "../open-files.ts";
 import theme from "../theme.css";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -192,7 +188,7 @@ export function meetApp({ joinFoldMs = JOIN_FOLD_MS }: { joinFoldMs?: number } =
 
   return {
     async fetch(request: Request, host: Host): Promise<Response> {
-      const described = serveAppDescription(request, MEET);
+      const described = openFile(request, MEET);
       if (described) return described;
       const { pathname } = new URL(request.url);
       // the member's socket, and what the kit's shell asks of its host

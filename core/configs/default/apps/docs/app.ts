@@ -28,7 +28,7 @@ export function docsApp() {
   return {
     /** The app's description and icon, for anyone: worker.ts asks this before its guard
      *  (../open-files.ts). */
-    open: (request: Request) => openFile(request, DOCS, files),
+    open: (request: Request) => openFile(request, DOCS),
     /** Every request on the app's host. worker.ts guards it, so a member alone gets here. */
     async fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth">) {
       // Where the processors' classes are and which version of them this commit holds.

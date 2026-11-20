@@ -112,7 +112,7 @@ test("the app says what it is to anyone, where the mind's sign-in reads it: its 
     icon: "/icon.svg",
     signIn: ["email", "passkey"],
   });
-  // the icon that it names is a file of the app, which answers anyone too
+  // the icon that it names is the mind's (profile/icon.svg), which answers anyone too
   expect(await book.fetch(nobody, "/icon.svg")).toMatchObject({ status: 200 });
 });
 

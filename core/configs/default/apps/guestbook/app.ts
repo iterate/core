@@ -10,15 +10,11 @@
 //
 // The entries are events on one context of the mind (entries.ts). A user never holds `itx`: this
 // code alone acts for them, and it builds no path from what they send.
-import {
-  type AppDescription,
-  serveAppDescription,
-  serveFiles,
-  type IterateConfigEntrypoint,
-} from "iterate/sdk";
+import { type AppDescription, serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import type { Person } from "iterate/principal";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import liveReload from "../live-reload/";
+import { openFile } from "../open-files.ts";
 import {
   ENTRY_APPROVED,
   ENTRY_REMOVED,
@@ -51,7 +47,7 @@ export function guestbookApp() {
     /** Every request on the app's host. worker.ts puts no guard before it: the page is public, and
      *  each route below asks for who it needs. */
     async fetch(request: Request, host: Host): Promise<Response> {
-      const described = serveAppDescription(request, GUESTBOOK);
+      const described = openFile(request, GUESTBOOK);
       if (described) return described;
       const url = new URL(request.url);
       const person = host.auth.person(request);

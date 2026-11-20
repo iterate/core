@@ -16,7 +16,7 @@
 // (apps.md, "UI components in a page", for the source of the version index.html pins).
 //
 // The kit's pages load their larger parts when they first open: the home loads the composer only.
-import { html, render } from "@iterate-com/ui/page";
+import { html, render, useEffect, useState } from "@iterate-com/ui/page";
 import {
   Dash,
   DashAnalytics,
@@ -124,7 +124,22 @@ const links = [
 // or the rail of icons for a first arrival at the onboarding agent). A choice they made wins.
 const sidebarDefaultOpen = document.documentElement.dataset.sidebar !== "collapsed";
 
-render(
-  html`<${Dash} app="Dash" name=${zone} ...${{ itx, mind, pages, links, sidebarDefaultOpen }} />`,
-  document.getElementById("root"),
-);
+// The mind's name and icon, as its owner wrote them (profile.ts, the folder profile/ of the
+// repo): the zone's website answers them to anyone. The Dash never waits for the answer: it draws
+// with the zone at once, and takes the name and the icon when they are here.
+// A zone that answers no profile (a worker.ts of your own without the routes) keeps the zone
+// as its name.
+const profile = fetch(`https://${zone}/.well-known/iterate-profile`)
+  .then((answer) => answer.json())
+  .catch(() => ({}));
+
+function MindDash() {
+  const [{ name, icon }, setProfile] = useState({});
+  useEffect(() => void profile.then(setProfile), []);
+  // with no icon, the kit draws its own mark
+  const logo = icon && html`<img src=${icon} alt="" className="size-8 rounded-md" />`;
+  const shown = { name: name || zone, logo, itx, mind, pages, links, sidebarDefaultOpen };
+  return html`<${Dash} app="Dash" ...${shown} />`;
+}
+
+render(html`<${MindDash} />`, document.getElementById("root"));

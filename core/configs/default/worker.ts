@@ -62,6 +62,9 @@ import {
   mindMailSettingsOf,
   whoGetsTheMail,
 } from "./mail-replies.ts";
+import { profileOf, serveProfile } from "./profile.ts";
+// oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
+import profileFiles from "./profile/";
 import {
   answerSlackDebug,
   refuseSlackSender,
@@ -389,6 +392,10 @@ export default class extends IterateConfigEntrypoint {
           using itx = this.getItx();
           return await cloudflareClientDocument(itx, new URL(request.url).origin);
         }
+        // What the mind says of itself, for anyone: its name, its description and its icon, as
+        // the owner wrote them in the folder profile/ (profile.ts).
+        const profiled = serveProfile(request, profileFiles);
+        if (profiled) return profiled;
         // Anything else that no case takes is not found: a webhook to a hostname that nothing
         // serves must not be answered as taken.
         if (pathname !== "/" || !["GET", "HEAD"].includes(request.method))
@@ -398,12 +405,20 @@ export default class extends IterateConfigEntrypoint {
         const zone = new URL(await itx.url()).hostname;
         const safeSlug = (mindSlug || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;");
         const safeZone = zone.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+        const profile = profileOf(profileFiles, zone);
+        const safeName = profile.name.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
         return new Response(
           [
             "<!doctype html>",
             '<meta charset="utf-8">',
-            `<title>${safeSlug}</title>`,
+            `<title>${safeName}</title>`,
+            ...(profile.icon ? ['<link rel="icon" href="/favicon.svg" type="image/svg+xml">'] : []),
             '<body style="font-family:system-ui,-apple-system,sans-serif;max-width:36rem;margin:4rem auto;padding:0 1.25rem;line-height:1.6">',
+            ...(profile.icon
+              ? [
+                  '<img src="/favicon.svg" alt="" width="64" height="64" style="border-radius:14px">',
+                ]
+              : []),
             `<h1>Homepage of mind ${safeSlug}</h1>`,
             `<p><a href="https://onboarding.${safeZone}/">Continue setup</a> &middot; <a href="https://dash.${safeZone}/">Open Dash</a></p>`,
             "</body>",
@@ -424,6 +439,15 @@ export default class extends IterateConfigEntrypoint {
     using itx = this.getItx();
     const apex = new URL(await itx.url()).hostname;
     return dashLink(apex, input);
+  }
+
+  /** `itx.config.profile()`: what the mind says of itself to the world, `{ name, description,
+   *  icon }`, as its website answers it at `/.well-known/iterate-profile` (profile.ts). `problem`
+   *  is there when a file of the folder profile/ is broken, and says which. To change the
+   *  profile, commit `profile/profile.json` (and `profile/icon.svg`) to this repo. */
+  async profile() {
+    using itx = this.getItx();
+    return profileOf(profileFiles, new URL(await itx.url()).hostname);
   }
 
   /** `itx.config.slack(method, args)`: any method of Slack's Web API, as the workspace's bot

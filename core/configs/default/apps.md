@@ -36,12 +36,15 @@ apps/<name>/
   at `/theme.css` (`app.ts`) and its page links it after the UI kit's style sheet. It holds the
   colours and the corners (shadcn's theme variables). The apps are light, whatever the visitor's
   system says; to make them all dark, change `light` to `dark` in the file's `color-scheme` line.
-- **An app says what it is in a typed object in its `app.ts`, and has an icon,
-  `public/icon.svg`.** The object is an `AppDescription` of `iterate/sdk`:
+- **An app says what it is in a typed object in its `app.ts`, and its icon is the mind's,
+  `profile/icon.svg`.** The object is an `AppDescription` of `iterate/sdk`:
   `const DASH: AppDescription = { name: "Dash", icon: "/icon.svg", for: "members" };`.
   `serveAppDescription(request, DASH)` answers it as JSON at `/.well-known/iterate-app` on the
   app's host, where the mind's sign-in reads it. `worker.ts` answers the description and the icon
-  before its guard (`app.open`, `apps/open-files.ts`), so they are public. Every other file of an
+  before its guard (`app.open`, `apps/open-files.ts`), so they are public. The app keeps no icon
+  file: `openFile` answers the mind's one icon at the app's `/icon.svg`, so every app and the
+  website show one logo (`profile.ts`). An app of your own that wants another icon serves its own
+  file at the path it names. Every other file of an
   app is behind the guard. An app whose guard is `this.auth.require` says `for: "members"`: the
   sign-in page then says that the app works as the person, and opens on the passkey. An app for
   end users (the guestbook) leaves it out, and its sign-in page opens on the mailed code.

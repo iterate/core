@@ -23,9 +23,9 @@ test("the default config's pages and folders load here as the platform's loader 
   // this fails here and not at a deploy: a page is its text, a folder is its files by path.
   expect(docsIndex).toMatch(/^<!doctype html>/i);
   expect(docsIndex).toMatch(/<title>Docs<\/title>/);
-  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js", "icon.svg"]);
+  expect(Object.keys(docsFiles)).toEqual(["app.css", "app.js"]);
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
-  // the Dash's page has the marks of iterate Cloud's apps too
+  // the Dash's page has the marks of iterate Cloud's apps too; no app keeps an icon of its own
   expect(Object.keys(dashFiles)).toEqual([
     "app.css",
     "app.js",
@@ -35,10 +35,9 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/slack.svg",
     "brands/x.svg",
     "call-facet.js",
-    "icon.svg",
   ]);
   expect(onboardingIndex).toMatch(/<title>Onboarding<\/title>/);
-  expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js", "icon.svg"]);
+  expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
 });
 
 test("the homepage answers GET and HEAD of / alone: anything else that no case takes is not found, so a webhook nothing serves is not acknowledged", async () => {
@@ -55,7 +54,8 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
   const homepage = await config.fetch(new Request("https://example.com/"));
   const homepageHtml = await homepage.text();
   expect(homepage.headers.get("content-type")).toContain("text/html");
-  expect(homepageHtml).toContain("<title>iterate.example.com</title>");
+  // the title is the mind's public name, the zone until its owner sets one (profile.ts)
+  expect(homepageHtml).toContain("<title>example.com</title>");
   expect(homepageHtml).toContain("Homepage of mind iterate.example.com");
   expect(homepageHtml).toContain('href="https://onboarding.example.com/"');
   expect(homepageHtml).toContain('href="https://dash.example.com/"');

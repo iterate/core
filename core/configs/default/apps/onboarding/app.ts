@@ -30,7 +30,7 @@ export function onboardingApp() {
   return {
     /** The app's description and icon, for anyone: worker.ts asks this before its guard
      *  (../open-files.ts). */
-    open: (request: Request) => openFile(request, ONBOARDING, files),
+    open: (request: Request) => openFile(request, ONBOARDING),
     /** Every request on the app's host. worker.ts guards it, so a member alone gets here. */
     async fetch(request: Request, host: Pick<IterateConfigEntrypoint, "auth" | "getItx">) {
       const { pathname } = new URL(request.url);
