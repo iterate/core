@@ -297,6 +297,17 @@ export async function productRead(
 export const saysTheStateStoreRefused = (line: string) =>
   /State store .*failed|StateStoreError/.test(line);
 
+/** Whether a line of a deploy's output says that Alchemy did not see the event queue's new
+ *  consumer bound to the boundary Worker: the other failure after which the command deploys again
+ *  by itself. Alchemy 2.0.0-beta.87 reads a new consumer back for 60 seconds only; when
+ *  Cloudflare's reads lag longer, the consumer is attached all the same, and the next run lists
+ *  the queue's consumers and finds it. Remove when Alchemy's read-back waits longer or lists the
+ *  consumers. */
+export const saysTheConsumerIsNotSeenYet = (line: string) => /ConsumerScriptUnbound/.test(line);
+
+/** The end of the line that says the command deploys again by itself. */
+export const ONE_MORE_TRY = "one more try in";
+
 /** Deep-clones a JSON-compatible config value, replacing any sensitive key's value with
  *  `"[redacted]"` so `MindConfig` can be printed safely to stdout. */
 export function redactMindConfig(value: unknown): unknown {
@@ -583,7 +594,21 @@ export function createDeployProgress() {
   let planned = 0;
   let planEnded = false;
   const done = new Set<string>();
+  /** resources that Alchemy said it is making and has not yet said made or failed */
+  const working = new Set<string>();
+  const count = () =>
+    planned > 0
+      ? `${Math.min(done.size, planned)} of ${planned} resources`
+      : `${done.size} resource${done.size === 1 ? "" : "s"}`;
   return {
+    /** A line for a long quiet stretch: the count, and what Alchemy is still making. Alchemy says
+     *  nothing while it uploads a Worker, which can take minutes. */
+    stillAt(): string | undefined {
+      if (!planEnded || working.size === 0) return undefined;
+      const names = [...working];
+      const more = names.length > 3 ? ` and ${names.length - 3} more` : "";
+      return `${count()}; still making ${names.slice(0, 3).join(", ")}${more}`;
+    },
     /** Feeds one Alchemy log line and returns a short status label when progress changes. */
     onLine(line: string): string | undefined {
       const planMatch = /\bPlan:\s+(.+)/.exec(line);
@@ -606,10 +631,13 @@ export function createDeployProgress() {
       );
       if (settled && (settled[2] !== "adopted" || planEnded)) {
         done.add(settled[1]!);
-        return planned > 0
-          ? `${Math.min(done.size, planned)} of ${planned} resources`
-          : `${done.size} resource${done.size === 1 ? "" : "s"}`;
+        working.delete(settled[1]!);
+        return count();
       }
+      const busy = /\bINFO:\s+\[([^\]]+)\]\s+(creating|updating|deleting|replacing)\b/.exec(line);
+      if (busy && planEnded) working.add(busy[1]!);
+      const failed = /\bERROR:\s+\[([^\]]+)\]\s+fail\b/.exec(line);
+      if (failed) working.delete(failed[1]!);
       if (/state store/i.test(line) && /(?:bootstrapping|updating|creating)/i.test(line)) {
         return "preparing state store";
       }
@@ -738,12 +766,13 @@ export const planArgsOf = (stageName: string) => [
 ];
 
 /** One `pnpm run deploy` of core/alchemy (or other arguments of pnpm there): its exit code, and
- *  whether the state store refused it. Every line goes to the log file, with any token text
- *  replaced, and any inherited CLOUDFLARE_OAUTH_CLIENT_API_TOKEN stripped from the child env. */
+ *  whether the state store refused it or Alchemy did not see the queue's consumer. Every line goes
+ *  to the log file, with any token text replaced, and any inherited
+ *  CLOUDFLARE_OAUTH_CLIENT_API_TOKEN stripped from the child env. */
 function deployOnce(
   run: Run,
   args = deployArgsOf(run.stageName, run.adopt),
-): Promise<{ code: number; storeRefused: boolean }> {
+): Promise<{ code: number; storeRefused: boolean; consumerNotSeen: boolean }> {
   return new Promise((done, failed) => {
     const file = createWriteStream(run.log, { flags: "a" });
     const { command, first } = run.source.pnpm;
@@ -767,6 +796,7 @@ function deployOnce(
     });
     run.children.add(child);
     let storeRefused = false;
+    let consumerNotSeen = false;
     let rest = "";
     const read = (chunk: Buffer) => {
       const lines = (rest + chunk.toString("utf8")).split("\n");
@@ -775,6 +805,7 @@ function deployOnce(
         const line = hidden(raw, run).trimEnd();
         file.write(`${line}\n`);
         if (saysTheStateStoreRefused(line)) storeRefused = true;
+        if (saysTheConsumerIsNotSeenYet(line)) consumerNotSeen = true;
         if (line.trim()) run.say?.(line.trim());
       }
     };
@@ -784,7 +815,7 @@ function deployOnce(
     child.on("close", (code) => {
       run.children.delete(child);
       file.end(`${hidden(rest, run)}\n`);
-      done({ code: code ?? 1, storeRefused });
+      done({ code: code ?? 1, storeRefused, consumerNotSeen });
     });
   });
 }
@@ -798,13 +829,29 @@ const hidden = (line: string, run: Run) =>
     process.env.CLOUDFLARE_OAUTH_CLIENT_API_TOKEN,
   ].reduce<string>((text, token) => (token ? text.replaceAll(token, "[token]") : text), line);
 
-/** The deploy. When the state store refused it (`saysTheStateStoreRefused`), it runs once more. */
-async function deployStack(run: Run): Promise<number> {
-  const first = await deployOnce(run);
-  if (first.code === 0 || !first.storeRefused) return first.code;
-  run.say?.("The new state store refused the deploy: one more try in 15 seconds");
-  await sleep(15_000);
-  return (await deployOnce(run)).code;
+/** The deploy. When the state store refused it (`saysTheStateStoreRefused`) or Alchemy did not
+ *  yet see the queue's consumer (`saysTheConsumerIsNotSeenYet`), it runs once more, and only
+ *  once. The second run goes on with what the first made, as a person's run of the command does,
+ *  so it adopts. */
+export async function deployStack<R extends { stageName: string; say?: (line: string) => void }>(
+  run: R,
+  once: (run: R, args?: string[]) => ReturnType<typeof deployOnce>,
+  pause: (ms: number) => Promise<unknown> = sleep,
+): Promise<{ code: number; consumerNotSeen: boolean }> {
+  const first = await once(run);
+  if (first.code === 0) return { code: 0, consumerNotSeen: false };
+  if (first.storeRefused) {
+    run.say?.(`The new state store refused the deploy: ${ONE_MORE_TRY} 15 seconds`);
+    await pause(15_000);
+    return { code: (await once(run)).code, consumerNotSeen: false };
+  }
+  if (!first.consumerNotSeen) return { code: first.code, consumerNotSeen: false };
+  run.say?.(
+    `Cloudflare did not yet confirm the boundary Worker as the event queue's consumer: ${ONE_MORE_TRY} a minute`,
+  );
+  await pause(60_000);
+  const second = await once(run, deployArgsOf(run.stageName, true));
+  return { code: second.code, consumerNotSeen: second.code !== 0 && second.consumerNotSeen };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2094,16 +2141,20 @@ export async function deployMind(input: DeployInput) {
     const progress = createDeployProgress();
     // Keep Alchemy's verbose log in `deploy.log` only: in interactive terminals update the
     // single spinner line with concise resource progress; in non-interactive runs stay quiet
-    // except for retry notices (tail of `deploy.log` is still printed on failure).
+    // except for retry notices and a line each 30 seconds that says what is still being made
+    // (tail of `deploy.log` is still printed on failure).
     const onDeployLine = (line: string) => {
-      if (line.startsWith("The new state store refused")) {
+      if (line.includes(ONE_MORE_TRY)) {
         deploying.say(line);
         return;
       }
-      if (!interactive()) return;
       const status = progress.onLine(line);
-      if (status) deploying.say(status);
+      if (status && interactive()) deploying.say(status);
     };
+    const stillAt = setInterval(() => {
+      const line = progress.stillAt();
+      if (line) deploying.say(`${seconds(deployBegan)}: ${line}`);
+    }, 30_000);
     writeFileSync(
       markerFile,
       `${JSON.stringify(
@@ -2118,22 +2169,25 @@ export async function deployMind(input: DeployInput) {
         2,
       )}\n`,
     );
-    const code = await deployStack({
-      source: ready,
-      stageName,
-      config: configFile,
-      token: access.token,
-      telemetryToken,
-      log,
-      children,
-      say: onDeployLine,
-      adopt: Boolean(earlier || resuming),
-    });
+    const { code, consumerNotSeen } = await deployStack(
+      {
+        source: ready,
+        stageName,
+        config: configFile,
+        token: access.token,
+        telemetryToken,
+        log,
+        children,
+        say: onDeployLine,
+        adopt: Boolean(earlier || resuming),
+      },
+      deployOnce,
+    ).finally(() => clearInterval(stillAt));
     if (code !== 0) {
       deploying.fail(`The deploy failed (exit ${code}).`);
       console.log(readFileSync(log, "utf8").trimEnd().split("\n").slice(-40).join("\n"));
       throw new Error(
-        `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.`,
+        `The deploy failed (exit ${code}). Its whole log: ${log}. A deploy keeps what it made: run the command again on this computer, and it goes on with this deploy's config.${consumerNotSeen ? " The queue may already have its consumer: run the command again." : ""}`,
       );
     }
     rmSync(markerFile, { force: true });

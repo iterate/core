@@ -19,6 +19,7 @@ import {
   createDeployProgress,
   createPalette,
   deployArgsOf,
+  deployStack,
   deployConfigOf,
   deployedMind,
   domainPickerOptions,
@@ -37,6 +38,8 @@ import {
   pnpmEnvFor,
   productRead,
   redactMindConfig,
+  ONE_MORE_TRY,
+  saysTheConsumerIsNotSeenYet,
   saysTheStateStoreRefused,
   stageNameOf,
   telemetryTokenStep,
@@ -551,6 +554,79 @@ test("the deploy runs again by itself after the state store's refusal, and after
   expect(saysTheStateStoreRefused("[15:25:30.212] INFO: Computing plan")).toBe(false);
 });
 
+// the line Alchemy prints when its read-back of a new queue consumer ends unbound
+const UNSEEN_CONSUMER =
+  "[00:02:32.141] ERROR: [CloudflareEventsConsumer] fail — ConsumerScriptUnbound: Queue consumer is not bound to Worker script 'iterate-ada-labs-com-boundary' (1m 26s)";
+
+test("the deploy runs again by itself, once, when Alchemy did not yet see the queue's consumer", async () => {
+  expect(saysTheConsumerIsNotSeenYet(UNSEEN_CONSUMER)).toBe(true);
+  expect(
+    saysTheConsumerIsNotSeenYet("[00:01:06.528] INFO: [CloudflareEventsConsumer] creating"),
+  ).toBe(false);
+
+  const runs: (string[] | undefined)[] = [];
+  const said: string[] = [];
+  const pauses: number[] = [];
+  const unseen = { code: 1, storeRefused: false, consumerNotSeen: true };
+  const run = { stageName: "ada-labs-com", say: (line: string) => said.push(line) };
+  const pause = async (ms: number) => pauses.push(ms);
+  const recorded = (outcome: typeof unseen) => async (_: unknown, args?: string[]) => {
+    runs.push(args);
+    return outcome;
+  };
+
+  // a second failure of the same kind ends the command: no third run
+  const twice = await deployStack(run, recorded(unseen), pause);
+  expect(twice).toEqual({ code: 1, consumerNotSeen: true });
+  expect(runs).toEqual([undefined, deployArgsOf("ada-labs-com", true)]);
+  expect(pauses).toEqual([60_000]);
+  expect(said).toEqual([
+    `Cloudflare did not yet confirm the boundary Worker as the event queue's consumer: ${ONE_MORE_TRY} a minute`,
+  ]);
+
+  // the second run that finds the consumer ends the deploy
+  const outcomes = [unseen, { code: 0, storeRefused: false, consumerNotSeen: false }];
+  expect(await deployStack(run, async () => outcomes.shift()!, pause)).toEqual({
+    code: 0,
+    consumerNotSeen: false,
+  });
+
+  // any other failure is not run again
+  runs.length = 0;
+  const other = { code: 1, storeRefused: false, consumerNotSeen: false };
+  expect(await deployStack(run, recorded(other), pause)).toEqual({
+    code: 1,
+    consumerNotSeen: false,
+  });
+  expect(runs).toHaveLength(1);
+});
+
+test("createDeployProgress names what Alchemy is still making, for a line in a quiet stretch", () => {
+  const progress = createDeployProgress();
+  expect(progress.stillAt()).toBe(undefined);
+  progress.onLine("[23:54:42.739] INFO: Plan: 31 to create, 39 binding changes");
+  progress.onLine("[23:54:42.741] INFO: [Boundary] create");
+  expect(progress.stillAt()).toBe(undefined);
+  progress.onLine("[23:56:50.260] INFO: [Secrets] creating");
+  progress.onLine(
+    "[23:56:50.261] INFO: [Auth] created — Uploading worker (535.10 KB) ... (1m 57s)",
+  );
+  progress.onLine("[23:58:50.646] INFO: [Mind] creating");
+  progress.onLine("[23:58:50.646] INFO: [Boundary] creating");
+  progress.onLine(
+    "[23:58:47.987] INFO: [Secrets] created — Uploading worker (339.81 KB) ... (1m 58s)",
+  );
+  expect(progress.stillAt()).toBe("2 of 31 resources; still making Mind, Boundary");
+  progress.onLine("[00:01:06.528] INFO: [CloudflareEventsConsumer] creating");
+  progress.onLine("[00:01:06.528] INFO: [ApexRoute-ada-labs.com] creating");
+  expect(progress.stillAt()).toBe(
+    "2 of 31 resources; still making Mind, Boundary, CloudflareEventsConsumer and 1 more",
+  );
+  progress.onLine(UNSEEN_CONSUMER);
+  progress.onLine("[00:01:09.673] INFO: [ApexRoute-ada-labs.com] created (3.1s)");
+  expect(progress.stillAt()).toBe("3 of 31 resources; still making Mind, Boundary");
+});
+
 test("deploy has no OAuth-client token prompt or Account API Token Provisioning, isolates token env vars, prints MindConfig, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
   expect(onboardingUrlOf("ada-labs.com")).toBe("https://onboarding.ada-labs.com/");
   expect(isInteractiveEnv({}, true)).toBe(true);
@@ -780,7 +856,7 @@ test("a mind of the earlier stack is named as such, and no path of the command d
   expect(noDeployConfig).toBeLessThan(ask);
   expect(arrivedMind).toBeLessThan(arrivedErase);
   expect(arrivedErase).toBeLessThan(at("await eraseHoldings(cf, zone.id)"));
-  expect(at("await eraseHoldings(cf, zone.id)")).toBeLessThan(at("await deployStack({"));
+  expect(at("await eraseHoldings(cf, zone.id)")).toBeLessThan(at("await deployStack(\n      {"));
 });
 
 const store = "/workers/scripts/iterate-ada-labs-com-state/settings";

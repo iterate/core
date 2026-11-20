@@ -147,7 +147,11 @@ telemetry token"`. To turn telemetry tables on (at first deploy or later), run
    A source from before the one Alchemy script is refused, before anything changes.
 8. **The deploy**: `pnpm run deploy --stage <stage> --yes` of core/alchemy. Its output goes to
    `deploy.log` beside the config. A new state store can refuse the run that made it ("State
-   store request failed"): the command then deploys once more by itself. Any other failure prints
+   store request failed"): the command then deploys once more by itself. So it does, a minute
+   later, when Alchemy did not see the event queue's new consumer bound to the boundary Worker
+   (`ConsumerScriptUnbound`): Alchemy reads it back for 60 seconds only, and on a slow Cloudflare
+   API the consumer is there and the next run finds it. While the deploy runs, a line each 30
+   seconds names the resources still being made. Any other failure, or a second one, prints
    the log's last lines and its path. Run the command again on the same computer: it goes on
    with that deploy ("A deploy that stopped", below). Then it reads the boundary Worker's
    settings again, up to five times two seconds apart, and checks that `DEPLOY_CONFIG` is the
