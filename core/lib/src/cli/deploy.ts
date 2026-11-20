@@ -321,6 +321,120 @@ type BoundaryWaitDeps = {
   now?: () => number;
 };
 
+/** How long one wait for the mind's first pages lasts (`firstPagesAnswer`). */
+export const FIRST_PAGES_WAIT_MS = 10 * 60_000;
+
+/** An address that a person's browser asks after a deploy, and the answer that says it works. */
+type FirstPage = {
+  address: string;
+  works: (answer: { status: number; location: string | null }) => boolean;
+};
+
+/** THE PAGES THAT A PERSON'S BROWSER ASKS FIRST AFTER A DEPLOY. The command opens no page until
+ *  each of them works from this computer, over HTTPS with no redirect followed:
+ *   - the sign-in page answers 200;
+ *   - the apex of the first zone answers below 400: the mind's own code (that request is also
+ *     the one at which a new mind is born);
+ *   - `https://onboarding.<zone>/`, THE PAGE THAT THE COMMAND OPENS: the wildcard's record,
+ *     certificate and route are others than the apex's, and a control plane at the apex proves
+ *     none of them. Below 500 says that the edge reached the mind. A new mind runs the template,
+ *     whose Onboarding app answers 401 here: Node's fetch always says `sec-fetch-mode: cors`,
+ *     which an app reads as a call and no navigation (a browser gets the redirect to the
+ *     sign-in; core/boundary-worker/src/mind-host-sign-in.ts). Its 404 says the app is not
+ *     there yet.
+ *   - for a new mind, `/sign-in/access`, the one way in for an owner with no passkey yet
+ *     (core/auth-worker/src/access-sign-in.ts): Cloudflare Access redirects it to the team's
+ *     sign-in. Until the Access application is live at the edge, the auth Worker itself answers
+ *     there, with a 403 that would end the first owner's sign-in. */
+export function firstPagesOf(mind: {
+  controlPlaneHostname: string;
+  zone: string;
+  firstDeploy: boolean;
+}): FirstPage[] {
+  const controlPlane = `https://${mind.controlPlaneHostname}`;
+  return [
+    { address: `${controlPlane}/sign-in`, works: ({ status }) => status === 200 },
+    { address: `https://${mind.zone}/`, works: ({ status }) => status < 400 },
+    {
+      address: onboardingUrlOf(mind.zone),
+      works: ({ status }) => (mind.firstDeploy ? status < 400 || status === 401 : status < 500),
+    },
+    ...(mind.firstDeploy
+      ? [
+          {
+            address: `${controlPlane}/sign-in/access`,
+            works: ({ status, location }: { status: number; location: string | null }) =>
+              status >= 300 &&
+              status < 400 &&
+              // Cloudflare's own absolute address; any other text is no proof
+              /^https:\/\/[a-z0-9-]+\.cloudflareaccess\.com\//.test(location || ""),
+          },
+        ]
+      : []),
+  ];
+}
+
+/** One read of a page: its status and where it redirects, or why no answer came (the name did
+ *  not resolve, the certificate was refused, the edge did not connect, 10 s passed). */
+async function readFirstPage(page: FirstPage) {
+  try {
+    const answer = await fetch(page.address, {
+      signal: AbortSignal.timeout(10_000),
+      redirect: "manual",
+    });
+    return { status: answer.status, location: answer.headers.get("location") };
+  } catch (error) {
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
+    if (cause instanceof Error && "code" in cause && typeof cause.code === "string")
+      return { error: cause.code };
+    return { error: cause instanceof Error ? cause.message : String(cause) };
+  }
+}
+
+/** THE WAIT FOR THE FIRST PAGES: every page is read each 3 s, and the mind answers when all of
+ *  them worked five times in a row, since a new route reaches Cloudflare's edge within a minute
+ *  or two and until then some answers are 522, 500 or 404. At most `FIRST_PAGES_WAIT_MS`; then
+ *  `fault` says the first page that did not work at the last read, and its answer. It says the
+ *  fault of the moment each 30 s. */
+export async function firstPagesAnswer(
+  pages: FirstPage[],
+  {
+    read = readFirstPage,
+    say = () => {},
+    pause = sleep,
+    now = Date.now,
+  }: BoundaryWaitDeps & {
+    read?: (
+      page: FirstPage,
+    ) => Promise<{ status: number; location: string | null } | { error: string }>;
+  } = {},
+): Promise<{ answered: true } | { fault: string }> {
+  const began = now();
+  let good = 0;
+  let told = 0;
+  for (;;) {
+    const answers = await Promise.all(pages.map((page) => read(page)));
+    const fault = pages
+      .map((page, index) => {
+        const answer = answers[index]!;
+        if ("error" in answer) return `${page.address} gave no answer (${answer.error})`;
+        if (page.works(answer)) return undefined;
+        return `${page.address} answered ${answer.status}${answer.location ? ` to ${new URL(answer.location, page.address).origin}` : ""}`;
+      })
+      .find(Boolean);
+    good = fault ? 0 : good + 1;
+    if (good >= 5) return { answered: true };
+    const waited = now() - began;
+    if (waited >= FIRST_PAGES_WAIT_MS)
+      return { fault: fault || "its pages did not answer five times in a row" };
+    if (Math.floor(waited / 30_000) > told) {
+      told = Math.floor(waited / 30_000);
+      if (fault) say(`${duration(waited)}: ${fault}`);
+    }
+    await pause(3000);
+  }
+}
+
 /** WHETHER A PRODUCT OF THE ACCOUNT IS ON (Workers Paid, R2), by a read of one of its paths: 200
  *  is on, and Cloudflare's refusal (a 4xx but 429) is off. A READ THAT FAILED IS NOT A FACT: a
  *  429, a 5xx or anything else is read again, up to three reads with `pause` between them, and
@@ -2363,37 +2477,40 @@ export async function deployMind(input: DeployInput) {
       );
     }
 
-    // A NEW ROUTE REACHES CLOUDFLARE'S EDGE WITHIN A MINUTE OR TWO, and until then some answers
-    // are 522, 500 or 404. So the mind answers when both of its addresses did, five times in a
-    // row: the sign-in page, and the apex of its first zone, where the mind's own code answers
-    // (that request is also the one at which a new mind is born).
+    // NO PAGE IS OPENED UNTIL THE PAGES THAT THE BROWSER ASKS FIRST WORK FROM THIS COMPUTER
+    // (`firstPagesOf`). A person may wait again as often as they like; with nobody there, or
+    // after their no, the command still ends every later step, opens nothing and then fails.
+    const primaryZone = config.cloudflare.zones[0] || domain;
+    const onboardingUrl = onboardingUrlOf(primaryZone);
+    const firstPages = firstPagesOf({
+      controlPlaneHostname,
+      zone: primaryZone,
+      firstDeploy: !deployed || Boolean(resuming?.firstDeploy),
+    });
     const answersBegan = Date.now();
-    let good = 0;
-    await until(
-      `Waiting for ${c.domain(controlPlaneHostname)} to answer steadily`,
-      async () => {
-        const before = good;
-        good = 0;
-        const [signInPage, apex] = await Promise.all(
-          [`https://${controlPlaneHostname}/sign-in`, `https://${config.cloudflare.zones[0]}/`].map(
-            (address) =>
-              fetch(address, { signal: AbortSignal.timeout(10_000), redirect: "manual" }),
-          ),
-        );
-        if (signInPage?.status === 200 && apex && apex.status < 400) good = before + 1;
-        return good >= 5;
-      },
-      10,
-    );
-    p.log.success(`The mind answers (${seconds(answersBegan)}).`);
+    let unanswered: string | undefined;
+    for (;;) {
+      const answering = wait(`Waiting for ${c.domain(controlPlaneHostname)} to answer steadily`);
+      const answer = await firstPagesAnswer(firstPages, { say: answering.say });
+      if ("answered" in answer) {
+        answering.done(`The mind answers (${seconds(answersBegan)}).`);
+        unanswered = undefined;
+        break;
+      }
+      unanswered = `The deploy finished, but after ${seconds(answersBegan)} ${answer.fault}. A new domain's DNS records, certificate and routes can reach a computer late. Setup was not opened: open ${onboardingUrl} once it loads in your browser, or run the command again, which deploys over the mind and checks again.`;
+      answering.fail(`After ${seconds(answersBegan)}: ${answer.fault}.`);
+      if (!interactive()) break;
+      const again = await ask<boolean>("", () =>
+        p.confirm({ message: `Wait ${duration(FIRST_PAGES_WAIT_MS)} more for it?` }),
+      );
+      if (!again) break;
+    }
 
     const deployedTelemetryMode = telemetryToken
       ? "given"
       : await stackTelemetryTokenMode(cf, account.id, stageName).catch(() => undefined);
     await endAccess(access);
     const posted = await identityPublished({ mindId, controlPlaneHostname });
-    const primaryZone = config.cloudflare.zones[0] || domain;
-    const onboardingUrl = onboardingUrlOf(primaryZone);
     p.log.success(
       deployed && !resuming?.firstDeploy
         ? `Your mind at ${c.domain(controlPlaneHostname)} is updated.`
@@ -2415,6 +2532,8 @@ export async function deployMind(input: DeployInput) {
         `Telemetry is off (no token). The Dash's Analytics page stays empty until you run ${c.code(`npx iterate deploy --domain ${domain} --telemetry-token`)}.`,
       );
     }
+    // the pages that did not answer end the command non-zero, with setup's address and no open
+    if (unanswered) throw new Error(unanswered);
     if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);
     else p.log.step(`Continue setup in your browser:\n${c.url(onboardingUrl)}`);
     // the check's miss, said above, ends the command non-zero once every step is done

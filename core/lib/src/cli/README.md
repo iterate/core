@@ -159,8 +159,8 @@ telemetry token"`. To turn telemetry tables on (at first deploy or later), run
    `mail.forwardTo`. When all is held, one line says so, with the forward's address. When no read
    answers, a warning says that the check did not run; the deploy succeeded. A miss is a fault of
    the release, which a second run does not mend: its error comes at once, the command still does
-   every later step, and then it ends non-zero with the same error, which asks for a report. Then the command waits until the sign-in
-   page and the domain's own front page answered five times in a row. On a dev zone the whole
+   every later step, and then it ends non-zero with the same error, which asks for a report. Then the command waits for
+   the mind's first pages ("No page is opened until it loads", below). On a dev zone the whole
    command took 2 min 14 s (18 Nov 2026): the deploy 1 min 50 s, the wait 20 s.
 
 **A mind that is there already.** When a route of the domain names a mind's boundary Worker, the
@@ -208,6 +208,28 @@ that unfinished deploy without asking for `--yes`, passes `--adopt` to take over
 that was under way at the stop, and reports the mind as deployed (not updated) when finishing a
 first deploy. Running from another computer (without `deploying.json`) treats it as a deploy over
 an existing mind and asks before going on.
+
+**No page is opened until it loads.** A deploy that Cloudflare took is not yet a mind that a
+browser reaches: a new domain's DNS records, its certificate and its routes can come late. So
+after the deploy the command reads, from this computer, over HTTPS and with no redirect followed,
+the pages that a browser asks first, every 3 seconds, until all of them worked five times in a
+row:
+
+- `https://<control plane>/sign-in` answers 200.
+- `https://<zone>/` answers below 400.
+- `https://onboarding.<zone>/`, the page that the command opens, answers: for a new mind below
+  400 or the app's own 401 (the command's read is no browser navigation), over a mind that was
+  there anything below 500.
+- For a new mind, `https://<control plane>/sign-in/access` redirects to the account's Cloudflare
+  Access sign-in. It is the first owner's one way in, and until the Access application is live
+  the page there refuses.
+
+Each 30 seconds a line names the page that does not work yet and its answer (`answered 522`,
+`gave no answer (ENOTFOUND)`, a certificate's error). After 10 minutes the command says so and
+asks whether to wait 10 minutes more, as often as you like. With nobody at the terminal, or
+after a no, it still posts the mind's identity and prints the config, then prints setup's
+address, opens nothing and ends non-zero. Run the command again to check again: it deploys over
+the mind. The check is this computer's view: a browser with another resolver can still differ.
 
 After the deploy, once the mind is answering and its identity is posted, the command prints a short
 success message, waits for Enter, and opens `https://onboarding.<zone>/` in the browser to continue
