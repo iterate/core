@@ -21,6 +21,7 @@ import {
   type ShareState,
 } from "../../configs/default/call/share.ts";
 import { AgentContract } from "./agents/contract.ts";
+import { errorCode } from "./lib.ts";
 
 // an SFU app's and a TURN key's id: an obvious fake
 const ID = "ab".repeat(16);
@@ -151,6 +152,48 @@ test("signalling: the call makes each page's SFU sessions, names tracks by page,
   await room.call.signal(owner, "page-owner", { reset: "pub" });
   await room.call.signal(owner, "page-owner", { publish: "camera", sdp: "offer", mid: "0" });
   expect(room.call.live().inCall["page-owner"]?.tracks).toEqual({ camera: 2 });
+});
+
+test("a session the SFU ended (410) is a coded refusal, audited with which session it was and no id, and forgotten at once; the page's reset then gets a new one", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  room.held.set("page-grace", "guest:grace");
+  room.share = shareWith({ guests: ["guest:grace"], until: room.clock.now + 3_600_000 });
+  await room.call.join(owner, "page-owner");
+  await room.call.join(grace, "page-grace");
+  await room.call.signal(owner, "page-owner", { publish: "mic", sdp: "offer", mid: "0" });
+  room.sfuRefuses = 410;
+  const refused = await room.call
+    .signal(grace, "page-grace", { subscribe: ["page-owner:mic"] })
+    .catch((error: Error) => error);
+  expect({ code: errorCode(refused), message: (refused as Error).message }).toEqual({
+    code: "CALL_SESSION_ENDED",
+    message:
+      "The SFU answered 410 to POST /sessions/…/tracks/new: Session appears to be disconnected.",
+  });
+  expect(room.audits.at(-1)).toEqual([
+    "call/session-ended",
+    { path: "/sessions/…/tracks/new", which: "sub" },
+  ]);
+  expect(JSON.stringify(room.audits)).not.toMatch(/session\d/);
+  // the call forgot the ended session: the page's reset closes nothing at the SFU, and the next
+  // subscribe makes a new session
+  const sent = room.sent.length;
+  await room.call.signal(grace, "page-grace", { reset: "sub" });
+  expect(room.sent.length).toBe(sent);
+  expect(
+    await room.call.signal(grace, "page-grace", { subscribe: ["page-owner:mic"] }),
+  ).toMatchObject({ sdp: "offer", tracks: [{ track: "page-owner:mic", mid: "0" }] });
+  expect(room.sent.at(-1)?.url).toBe(
+    `https://rtc.live.cloudflare.com/v1/apps/${ID}/sessions/session3abcdef/tracks/new`,
+  );
+  // any other refusal is no coded outcome: it says its words, and is audited as before
+  room.sfuRefuses = 500;
+  const failed = await room.call
+    .signal(owner, "page-owner", { publish: "camera", sdp: "offer", mid: "1" })
+    .catch((error: Error) => error);
+  expect(errorCode(failed)).toBeUndefined();
+  expect(room.audits.at(-1)?.[0]).toBe("call/sfu-failed");
 });
 
 test("a page whose row is un-set is out of the call, its sessions close, and the call ends with the last page", async () => {
@@ -1279,6 +1322,8 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
     hangup: 200,
     /** Cloudflare answers nothing. */
     hang: false,
+    /** The SFU's next tracks call answers this status, as a refusal. */
+    sfuRefuses: null as number | null,
     /** How often the live state was published. */
     published: 0,
     /** The requests the call put on the agent's log, each starting a turn. */
@@ -1357,6 +1402,13 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
         if (request.method === "GET")
           return Response.json({ tracks: [{ location: "local", mid: "0", status: "active" }] });
         if (pathname.endsWith("/tracks/close")) return Response.json({ tracks: [] });
+        const refuses = room.sfuRefuses;
+        room.sfuRefuses = null;
+        if (refuses)
+          return Response.json(
+            { errorCode: "gone", errorDescription: "Session appears to be disconnected." },
+            { status: refuses },
+          );
         const tracks = (
           body as { tracks: { location: string; sessionId?: string; trackName: string }[] }
         ).tracks;

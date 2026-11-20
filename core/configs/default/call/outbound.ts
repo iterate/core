@@ -77,6 +77,15 @@ const SfuAnswer = z.object({
 });
 
 /** One call to the SFU's HTTPS API, as the SFU app. Throws with the SFU's reason. */
+/** The SFU's refusal of a call: its words, and its HTTP status (a 410 is a session that is gone). */
+export class SfuRefused extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 export async function sfu(
   itx: Outbound,
   appId: string,
@@ -99,8 +108,9 @@ export async function sfu(
   const parsed = SfuAnswer.safeParse(json ?? {});
   if (!response.ok) {
     const reason = parsed.data?.errorDescription || parsed.data?.errorCode || text;
-    throw new Error(
+    throw new SfuRefused(
       `The SFU answered ${response.status} to ${method} ${where}: ${reason.slice(0, 200)}`,
+      response.status,
     );
   }
   if (!parsed.success)

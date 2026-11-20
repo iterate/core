@@ -65,12 +65,14 @@
 //   alone. The agent's next message with the tag is the answer (the processor hands each one to
 //   `agentSaid`); the live state carries it to the host page, which gives it to the model to say.
 //   One at a time, 6 a minute; an answer waits 90 s at most, and ends when the voice agent leaves.
+import { codedError } from "iterate/lib";
 import { z } from "zod";
 import {
   closeSession,
   type Outbound,
   setupOf,
   sfu,
+  SfuRefused,
   STT_URL,
   TURN_TTL_S,
   transcriptionStart,
@@ -431,6 +433,27 @@ export class Call {
       sfu(this.#out(), appId!, method, path, body).catch(async (error: unknown) => {
         // the path with no session id: those stay in this facet's storage
         const where = path.replace(/^\/sessions\/[^/]+/, "/sessions/…");
+        // a 410: the SFU ended this page's session for good. An expected outcome, coded, so the
+        // page makes its connection and session anew by its bounded repair. The row forgets the
+        // session now, as a reset does, so the repair's reset has nothing left to close: a close of
+        // an ended session waits seconds on the SFU
+        if (error instanceof SfuRefused && error.status === 410) {
+          const session = path.split("/")[2];
+          let which: "pub" | "sub" | null = null;
+          await this.#locked((data) => {
+            const row = data.pages[own];
+            if (row && session === row.pub) {
+              which = "pub";
+              row.pub = undefined;
+              row.tracks = {};
+            } else if (row && session === row.sub) {
+              which = "sub";
+              row.sub = undefined;
+            }
+          });
+          await this.#deps.audit("call/session-ended", { path: where, which }).catch(() => {});
+          throw codedError("CALL_SESSION_ENDED", error.message);
+        }
         await this.#deps
           .audit("call/sfu-failed", { path: where, error: String(error) })
           .catch(() => {});

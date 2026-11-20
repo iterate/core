@@ -62,6 +62,7 @@ type ErrorCode =
   | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (core/mind-worker/src/repo/durable-object.ts) — `data` is { ours, theirs }
   | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
   | "GONE" // a target that says it is gone for good (an HTTP webhook's 410): the delivery halts its row, which an operator's resume reopens
+  | "CALL_SESSION_ENDED" // a call's signalling step (core/configs/default/call/rules.ts): the SFU answered 410 for the page's own session, which is gone for good; the page makes its connection and its session anew, by its bounded repair (the kit's call engine)
   | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/itx/src/cause.ts): the act is refused for good, never retried
   | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
   | "NOT_FORWARDABLE" // a received mail's forward (iterate/email `EmailHookArgs`): Cloudflare forwards no mail whose sender it did not prove
