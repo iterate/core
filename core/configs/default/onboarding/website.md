@@ -19,11 +19,15 @@ The owner should come away with: the mind made them something real at their own 
 
 ## How
 
-Start the helper `/agents/onboarding/website` in your first turn when the `default` case still serves
-"Homepage of mind" (`onboarding/helpers.md`). Do not wait for a name or a purpose: use the
-sign-up record and the research. The brief holds:
+The mind's code starts the helper `/agents/onboarding/website` on every mind, in the background:
+at the handover from iterate Cloud, or when the owner first opens the onboarding chat
+(`cloud-handover.ts`). You are that helper. Do not wait for a name or a purpose: use the
+sign-up record when there is one, the owner's words on `/agents/onboarding`, and `mind.md` (the
+research may add to it while you work). When the `default` case no longer serves "Homepage of
+mind", the site is made already: report that, and stop. The job:
 
-- the address, the mind's name if known, and what it is for, in the owner's words;
+- the address, the mind's name (`(await itx.config.profile()).name`, empty when the owner has
+  not named it) and what it is for, in the owner's words;
 - "Make ONE page, the homepage. Add `site.ts` at the top of `/repos/config`; it exports a function
   that answers a `Request` with the page: HTML with its CSS inline, no package, no script or image
   from another site. In `worker.ts` change ONLY what the `default` case answers for the page: call your
@@ -43,7 +47,8 @@ timeoutMs: 60000 })`. On a failure, fix it and commit again. Then fetch the addr
   is not public: fix it.";
 - the report rule of `onboarding/helpers.md`.
 
-When it reports, take the screenshot and show it, as a markdown image whose address is the `url` that call answered, with the address:
+When the page is live, take the screenshot, and put it in your report as a markdown image whose
+address is the `url` that call answered, beside the address (the onboarding agent passes it on):
 
 ```ts
 const shot = await itx.browser.quickAction("screenshot", { url: await itx.url() });
@@ -52,8 +57,7 @@ await itx.files.get(path).put({ contentType: "image/png", data: shot });
 return (await itx.files.get(path).url()).url; // url() answers { url, expiresAt }
 ```
 
-Each change on the owner's word goes to the same helper. Taking it down: one commit, which you
-may make yourself, now. In `await repo.log({ limit: 100 })` find the commit before the first
+Each change on the owner's word comes to you, the same helper. Taking it down: one commit, now. In `await repo.log({ limit: 100 })` find the commit before the first
 `Website:` commit; read `worker.ts` at it (`repo.readFile("worker.ts", { commitOid })`); commit
 that text as `worker.ts`, with `{ path: "site.ts", delete: true }`. When `worker.ts` changed since
 for another reason, put back only its `default` case. Wait for the outcome, then fetch the address.

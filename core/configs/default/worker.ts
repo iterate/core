@@ -39,7 +39,7 @@ import {
   sayMindForm,
   signedByIterate,
 } from "./cloud-deliveries.ts";
-import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
+import { cloudHandoverEvent, iterateLetInEvent, onboardingOpenedEvent } from "./cloud-handover.ts";
 import {
   CLIENT_DOCUMENT_PATH,
   cloudflareBilling,
@@ -115,7 +115,8 @@ export default class extends IterateConfigEntrypoint {
         // The onboarding agent, where a new owner starts. It reads onboarding.md. Its first
         // message is written by the Cloud's handover (cloud-handover.ts), or, on a mind with no
         // Cloud, by its first turn, which the Dash starts when the owner opens its chat
-        // (apps/dash/public/app.js, `openers`). Creating it starts no
+        // (apps/dash/public/app.js, `openers`). Its first helpers start at that same moment
+        // (the `agent/context-added` case, below). Creating it starts no
         // model turn. An owner who deleted it has no onboarding agent, for good: the platform
         // refuses to make a deleted agent again, and that is no fault of the publish.
         await publishStep("onboarding-agent", () =>
@@ -284,6 +285,13 @@ export default class extends IterateConfigEntrypoint {
         // once by the Cloud on `/integrations/cloud` and signed by its key: the onboarding agent
         // gets it as their quoted words (cloud-handover.ts).
         await cloudHandoverEvent(itx, event);
+        break;
+      case "events.iterate.com/agent/context-added":
+        // The owner first opened the onboarding chat: the first helpers (research, website,
+        // sandbox) start in the background, once, on a mind that had no handover
+        // (cloud-handover.ts `onboardingOpenedEvent`)
+        await onboardingOpenedEvent(itx, event);
+        await cloudDeliveryEvent(itx, event);
         break;
       case "events.iterate.com/mind-meld/configured":
         // The owner signed the rule that lets iterate.iterate.com add events under

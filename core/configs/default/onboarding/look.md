@@ -16,14 +16,18 @@ The owner should come away with: they said a colour, and the page around them ch
   it hears of the publish (`apps/live-reload/live-reload.js`). The owner does nothing.
 - A changed `theme.css` no longer takes the template's later changes to that one file. It holds no
   app back: it is not inside an app's folder.
+- The name: `profile/profile.json`, `{ "name": "…", "description": "…" }`, the mind's public
+  profile (`profile.ts`, `AGENTS.md` "The mind's public profile"). The Dash's header and the
+  homepage show the name; with none, they show the zone. The owner's own file: it holds no app
+  back. It is PUBLIC: the name and the description are for the world to read.
+- The icon: `profile/icon.svg`, one square SVG, the logo of the Dash and of every app.
 
 ## Not ready
 
-- The name in the navigation. The sidebar's top shows `app="Dash"` from `apps/dash/public/app.js`
-  (the `render` line at its end); the tab says `<title>Dash</title>` (`apps/dash/index.html`). A
-  change there holds the whole Dash back from iterate's updates until the file is put back
-  (`template-updates.md`). Say that trade FIRST, and change it only on a yes; the open page then
-  reloads once nobody types. Without that yes, the name lives in `mind.md` and in your words.
+- The name shows on a page's next load: the open Dash takes it when it loads, not live. Say
+  "reload the page" with it.
+- The tab's title stays "Dash" (`apps/dash/index.html`): changing that file holds the Dash back
+  from iterate's updates (`template-updates.md`). Leave it.
 
 ## How
 
@@ -51,10 +55,16 @@ return await itx.cd("/").waitForEvent({
 });
 ```
 
+The name, by the same helper, the same way: read `profile/profile.json`, set `name`, keep
+`description`, commit `{ path: "profile/profile.json", content: JSON.stringify(profile, null, 2) + "\n" }`
+with the message "Look: the name <name>", and wait for the outcome. Check it with
+`(await itx.config.profile()).name`.
+
 Putting it back is one commit by the same helper: the file as read at the earlier commit.
 
 ## Say
 
 - "So that your mind does not look like everyone else's: which colour is yours?"
+- "What shall we call your mind? Reload the page and the name is at the top."
 - "I changed the file that holds your colours. It is yours, and here it is: <link>. Edit it
   yourself and save, and the same thing happens."

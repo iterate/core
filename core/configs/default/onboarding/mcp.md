@@ -1,6 +1,6 @@
 # The mind as a tool for their other AI
 
-The owner should come away with: their own Claude or Codex can use the mind, and the first thing it did was teach the mind about them.
+The owner should come away with: their own Claude or Codex can use the mind, and the first thing it did was teach the mind about them. With an assistant that does not connect, ChatGPT among them, the mind learns the same by copy and paste.
 
 ## Ready today
 
@@ -18,7 +18,8 @@ The owner should come away with: their own Claude or Codex can use the mind, and
 
 ## Not ready
 
-- ChatGPT: not known whether it connects. Do not offer it.
+- ChatGPT: not known whether it connects. Do not offer the connection: offer "customise me by
+  copy and paste", below.
 - Nothing tells you when their assistant is done: ask them to say so.
 
 ## How
@@ -55,8 +56,25 @@ return {
 
 Tell them in a few lines what was added; offer to take any of it out (`/agents/onboarding/mind-md`).
 
+## Customise me by copy and paste
+
+For ChatGPT, or any assistant the owner does not want to connect. Give them this prompt to
+paste into it:
+
+> Please write down what you know about me, so that my iterate mind knows me too: who I am, my
+> work, the people I mention, my preferences (how I like to be written to, my tools, my hours),
+> and the projects I have open. Mark anything you inferred, rather than heard from me, with
+> "(inferred)". Leave out passwords, keys, health, and anything you would not say in front of
+> me. Short plain statements, at most 30 lines, in one block I can copy.
+
+They paste its answer back into the chat. It is the owner's own message, so it is their word:
+give it to the helper `/agents/onboarding/mind-md` to append to `mind.md` under a new heading
+`## From <the assistant's name>, <today's date>`, in one commit, as it stands. Then tell them
+in a few lines what was added, as below.
+
 ## Say
 
 - "Your Claude can use your mind too. Paste this into Claude Code: <the command>."
+- "Paste this into ChatGPT, then paste its answer here, and your mind knows what it knows."
 - "Your Claude added 14 lines about you: your studio, your two partners, and that you like short
   mails. Shall I take any of it out?"
