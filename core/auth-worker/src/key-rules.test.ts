@@ -9,7 +9,8 @@ import {
   enrolPayloadOf,
   serviceKeyRequestOf,
   type StatementPart,
-  statementInParts,
+  type StatementRow,
+  statementRows,
   underPaths,
 } from "./key-rules.ts";
 
@@ -266,50 +267,58 @@ test("a member's signature allows a service's key only for that key, that reach 
 const FACTS = { mind: "example.com", key: "keyaaaaabbbbbccccc", person: "member@example.net" };
 const ASK = { actor: "bridge-github", label: "GitHub", publicKey: "MFkw", paths: [] };
 
+/** The rows that every key's statement ends with: the mind, the member who allows it, and until when. */
+const LAST_ROWS = [
+  "In the mind: {checked:example.com}",
+  "Allowed by: {you:member@example.net}",
+  "Until: a member removes it",
+];
+
 test("the statement for a key that adds events names its one context, and where the link speaks", () => {
-  expect(marked(statementInParts({ ...ASK, paths: ["/integrations/github/"] }, FACTS))).toEqual([
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events at {checked:/integrations/github/} and below in {checked:example.com}, until a member removes it.",
-    "Its events show the name {link:bridge-github} and this key.",
-    "The link says that the key belongs to {link:“GitHub”}.",
+  expect(marked(statementRows({ ...ASK, paths: ["/integrations/github/"] }, FACTS))).toEqual([
+    "Key: {checked:keyaaaaa}",
+    "Belongs to: {link:“GitHub”} / The link says so.",
+    "Adds events at: {checked:/integrations/github/} and below / Its events show the name {link:bridge-github} and this key.",
+    ...LAST_ROWS,
   ]);
 });
 
 test("the statement for a key that adds events to two contexts names both", () => {
   const ask = { ...ASK, paths: ["/integrations/github/", "/integrations/linear/"] };
-  expect(marked(statementInParts(ask, FACTS))[0]).toBe(
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events at {checked:/integrations/github/} and {checked:/integrations/linear/} and below in {checked:example.com}, until a member removes it.",
+  const adds = (rows: StatementRow[]) =>
+    marked(rows).find((row) => row.startsWith("Adds events at: "));
+  expect(adds(statementRows(ask, FACTS))).toBe(
+    "Adds events at: {checked:/integrations/github/} and {checked:/integrations/linear/} and below / Its events show the name {link:bridge-github} and this key.",
   );
   const three = { ...ask, paths: [...ask.paths, "/integrations/slack/"] };
-  expect(marked(statementInParts(three, FACTS))[0]).toContain(
-    "add events at {checked:/integrations/github/}, {checked:/integrations/linear/} and {checked:/integrations/slack/} and below in",
+  expect(adds(statementRows(three, FACTS))).toContain(
+    "Adds events at: {checked:/integrations/github/}, {checked:/integrations/linear/} and {checked:/integrations/slack/} and below / ",
   );
 });
 
 test("the statement for a key that lends says that its holder sees what the agents send, and takes the name when its lend ends", () => {
-  expect(marked(statementInParts({ ...ASK, provide: "github" }, FACTS))).toEqual([
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, until a member removes it.",
-    "This mind's agents call them, so the key's holder sees what they send.",
-    "If {checked:itx.github} is lent now, the key's holder takes it when that lend ends.",
-    "The link says that the key belongs to {link:“GitHub”}.",
+  expect(marked(statementRows({ ...ASK, provide: "github" }, FACTS))).toEqual([
+    "Key: {checked:keyaaaaa}",
+    "Belongs to: {link:“GitHub”} / The link says so.",
+    "Lends its functions as: {checked:itx.github} / This mind's agents call them, so the key's holder sees what they send. If {checked:itx.github} is lent now, the key's holder takes it when that lend ends.",
+    ...LAST_ROWS,
   ]);
 });
 
-test("the statement for a key that lends and adds events says both in its first sentence", () => {
+test("the statement for a key that lends and adds events has a row for each", () => {
   const ask = { ...ASK, paths: ["/integrations/github/"], provide: "github" };
-  expect(marked(statementInParts(ask, FACTS))).toEqual([
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, and add events at {checked:/integrations/github/} and below, until a member removes it.",
-    "This mind's agents call them, so the key's holder sees what they send.",
-    "If {checked:itx.github} is lent now, the key's holder takes it when that lend ends.",
-    "Its events show the name {link:bridge-github} and this key.",
-    "The link says that the key belongs to {link:“GitHub”}.",
+  expect(marked(statementRows(ask, FACTS))).toEqual([
+    "Key: {checked:keyaaaaa}",
+    "Belongs to: {link:“GitHub”} / The link says so.",
+    "Lends its functions as: {checked:itx.github} / This mind's agents call them, so the key's holder sees what they send. If {checked:itx.github} is lent now, the key's holder takes it when that lend ends.",
+    "Adds events at: {checked:/integrations/github/} and below / Its events show the name {link:bridge-github} and this key.",
+    ...LAST_ROWS,
   ]);
 });
 
 test("the label and the actor are the link's words; the key, the contexts, the lent name and the mind are checked", () => {
   const ask = { ...ASK, paths: ["/integrations/github/"], provide: "github" };
-  const parts = statementInParts(ask, FACTS).flat();
-  const from = (kind: StatementPart["from"]) =>
-    new Set(parts.filter((part) => part.from === kind).map((part) => part.text));
+  const from = fromOf(statementRows(ask, FACTS));
   expect(from("link")).toEqual(new Set(["bridge-github", "“GitHub”"]));
   expect(from("checked")).toEqual(
     new Set(["keyaaaaa", "/integrations/github/", "itx.github", "example.com"]),
@@ -317,9 +326,48 @@ test("the label and the actor are the link's words; the key, the contexts, the l
   expect(from("you")).toEqual(new Set(["member@example.net"]));
 });
 
-/** The statement as text, each part that is not plain words marked `{from:text}`. */
-function marked(sentences: StatementPart[][]) {
-  return sentences.map((sentence) =>
-    sentence.map((part) => (part.from ? `{${part.from}:${part.text}}` : part.text)).join(""),
+test("iterate Cloud's key is published by the Cloud's origin, which is checked, as is its name; no row is the link's word", () => {
+  const cloud = {
+    actor: "iterate-cloud",
+    label: "iterate Cloud",
+    publicKey: "MFkw",
+    paths: ["/integrations/"],
+    cloud: "https://cloud.example.com",
+  };
+  const rows = statementRows(cloud, FACTS);
+  expect(marked(rows)).toEqual([
+    "Key: {checked:keyaaaaa}",
+    "Published by: {checked:https://cloud.example.com}, as iterate Cloud's key",
+    "Adds events at: {checked:/integrations/} and below / Its events show the name {checked:iterate-cloud} and this key.",
+    ...LAST_ROWS,
+  ]);
+  expect(rows.map((row) => row.label)).not.toContain("Belongs to");
+  const from = fromOf(rows);
+  expect(from("link")).toEqual(new Set());
+  expect(from("checked")).toEqual(
+    new Set([
+      "keyaaaaa",
+      "https://cloud.example.com",
+      "/integrations/",
+      "iterate-cloud",
+      "example.com",
+    ]),
   );
+});
+
+/** The rows as text, `label: value`, then ` / note` when the row has one, each part that is not
+ *  plain words marked `{from:text}`. A row's help is left out: it only explains. */
+function marked(rows: StatementRow[]) {
+  const words = (parts: StatementPart[]) =>
+    parts.map((part) => (part.from ? `{${part.from}:${part.text}}` : part.text)).join("");
+  return rows.map(
+    (row) => `${row.label}: ${words(row.value)}${row.note ? ` / ${words(row.note)}` : ""}`,
+  );
+}
+
+/** The texts of the rows' parts (values and notes) that came from `kind`. */
+function fromOf(rows: StatementRow[]) {
+  const parts = rows.flatMap((row) => [...row.value, ...(row.note || [])]);
+  return (kind: StatementPart["from"]) =>
+    new Set(parts.filter((part) => part.from === kind).map((part) => part.text));
 }

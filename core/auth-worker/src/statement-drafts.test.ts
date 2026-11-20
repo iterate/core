@@ -4,6 +4,7 @@ import { decodeFacts, FACTS_HEADER } from "iterate/facts";
 import { base64url, challengeOf, keyIdOf, statementText } from "iterate/signed";
 import { expect, test } from "vitest";
 import type { Env } from "./env.ts";
+import { text } from "./pages.ts";
 import { configVars } from "./test-support.ts";
 import { proposeStatement, statementDraftsResponse } from "./statement-drafts.ts";
 import { OUTSIDER_STATEMENTS_AN_HOUR, statementsResponse } from "./statements.ts";
@@ -14,6 +15,8 @@ const MEMBER = "owner@example.net";
 const STRANGER = "stranger@example.net";
 const TYPE = "demo/statement-asked";
 const PAYLOAD = { append: ["/minds/example.org/"], note: "<b>bold</b>" };
+/** Where a row's help starts, after its value and a space (./pages.ts `factsTable`). */
+const HELP = '<details class="help">';
 
 test("a proposed draft is shown on its page, every value as text", async () => {
   const { env } = await stack();
@@ -22,10 +25,14 @@ test("a proposed draft is shown on its page, every value as text", async () => {
   const page = await statementDraftsResponse(env, new Request(signAt));
   const html = await page!.text();
   expect(page!).toMatchObject({ status: 200 });
-  expect(html).toContain("/minds/example.com");
-  expect(html).toContain(TYPE);
-  expect(html).toContain("Asked through the agent <code>/agents/&#60;onboarding&#62;</code>.");
-  expect(html).toContain("&#60;b&#62;bold&#60;/b&#62;");
+  expect(html).toContain(
+    `<dt>Adds an event to</dt><dd>the context <code>/minds/example.com</code> of ${MIND} ${HELP}`,
+  );
+  expect(html).toContain(`<dt>Event type</dt><dd><code>${TYPE}</code>`);
+  expect(html).toContain(
+    `<dt>Asked by</dt><dd>this mind, through the agent <code>/agents/&#60;onboarding&#62;</code> ${HELP}`,
+  );
+  expect(html).toContain("<dt>Field note</dt><dd>&#60;b&#62;bold&#60;/b&#62;</dd>");
   expect(html).not.toContain("<b>bold");
 });
 
@@ -226,7 +233,9 @@ test("a draft that names its signer shows them, and takes their passkey alone", 
     signerEmail: ` ${STRANGER.toUpperCase()}`,
   });
   const html = await (await statementDraftsResponse(env, new Request(signAt)))!.text();
-  expect(html).toContain(`Signer: <strong>${STRANGER}</strong>.`);
+  expect(html).toContain(
+    `<dt>Signer</dt><dd><strong>${STRANGER}</strong> ${HELP}<summary aria-label="About Signer">?</summary><p>Only a passkey of this person can sign this statement.</p></details></dd>`,
+  );
   // no page lets a person who is no member add a first passkey (./enrolment.ts is for members), so the draft links to none
   expect(html).not.toContain("add one");
   const byMember = await pressed(env, draft, passkeys[MEMBER], { path });
@@ -277,7 +286,10 @@ test("a meld rule of this mind with itself is not explained as a grant, and its 
   expect(html).toContain(
     "<p><strong>Your signature would be refused:</strong> a mind does not meld with itself.</p>",
   );
-  expect(html).toContain("<details open>");
+  // not explained, so the page says it has no words for the type, and shows each field as a row
+  expect(html).toContain(`<dt>Event type</dt><dd><code>${MELD}</code> ${HELP}`);
+  expect(html).toContain("<dt>Field append</dt><dd><pre>[\n  &#34;/&#34;\n]</pre></dd>");
+  expect(html).toContain("<dt>Field name</dt><dd>peer.example.org</dd>");
   const { draft } = await proposed(env, changed);
   const answer = await pressed(env, draft, passkeys[MEMBER], changed);
   expect({ status: answer.status, body: await answer.json() }).toEqual({
@@ -316,7 +328,7 @@ const MELD = "events.iterate.com/mind-meld/configured";
 /** Another mind's id, an obvious fake. */
 const PEER = "b".repeat(64);
 
-test("a meld rule is said in words, each context on its own line, and the exact event is closed under them", async () => {
+test("a meld rule is said in words, each context on its own line, and the exact text is closed under them", async () => {
   const { env } = await stack();
   const html = await pageOf(env, {
     path: `/minds/${PEER}`,
@@ -330,7 +342,9 @@ test("a meld rule is said in words, each context on its own line, and the exact 
     `<ul><li><code>/minds/${PEER}/</code></li><li><code>/</code> (everything in the mind)</li></ul>`,
   );
   expect(html).toContain("It signs each event with any key that it publishes.");
-  expect(html).toContain("<details>\n        <summary>The exact event</summary>");
+  // the words explain the type, so its row has no help
+  expect(html).toContain(`<dt>Event type</dt><dd><code>${MELD}</code></dd>`);
+  expect(html).toContain("<details>\n        <summary>The exact text</summary>");
 });
 
 test("an empty meld rule is said as the end of the meld", async () => {
@@ -345,39 +359,105 @@ test("an empty meld rule is said as the end of the meld", async () => {
   );
 });
 
-test("a type that the page does not know is said as an event of that type, and the exact event is open", async () => {
+test("a type that the page does not know is said as an event of that type, each of its fields is a row, and the exact text is under them", async () => {
   const { env } = await stack();
   const html = await pageOf(env, { path: "/", type: TYPE });
   expect(html).toContain(
-    "<p>Adds one <code>demo/statement-asked</code> event to the root (<code>/</code>) of iterate.example.com. This page does not know what it means: read it below.</p>",
+    "<p>This page does not know what this event means. Read its fields before you sign.</p>",
   );
-  expect(html).toContain("<details open>");
+  expect(html).toContain(
+    `<dt>Adds an event to</dt><dd>the root (<code>/</code>) of ${MIND} ${HELP}`,
+  );
+  expect(html).toContain(
+    `<dt>Event type</dt><dd><code>${TYPE}</code> ${HELP}<summary aria-label="About Event type">?</summary><p>The type says what kind of event this is. This page has no description for it.</p></details></dd>`,
+  );
+  // every field of the payload, its value escaped
+  expect(html).toContain(
+    "<dt>Field append</dt><dd><pre>[\n  &#34;/minds/example.org/&#34;\n]</pre></dd>",
+  );
+  expect(html).toContain("<dt>Field note</dt><dd>&#60;b&#62;bold&#60;/b&#62;</dd>");
+  // the text that the passkey signs is still on the page, closed under the table
+  const exact = html.indexOf("<details>\n        <summary>The exact text</summary>");
+  expect(exact).toBeGreaterThan(html.indexOf('<dl class="facts">'));
+  expect(html.indexOf(`<pre>${text(JSON.stringify(PAYLOAD, null, 2))}</pre>`)).toBeGreaterThan(
+    exact,
+  );
+  expect(html).not.toContain("<details open>");
+});
+
+test("a field whose name or value is markup is shown as its characters", async () => {
+  const { env } = await stack();
+  const html = await pageOf(env, {
+    path: "/",
+    type: TYPE,
+    payload: { "<i>who</i>": '<img src=x onerror="alert(1)">' },
+  });
+  expect(html).toContain(
+    "<dt>Field &#60;i&#62;who&#60;/i&#62;</dt><dd>&#60;img src=x onerror=&#34;alert(1)&#34;&#62;</dd>",
+  );
+  expect(html).not.toContain("<i>who");
+  expect(html).not.toContain("<img");
+});
+
+test("a field that is no string is shown as its JSON: a list or an object in a pre", async () => {
+  const { env } = await stack();
+  const html = await pageOf(env, {
+    path: "/",
+    type: TYPE,
+    payload: { count: 3, on: true, nothing: null, list: [1, "a"], nested: { tag: "<b>" } },
+  });
+  expect(html).toContain("<dt>Field count</dt><dd><code>3</code></dd>");
+  expect(html).toContain("<dt>Field on</dt><dd><code>true</code></dd>");
+  expect(html).toContain("<dt>Field nothing</dt><dd><code>null</code></dd>");
+  expect(html).toContain("<dt>Field list</dt><dd><pre>[\n  1,\n  &#34;a&#34;\n]</pre></dd>");
+  expect(html).toContain(
+    "<dt>Field nested</dt><dd><pre>{\n  &#34;tag&#34;: &#34;&#60;b&#62;&#34;\n}</pre></dd>",
+  );
+});
+
+test("an empty payload says that it has no fields", async () => {
+  const { env } = await stack();
+  const html = await pageOf(env, { path: "/", type: TYPE, payload: {} });
+  expect(html).toContain('<dt>Fields</dt><dd><span class="muted">none</span></dd>');
+  expect(html).not.toContain("<dt>Field ");
 });
 
 test.for([
   [
     "the mind's own code at its root",
     { from: "/", by: { kind: "code" } },
-    "Asked by this mind's code at the root (<code>/</code>), maybe with no person behind it. Sign only if you expected it.",
+    "this mind's code, at the root (<code>/</code>)",
   ],
   [
     "a member through an agent",
     { from: "/agents/onboarding", by: { kind: "member", email: MEMBER } },
-    `Asked by <strong>${MEMBER}</strong>, a member, through the agent <code>/agents/onboarding</code>.`,
+    `<strong>${MEMBER}</strong>, a member, through the agent <code>/agents/onboarding</code>`,
   ],
   [
     "a member at the root",
     { from: "/", by: { kind: "member", email: MEMBER } },
-    `Asked by <strong>${MEMBER}</strong>, a member, at the root (<code>/</code>).`,
+    `<strong>${MEMBER}</strong>, a member, at the root (<code>/</code>)`,
+  ],
+  [
+    "someone who is no member",
+    { from: "/", by: { kind: "person", email: STRANGER } },
+    `<strong>${STRANGER}</strong>, who is not a member, at the root (<code>/</code>)`,
   ],
   [
     "a guest, by the name they typed",
     { from: "/", by: { kind: "guest", name: "<Cy>" } },
-    "Asked by a guest who gave the name &ldquo;&#60;Cy&#62;&rdquo;, at the root (<code>/</code>).",
+    "a guest who gave the name &ldquo;&#60;Cy&#62;&rdquo;, at the root (<code>/</code>)",
   ],
 ] as const)("a draft that %s proposed names who asked", async ([, input, words]) => {
   const { env } = await stack();
-  expect(await pageOf(env, input)).toContain(`<p class="muted">${words}</p>`);
+  expect(await pageOf(env, input)).toContain(`<dt>Asked by</dt><dd>${words} ${HELP}`);
+});
+
+test("a draft that the mind's own code proposed warns under who asked, with no press", async () => {
+  const { env } = await stack();
+  expect(await pageOf(env, { from: "/", by: { kind: "code" } })).toContain(
+    '</details><span class="note"><strong>Maybe no person is behind it. Sign only if you expected it.</strong></span></dd>',
+  );
 });
 
 async function pageOf(env: Env, input: Partial<Parameters<typeof proposeStatement>[1]>) {

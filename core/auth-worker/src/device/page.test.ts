@@ -19,6 +19,53 @@ test("the page asks for the passkey and says what it will sign", async () => {
   expect(page.text).toContain('"clientId":"client-1"');
 });
 
+test("a device's sign-in shows its name as its own claim, what it wants, that it gets everything as the member, and the code", async () => {
+  const stack = await stackOf();
+  const { text } = await stack.get();
+  expect(text).toContain(
+    `<div><dt>Device</dt><dd><strong>the laptop</strong><span class="note">The name is the device's own claim.</span></dd></div>`,
+  );
+  expect(text).toMatch(
+    /<dt>Asked<\/dt><dd>\d+ seconds ago, from London, GB <details class="help">/,
+  );
+  expect(text).toContain("<div><dt>It wants</dt><dd>the mind's API</dd></div>");
+  expect(text).toContain(
+    `<div><dt>It gets</dt><dd>everything in this mind, as <strong>owner@example.net</strong><span class="note">It can read and change all of it.</span></dd></div>`,
+  );
+  expect(text).toContain(
+    `<div><dt>Code</dt><dd><strong>${CODE}</strong><span class="note">Continue only if you started this sign-in yourself and the device shows this code.</span></dd></div>`,
+  );
+});
+
+test("a let-in shows its reason as the asker's word, how long with no renewal, and who asks: a claim, or the key that proved it", async () => {
+  const stack = await stackOf({
+    device: { ...DEVICE, letIn: { seconds: 3600, reason: "to fix the build" } },
+  });
+  const { text } = await stack.get();
+  expect(text).toContain(
+    `<div><dt>Who asks</dt><dd><strong>the laptop</strong><span class="note">The name is its own claim: nothing proves who asks. Continue only if you know where this request comes from.</span></dd></div>`,
+  );
+  expect(text).toContain(
+    `<div><dt>Its reason</dt><dd><blockquote>to fix the build</blockquote> <details class="help"><summary aria-label="About Its reason">?</summary><p>The asker wrote this. Nobody checked it.</p></details></dd></div>`,
+  );
+  expect(text).toContain(
+    `<div><dt>It gets</dt><dd>everything in this mind, as <strong>owner@example.net</strong><span class="note">It can read and change all of it.</span></dd></div>`,
+  );
+  expect(text).toContain(
+    `<div><dt>For</dt><dd>60 minutes from your approval<span class="note">It cannot renew this.</span></dd></div>`,
+  );
+  expect(text).toContain(
+    `<div><dt>Code</dt><dd><strong>${CODE}</strong><span class="note">Continue only if you expected this request.</span></dd></div>`,
+  );
+  const signer = { actor: "cli-bridge", label: "The bridge", key: "p".repeat(43) };
+  await stack.start({ ...DEVICE, letIn: { seconds: 7200, reason: "to fix the build", signer } });
+  const proved = (await stack.get()).text;
+  expect(proved).toContain(
+    `<div><dt>Who asks</dt><dd><strong>The bridge</strong><span class="note">It proved who it is with the key this mind trusts for cli-bridge (pppppppp).</span></dd></div>`,
+  );
+  expect(proved).toContain("<dt>For</dt><dd>2 hours from your approval");
+});
+
 test.for([
   ["the Continue of a page whose script did not run", { action: "" }],
   ["a form that says confirm with no statement", { action: "confirm" }],

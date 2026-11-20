@@ -180,67 +180,76 @@ export function allowsExactly(
  *  signs. */
 export type StatementPart = { text: string; from?: "checked" | "link" | "you" };
 
-/** THE STATEMENT THAT A MEMBER SIGNS ON `/keys/enrol`, as sentences of parts, so that the page
- *  can show which words this mind checked and which words only the link gave. `key` is the key's
- *  id, `person` the member's email. The label and the actor are the link's: the passkey signs
- *  them (`enrolPayloadOf`), but nobody checked them. */
-export function statementInParts(
+/** One row of the consent page's table: its name, its value as parts, a note that is read with
+ *  the value (what the row lets the key's holder do or see), and help that only explains. */
+export type StatementRow = {
+  label: string;
+  value: StatementPart[];
+  note?: StatementPart[];
+  help?: string;
+};
+
+/** WHAT A MEMBER SIGNS ON `/keys/enrol`, as the rows of a table, so that the page can show each
+ *  fact by itself, and which values this mind checked and which only the link gave. `key` is the
+ *  key's id, `person` the member's email. The label and the actor are the link's: the passkey
+ *  signs them (`enrolPayloadOf`), but nobody checked them. */
+export function statementRows(
   ask: ServiceKeyRequest,
   facts: { mind: string; key: string; person: string },
-): StatementPart[][] {
+): StatementRow[] {
   const checked = (text: string): StatementPart => ({ text, from: "checked" });
   const link = (text: string): StatementPart => ({ text, from: "link" });
-  const mind = checked(facts.mind);
   const lent = ask.provide && checked(`itx.${ask.provide}`);
-  const adds: StatementPart[] = ask.paths.length
-    ? [{ text: "add events at " }, ...listOf(ask.paths.map(checked)), { text: " and below" }]
-    : [];
-  const may: StatementPart[] = lent
-    ? [
-        { text: "lend its functions to " },
-        mind,
-        { text: " as " },
-        lent,
-        ...(adds.length ? [{ text: ", and " }, ...adds] : []),
-      ]
-    : [...adds, { text: " in " }, mind];
-  const sentences: StatementPart[][] = [
-    [
-      { text: "I, " },
-      { text: facts.person, from: "you" },
-      { text: ", let key " },
-      checked(facts.key.slice(0, 8)),
-      { text: " " },
-      ...may,
-      { text: ", until a member removes it." },
-    ],
-  ];
-  if (lent)
-    sentences.push(
-      [{ text: "This mind's agents call them, so the key's holder sees what they send." }],
-      [
-        { text: "If " },
-        lent,
-        { text: " is lent now, the key's holder takes it when that lend ends." },
-      ],
-    );
   // the Cloud's name and origin are checked: the origin published this very key under that name
   const named = ask.cloud ? checked(ask.actor) : link(ask.actor);
-  if (adds.length)
-    sentences.push([{ text: "Its events show the name " }, named, { text: " and this key." }]);
-  if (ask.cloud)
-    sentences.push([
-      { text: "The key is the one that " },
-      checked(ask.cloud),
-      { text: " publishes as iterate Cloud's." },
-    ]);
-  else
-    sentences.push([
-      { text: "The link says that the key belongs to " },
-      link(`“${ask.label}”`),
-      { text: "." },
-    ]);
-  return sentences;
+  return [
+    {
+      label: "Key",
+      value: [checked(facts.key.slice(0, 8))],
+      help: "The start of the key's fingerprint. Its holder keeps the private half and signs with it. This mind keeps the public half and checks each signature with it.",
+    },
+    ask.cloud
+      ? {
+          label: "Published by",
+          value: [checked(ask.cloud), { text: ", as iterate Cloud's key" }],
+        }
+      : {
+          label: "Belongs to",
+          value: [link(`“${ask.label}”`)],
+          note: [{ text: "The link says so." }],
+        },
+    ...(lent
+      ? [
+          {
+            label: "Lends its functions as",
+            value: [lent],
+            note: [
+              {
+                text: "This mind's agents call them, so the key's holder sees what they send. If ",
+              },
+              lent,
+              { text: " is lent now, the key's holder takes it when that lend ends." },
+            ],
+          },
+        ]
+      : []),
+    ...(ask.paths.length
+      ? [
+          {
+            label: "Adds events at",
+            value: [...listOf(ask.paths.map(checked)), { text: " and below" }],
+            note: [{ text: "Its events show the name " }, named, { text: " and this key." }],
+          },
+        ]
+      : []),
+    { label: "In the mind", value: [checked(facts.mind)] },
+    { label: "Allowed by", value: [{ text: facts.person, from: "you" as const }] },
+    {
+      label: "Until",
+      value: [{ text: "a member removes it" }],
+      help: "Any member can remove the key on the page Your keys.",
+    },
+  ];
 }
 
 /** `a`, `a and b`, `a, b and c`. */

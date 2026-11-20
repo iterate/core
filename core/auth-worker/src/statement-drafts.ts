@@ -12,7 +12,7 @@ import { z } from "zod";
 import { configOf, type Env, issuerOf } from "./env.ts";
 import { canonicalPath, honouredNext } from "./key-rules.ts";
 import { meldRuleOf } from "./minds.ts";
-import { page, text } from "./pages.ts";
+import { type Fact, FACTS_STYLE, factsTable, page, text } from "./pages.ts";
 import { SIGN_HELPERS } from "./signed-change.ts";
 import { verifiedStatement } from "./keys.ts";
 import { admittedStatement, MOST_PAYLOAD_BYTES } from "./statements.ts";
@@ -154,17 +154,54 @@ function draftPage(env: Env, draft: Draft | null): Response {
     payload: draft.payload,
   });
   const meaning = meaningOf(draft.path, draft.type, payload, configOf(env));
-  const unknown = `<p>Adds one <code>${text(draft.type)}</code> event to ${contextWords(draft.path)} of ${text(mind)}. This page does not know what it means: read it below.</p>`;
-  // who may sign is shown, not explained: another person's passkey gets the refusal's own words
-  const signer = draft.signer_email ? ` Signer: <strong>${text(draft.signer_email)}</strong>.` : "";
+  const known = "words" in meaning && meaning.words;
+  const lead =
+    "refused" in meaning
+      ? `<p><strong>Your signature would be refused:</strong> ${text(meaning.refused)}.</p>`
+      : known ||
+        "<p>This page does not know what this event means. Read its fields before you sign.</p>";
+  const asked = proposerOf(draft);
+  const rows: Fact[] = [
+    {
+      label: "Asked by",
+      value: asked.who,
+      note: asked.warning && `<strong>${text(asked.warning)}</strong>`,
+      help: "Who asked for this signature, as the platform recorded it. A guest's name is the guest's own word.",
+    },
+    // who may sign is shown, not explained: another person's passkey gets the refusal's own words
+    ...(draft.signer_email
+      ? [
+          {
+            label: "Signer",
+            value: `<strong>${text(draft.signer_email)}</strong>`,
+            help: "Only a passkey of this person can sign this statement.",
+          },
+        ]
+      : []),
+    {
+      label: "Adds an event to",
+      value: `${contextWords(draft.path)} of ${text(mind)}`,
+      help: "Your signature adds one event to this context of the mind, with you as its signer.",
+    },
+    {
+      label: "Event type",
+      value: `<code>${text(draft.type)}</code>`,
+      help: known
+        ? undefined
+        : "The type says what kind of event this is. This page has no description for it.",
+    },
+    // a draft's payload is a plain object: `Proposal` took no other
+    ...payloadRows(z.record(z.string(), z.unknown()).parse(payload)),
+  ];
   return page({
     title: "Sign this statement",
     wide: true,
+    style: FACTS_STYLE,
     body: `<h1>Sign this statement</h1>
-      ${"refused" in meaning ? `${unknown}<p><strong>Your signature would be refused:</strong> ${text(meaning.refused)}.</p>` : meaning.words || unknown}
-      <p class="muted">${proposerWords(draft)}${signer}</p>
-      <details${"words" in meaning && meaning.words ? "" : " open"}>
-        <summary>The exact event</summary>
+      ${lead}
+      ${factsTable(rows)}
+      <details>
+        <summary>The exact text</summary>
         <p class="muted">Context <code>${text(draft.path)}</code>, type <code>${text(draft.type)}</code>. Your passkey signs exactly this.</p>
         <pre>${text(shown)}</pre>
       </details>
@@ -173,6 +210,27 @@ function draftPage(env: Env, draft: Draft | null): Response {
       </form>
       <p id="status" class="muted" role="status"></p>`,
     script: `${SIGN_HELPERS}${PRESS_SCRIPT}`,
+  });
+}
+
+/** THE EVENT'S OWN FIELDS, one row each, so a person reads what they sign as a table and not as
+ *  JSON: a string as its text, anything else as its JSON. A field's name is the proposer's, so its
+ *  label starts with "Field" and never reads as one of the page's own rows. */
+function payloadRows(payload: Record<string, unknown>): Fact[] {
+  const fields = Object.entries(payload);
+  if (!fields.length) return [{ label: "Fields", value: `<span class="muted">none</span>` }];
+  return fields.map(([name, value]) => {
+    const json = JSON.stringify(value, null, 2);
+    return {
+      label: `Field ${name}`,
+      value:
+        typeof value === "string"
+          ? text(value)
+          : // a list or an object with something in it takes lines of its own
+            json.includes("\n")
+            ? `<pre>${text(json)}</pre>`
+            : `<code>${text(json)}</code>`,
+    };
   });
 }
 
@@ -219,14 +277,17 @@ function contextWords(path: string) {
 
 /** Who asked for the statement, as the platform stamped the call, and where in the mind it came
  *  from. What a person may have written themselves (a guest's name) is marked as their own. */
-function proposerWords(draft: Draft) {
+function proposerOf(draft: Draft): { who: string; warning?: string } {
   const by = AskedBy.safeParse(JSON.parse(draft.asked_by || "null"));
   const where = draft.asked_from ? placeWords(draft.asked_from) : "";
-  if (!by.success) return where ? `Asked ${where}.` : "Asked by this mind.";
+  if (!by.success) return { who: where ? `this mind, ${where}` : "this mind" };
   const asker = by.data;
   if (asker.kind === "code")
     // code that runs in a member's own request stamps "code" too: the platform knows no more
-    return `Asked by this mind's code${where ? ` ${where}` : ""}, maybe with no person behind it. Sign only if you expected it.`;
+    return {
+      who: `this mind's code${where ? `, ${where}` : ""}`,
+      warning: "Maybe no person is behind it. Sign only if you expected it.",
+    };
   const who =
     asker.kind === "member"
       ? asker.email
@@ -237,7 +298,7 @@ function proposerWords(draft: Draft) {
         : asker.kind === "guest"
           ? `a guest who gave the name &ldquo;${text(asker.name)}&rdquo;`
           : `the mind <strong>${text(asker.hostname)}</strong>`;
-  return `Asked by ${who}${where ? `, ${where}` : ""}.`;
+  return { who: `${who}${where ? `, ${where}` : ""}` };
 }
 
 function placeWords(path: string) {

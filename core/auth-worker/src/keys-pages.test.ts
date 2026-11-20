@@ -1,46 +1,71 @@
 import { base64url, keyIdOf, signedP256, statementText } from "iterate/signed";
 import { expect, test, vi } from "vitest";
 import { sessionCookie } from "./cookies.ts";
-import { enrolPayloadOf, statementInParts } from "./key-rules.ts";
+import { enrolPayloadOf } from "./key-rules.ts";
 import { keysPagesResponse, statementHtml } from "./keys-pages.ts";
 import { KEY_ADDED, KEY_REMOVED } from "./signed-change.ts";
 import { sqliteStack } from "./test-support.ts";
 
-const facts = { mind: "example.com", key: "key-a-of-a-service", person: "ada@example.com" };
-
-test("the statement marks what the mind checked, what the link said and who signs", () => {
-  const html = statementHtml(
-    statementInParts(
-      { actor: "a-service", label: "A service", publicKey: "pk", paths: ["/integrations/a/"] },
-      facts,
-    ),
-  );
-  expect(html).toContain('<span class="part-you">ada@example.com</span>');
-  expect(html).toContain('<span class="part-checked">/integrations/a/</span>');
-  expect(html).toContain('<span class="part-checked">example.com</span>');
-  expect(html).toContain('<span class="part-link">a-service</span>');
-  expect(html).toContain('<span class="part-link">“A service”</span>');
-});
-
-test("a label that a link wrote as markup is shown as its characters", () => {
-  const html = statementHtml(
-    statementInParts(
-      {
-        actor: "a-service",
-        label: '<img src=x onerror="alert(1)">',
-        publicKey: "pk",
-        paths: ["/integrations/a/"],
-      },
-      facts,
-    ),
-  );
-  expect(html).not.toContain("<img");
-  expect(html).toContain("&#60;img src=x onerror=&#34;alert(1)&#34;&#62;");
-});
-
 const ISSUER = "https://iterate.example.com";
 const OWNER = "owner@example.net";
 const CLOUD = "https://cloud.example.com";
+
+test("each part of a row is escaped, and a part that is no plain word is marked by its kind", () => {
+  expect(
+    statementHtml([
+      { text: "a <plain> word, " },
+      { text: "/integrations/a/", from: "checked" },
+      { text: "<b>a-service</b>", from: "link" },
+      { text: "ada@example.com", from: "you" },
+    ]),
+  ).toBe(
+    'a &#60;plain&#62; word, <span class="part-checked">/integrations/a/</span><span class="part-link">&#60;b&#62;a-service&#60;/b&#62;</span><span class="part-you">ada@example.com</span>',
+  );
+});
+
+test("the statement marks what the mind checked, what the link said and who signs", async () => {
+  const stack = await stackOf();
+  const { publicKey } = await cloudKeyOf();
+  const page = await stack.enrolPage({
+    actor: "a-service",
+    label: "A service",
+    publicKey,
+    paths: "/integrations/a/",
+  });
+  const html = await page.text();
+  expect(page).toMatchObject({ status: 200 });
+  // the label is the link's word, and the row says so where it is read
+  expect(html).toContain(
+    '<div><dt>Belongs to</dt><dd><span class="part-link">“A service”</span><span class="note">The link says so.</span></dd></div>',
+  );
+  expect(html).toContain(
+    '<div><dt>Adds events at</dt><dd><span class="part-checked">/integrations/a/</span> and below<span class="note">Its events show the name <span class="part-link">a-service</span> and this key.</span></dd></div>',
+  );
+  expect(html).toContain(
+    '<div><dt>In the mind</dt><dd><span class="part-checked">iterate.example.com</span></dd></div>',
+  );
+  expect(html).toContain(
+    `<div><dt>Allowed by</dt><dd><span class="part-you">${OWNER}</span></dd></div>`,
+  );
+  expect(html).toContain('<span class="part-link">from the link</span> not checked by anyone</p>');
+});
+
+test("a label that a link wrote as markup is shown as its characters", async () => {
+  const stack = await stackOf();
+  const { publicKey } = await cloudKeyOf();
+  const page = await stack.enrolPage({
+    actor: "a-service",
+    label: '<img src=x onerror="alert(1)">',
+    publicKey,
+    paths: "/integrations/a/",
+  });
+  const html = await page.text();
+  expect(page).toMatchObject({ status: 200 });
+  expect(html).not.toContain("<img");
+  expect(html).toContain(
+    '<dt>Belongs to</dt><dd><span class="part-link">“&#60;img src=x onerror=&#34;alert(1)&#34;&#62;”</span>',
+  );
+});
 
 test("/keys is the whole page for a member: the keys, a name that is optional, and where the loss of the only passkey leaves them", async () => {
   const stack = await stackOf();

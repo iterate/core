@@ -16,11 +16,11 @@ import {
   scopePlainly,
   type ServiceKeyRequest,
   serviceKeyRequestOf,
-  statementInParts,
   type StatementPart,
+  statementRows,
 } from "./key-rules.ts";
 import { isMember } from "./members.ts";
-import { errorPage, notMemberPage, page, text } from "./pages.ts";
+import { errorPage, FACTS_STYLE, factsTable, notMemberPage, page, text } from "./pages.ts";
 import { MINDS_PATH } from "./minds-page.ts";
 import { SESSIONS_PATH } from "./sessions-page.ts";
 import { signInHref } from "./sign-in.ts";
@@ -467,8 +467,12 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
   const next = honouredNext(url.searchParams.get("next"), config);
   const hidden = (name: string, value: string) =>
     `<input type="hidden" name="${name}" value="${text(value)}">`;
-  const statement = statementHtml(statementInParts(ask, { mind, key, person: session.email }));
-  const start = text(key.slice(0, 8));
+  const rows = statementRows(ask, { mind, key, person: session.email }).map((row) => ({
+    label: row.label,
+    value: statementHtml(row.value),
+    note: row.note && statementHtml(row.note),
+    help: row.help,
+  }));
   // iterate Cloud's page names the Cloud's host, which the member must recognise, and not the
   // link's label
   const cloud = ask.cloud ? cloudPlainly(ask.cloud, mind) : null;
@@ -484,23 +488,18 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
     : ` &middot; <span class="${PART_CLASS.link}">from the link</span> not checked by anyone`;
   return page({
     title: cloud ? cloud.heading : "Add a service key",
+    wide: true,
     // The consent page's own look, over the plain page's stylesheet. A part may break across lines,
     // so a long path still fits a phone, and each line of it keeps its tint.
-    style: `
-.statement { padding: 0.75rem 0.875rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.8125rem; line-height: 1.75; }
+    style: `${FACTS_STYLE}
 .part-checked, .part-link, .part-you { padding: 0.0625rem 0.3125rem; border-radius: calc(var(--radius) - 4px); overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .part-checked { background: color-mix(in oklab, var(--success) 14%, transparent); }
 .part-link { border: 1px dashed color-mix(in oklab, var(--warning) 75%, transparent); background: color-mix(in oklab, var(--warning) 8%, transparent); }
 .part-you { background: color-mix(in oklab, var(--foreground) 8%, transparent); }
-.legend { font-size: 0.8125rem; line-height: 1.9; }
-summary { cursor: pointer; }`,
+.legend { font-size: 0.8125rem; line-height: 1.9; }`,
     body: `${opening}
-      <p class="statement">${statement}</p>
+      ${factsTable(rows)}
       <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> checked by this mind${fromLink}</p>
-      <details>
-        <summary>What is a key?</summary>
-        <p class="muted">Its holder keeps the private half and signs with it. This mind keeps the public half, whose fingerprint starts ${start}, and checks each signature with it. Any member can remove the key on <a href="${KEYS_PATH}">Your keys</a>.</p>
-      </details>
       <form method="post" action="${ENROL_PATH}" class="actions" data-enrol="${text(JSON.stringify(enrolPayloadOf(key, ask)))}">
         ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${ask.cloud ? hidden("cloud", ask.cloud) : ""}${next ? hidden("next", next) : ""}
         ${hidden("decision", "cancel")}${hidden("signed", "")}
@@ -515,20 +514,16 @@ summary { cursor: pointer; }`,
 /** A class for each kind of part of the statement (./key-rules.ts `StatementPart`). */
 const PART_CLASS = { checked: "part-checked", link: "part-link", you: "part-you" } as const;
 
-/** The statement as HTML: each part's text escaped, and a part that is no plain word in a span of
+/** A row's parts as HTML: each part's text escaped, and a part that is no plain word in a span of
  *  its kind. The label and the actor come from a link that anyone can write. */
-export function statementHtml(sentences: StatementPart[][]): string {
-  return sentences
-    .map((sentence) =>
-      sentence
-        .map((part) =>
-          part.from
-            ? `<span class="${PART_CLASS[part.from]}">${text(part.text)}</span>`
-            : text(part.text),
-        )
-        .join(""),
+export function statementHtml(parts: StatementPart[]): string {
+  return parts
+    .map((part) =>
+      part.from
+        ? `<span class="${PART_CLASS[part.from]}">${text(part.text)}</span>`
+        : text(part.text),
     )
-    .join(" ");
+    .join("");
 }
 
 // The press of "Sign with passkey" is a statement one of the person's passkeys signs: the key,

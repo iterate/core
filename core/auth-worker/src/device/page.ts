@@ -5,7 +5,15 @@ import { sessionOf } from "../cookies.ts";
 import { configOf, type Env, issuerOf } from "../env.ts";
 import { isMember } from "../members.ts";
 import { clientTile } from "../client-mark.ts";
-import { errorPage, notMemberPage, page, text, otherAccountForm } from "../pages.ts";
+import {
+  errorPage,
+  FACTS_STYLE,
+  factsTable,
+  notMemberPage,
+  otherAccountForm,
+  page,
+  text,
+} from "../pages.ts";
 import { signedChangeBy, signerOf, signScript } from "../signed-change.ts";
 import { signInHref } from "../sign-in.ts";
 import { CALLBACK_PATH, normalizeUserCode, VERIFICATION_PATH } from "./protocol.ts";
@@ -156,7 +164,6 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
     .filter(Boolean)
     .join(", ");
   const ago = Math.max(0, Math.round((Date.now() - device.createdAt) / 1000));
-  const code = `<p>Continue only if you started this sign-in yourself and the device shows <strong>${text(userCode)}</strong>.</p>`;
   // Continue has no value of its own: the page's script signs, sets `action` and posts. Decline
   // comes first in the form, so its own value is the one the server reads.
   const form = `${error ? `<p role="alert">${text(error)}</p>` : ""}
@@ -168,22 +175,45 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
       </form>
       <p id="status" class="muted" role="status">Your passkey signs this request.</p>
       <div class="muted">Signed in as ${text(email)}. Not you? ${otherAccountForm(`${VERIFICATION_PATH}?${new URLSearchParams({ user_code: userCode })}`)}</div>`;
-  const shown = { status: error ? 403 : 200, script: `${signScript(mind)}${PRESS_SCRIPT}` };
+  const shown = {
+    status: error ? 403 : 200,
+    script: `${signScript(mind)}${PRESS_SCRIPT}`,
+    style: FACTS_STYLE,
+  };
+  const note = (words: string) => `<span class="note">${text(words)}</span>`;
+  const reach = {
+    label: "It gets",
+    value: `everything in this mind, as <strong>${text(email)}</strong>${note("It can read and change all of it.")}`,
+  };
   if (device.letIn) {
     const { signer } = device.letIn;
     const name = signer ? signer.label : device.clientName;
     const proof = signer
-      ? `It proved who it is with the key this mind trusts for ${text(signer.actor)} (${text(signer.key.slice(0, 8))}).`
+      ? `It proved who it is with the key this mind trusts for ${signer.actor} (${signer.key.slice(0, 8)}).`
       : "The name is its own claim: nothing proves who asks. Continue only if you know where this request comes from.";
     return page({
       ...shown,
       title: `Let ${name} in?`,
       asker: deviceTile(name),
       body: `<h1>Let ${text(name)} in?</h1>
-      <p><strong>${text(name)}</strong> asks for access to ${text(mind)}. ${proof}</p>
-      <blockquote>${text(device.letIn.reason)}</blockquote>
-      <p>If you continue, it can read and change everything in this mind as <strong>${text(email)}</strong> for ${text(durationInWords(device.letIn.seconds))} from your approval. It cannot renew this.</p>
-      <p>Continue only if you expected this request. Its code is <strong>${text(userCode)}</strong>.</p>
+      ${factsTable([
+        { label: "Who asks", value: `<strong>${text(name)}</strong>${note(proof)}` },
+        {
+          label: "Its reason",
+          value: `<blockquote>${text(device.letIn.reason)}</blockquote>`,
+          help: "The asker wrote this. Nobody checked it.",
+        },
+        { label: "Mind", value: text(mind) },
+        reach,
+        {
+          label: "For",
+          value: `${text(durationInWords(device.letIn.seconds))} from your approval${note("It cannot renew this.")}`,
+        },
+        {
+          label: "Code",
+          value: `<strong>${text(userCode)}</strong>${note("Continue only if you expected this request.")}`,
+        },
+      ])}
       ${form}`,
     });
   }
@@ -192,9 +222,23 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
     title: `Sign in ${device.clientName}?`,
     asker: deviceTile(device.clientName),
     body: `<h1>Sign in a device to ${text(mind)}?</h1>
-      <p>A device that calls itself <strong>${text(device.clientName)}</strong> asked ${ago} seconds ago${where ? `, from ${text(where)}` : ""}. The name is the device's own claim.</p>
-      <p>It wants ${text(resourceInWords(env, device.resource))}, as <strong>${text(email)}</strong>. It can read and change everything in this mind.</p>
-      ${code}
+      ${factsTable([
+        {
+          label: "Device",
+          value: `<strong>${text(device.clientName)}</strong>${note("The name is the device's own claim.")}`,
+        },
+        {
+          label: "Asked",
+          value: text(`${ago} seconds ago${where ? `, from ${where}` : ""}`),
+          help: "The place is where the request came from, by its network address.",
+        },
+        { label: "It wants", value: text(resourceInWords(env, device.resource)) },
+        reach,
+        {
+          label: "Code",
+          value: `<strong>${text(userCode)}</strong>${note("Continue only if you started this sign-in yourself and the device shows this code.")}`,
+        },
+      ])}
       ${form}`,
   });
 }
