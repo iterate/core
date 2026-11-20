@@ -173,11 +173,12 @@ A destroy erases the mind: its contexts, files, repos, members and secrets. It l
 - The SFU app and the TURN key, when the destroy's credential lacks the permission to delete Realtime (Calls)
   resources: the destroy
   says so and goes on.
-- A sandbox's saved snapshots: the registry repository `<account>/cloudchamber-snapshots/<id>`
-  of each sandbox that saved itself. Cloudflare's container registry refuses their delete, and
-  Cloudflare keeps them after the container application is deleted (measured 20 Nov 2026). The
-  destroy names each repository with its tag count and goes on. Each holds a copy of a sandbox's
-  files (`src/container-snapshots.ts`).
+- A sandbox's saved snapshots: tags in the registry repository
+  `<account>/cloudchamber-snapshots/<id>`, which may also hold other applications' snapshots.
+  Cloudflare's container registry refuses their delete, and Cloudflare keeps them after the
+  container application is deleted (measured 20 Nov 2026). The destroy names each repository with
+  the number of this mind's tags and goes on. Each tag holds a copy of a sandbox's files
+  (`src/container-snapshots.ts`).
 - The account's Zero Trust organization and its one-time PIN login. They belong to the account,
   and other things in it may use them (`src/access-team.ts`).
 - The zones.

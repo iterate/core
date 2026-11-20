@@ -27,7 +27,9 @@ import { eachLineOnce } from "./realtime.ts";
 type ApplicationService = Provider.ProviderService<Cloudflare.Containers.DurableObjectApplication>;
 type Application = Parameters<ApplicationService["delete"]>[0]["output"];
 
-/** One snapshot repository that the registry would not delete, and how many tags it holds. */
+/** One snapshot repository that the registry would not delete, and how many of its tags this
+ *  application's Durable Objects saved. One repository may hold the snapshots of several
+ *  applications. */
 export type Leftover = { repository: string; tags: number };
 
 /** The registry's refusal of a snapshot tag's DELETE, as Alchemy gives it
@@ -40,11 +42,15 @@ const SnapshotRefusal = z.object({
 });
 
 export const leftoverLine = ({ repository, tags }: Leftover) =>
-  `${repository} stays in the account with ${tags} tags: Cloudflare's container registry refuses to delete a sandbox's saved snapshot, and keeps it after its container application is deleted. It holds a copy of that sandbox's files.`;
+  `${repository} keeps ${tags} tags of this mind's sandbox snapshots: Cloudflare's container registry refuses to delete them, and keeps them after the container application is deleted. They hold copies of the sandboxes' files. The repository may also hold other applications' snapshots.`;
 
 /** Alchemy's provider `base` of a container application, whose `delete` deletes the application
  *  when the registry refuses a snapshot (`isSnapshotRefusal`), and says `leftoverLine` for each
- *  snapshot repository that `calls.leftovers` names, read before the application goes. */
+ *  snapshot repository that `calls.leftovers` names, read before the application goes.
+ *
+ *  Alchemy registers this provider for two modes (`ProviderLayer.dual`), and its engine calls the
+ *  variant in `modes` (`providerForMode`), not the registered service's own `delete`: so the live
+ *  variant is wrapped too. The local variant has no registry and stays as it is. */
 export function snapshotRefusalProvider(
   base: ApplicationService,
   calls: {
@@ -56,10 +62,10 @@ export function snapshotRefusalProvider(
   },
   say: (line: string) => void,
 ): ApplicationService {
-  return {
-    ...base,
+  const wrap = (service: ApplicationService): ApplicationService => ({
+    ...service,
     delete: (input) =>
-      base.delete(input).pipe(
+      service.delete(input).pipe(
         Effect.catchIf(isSnapshotRefusal, () =>
           Effect.gen(function* () {
             const left = yield* calls.leftovers(input.output);
@@ -78,7 +84,10 @@ export function snapshotRefusalProvider(
           }),
         ),
       ),
-  };
+  });
+  const wrapped = wrap(base);
+  if (!base.modes) return wrapped;
+  return { ...wrapped, modes: { ...base.modes, live: Effect.map(base.modes.live, wrap) } };
 }
 
 /** The snapshot repositories of an application's Durable Objects, with their tag counts. */

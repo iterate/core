@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type * as Cloudflare from "@alchemy.run/cloudflare";
-import type { ProviderService } from "alchemy/Provider";
+import { providerForMode, type ProviderService } from "alchemy/Provider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import {
@@ -50,7 +50,7 @@ void test("a refused snapshot: the application is deleted, and each repository i
   assert.deepEqual(run.said, leftovers.map(leftoverLine));
   assert.match(
     run.said[0]!,
-    /^account-1\/cloudchamber-snapshots\/8b2c stays in the account with 40 tags: /,
+    /^account-1\/cloudchamber-snapshots\/8b2c keeps 40 tags of this mind.s sandbox snapshots: /,
   );
 });
 
@@ -90,17 +90,36 @@ void test("a destroy that Alchemy finishes says nothing and calls nothing more",
   assert.deepEqual(run.said, []);
 });
 
+void test("Alchemy's engine reaches the wrapped delete through the provider's live mode", async () => {
+  // a dual registration, as Alchemy's: the engine calls `providerForMode(service, mode)`
+  const run = destroy(refusal, { deleteFails: null, dual: true });
+  const live = await Effect.runPromise(providerForMode(run.provider, "live"));
+  await Effect.runPromise(live.delete(deleteInput()));
+  assert.deepEqual(run.deleted, [application]);
+  assert.deepEqual(run.said, leftovers.map(leftoverLine));
+  // the local variant has no registry, and stays Alchemy's own
+  const local = await Effect.runPromise(providerForMode(run.provider, "local"));
+  assert.equal(Exit.isFailure(await Effect.runPromiseExit(local.delete(deleteInput()))), true);
+});
+
 type ApplicationService = ProviderService<Cloudflare.Containers.DurableObjectApplication>;
 
 /** The wrapper over a pretend Alchemy provider whose delete fails with `failure` (or succeeds with
- *  none), and a pretend application delete that fails with `deleteFails` (or records the call). */
-function destroy(failure: object | null, options: { deleteFails: { _tag: string } | null }) {
+ *  none), and a pretend application delete that fails with `deleteFails` (or records the call).
+ *  `dual`: the provider is registered for two modes, as `ProviderLayer.dual` makes it. */
+function destroy(
+  failure: object | null,
+  options: { deleteFails: { _tag: string } | null; dual?: boolean },
+) {
   const said: string[] = [];
   const deleted: object[] = [];
   // The cast: of the provider, only `delete` is called here.
-  const base = {
+  const variant = {
     delete: () => (failure ? Effect.fail(failure) : Effect.void),
   } as unknown as ApplicationService;
+  const base = options.dual
+    ? { ...variant, modes: { live: Effect.succeed(variant), local: Effect.succeed(variant) } }
+    : variant;
   const provider = snapshotRefusalProvider(
     base,
     {
