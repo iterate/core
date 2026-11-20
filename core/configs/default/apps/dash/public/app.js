@@ -28,7 +28,6 @@ import {
 } from "@iterate-com/ui/components/dash/dash";
 import { DashAgents, DashHome } from "@iterate-com/ui/agent-kind-view/dash-agents";
 import { memberItx } from "@iterate-com/ui/live";
-import { usePageParam } from "@iterate-com/ui/lib/page-url";
 import {
   BlocksIcon,
   BookOpenIcon,
@@ -47,7 +46,6 @@ import {
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
 import { CALL_FACET } from "./call-facet.js";
-import { AgentShare } from "./agent-share.js";
 import { endLink, makeLink } from "./share-links.js";
 
 // The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
@@ -66,31 +64,16 @@ const mind = new URL(stack).hostname;
 /** The zone this page is on: an app's hostname is one label under its zone. */
 const zone = location.hostname.split(".").slice(1).join(".");
 
-/** THE AGENTS PAGE, the kit's, with Share in the agent's header (agent-share.js): links that let
- *  guests into one agent's chat and call. A kit build that draws Share itself (the row's `share`
- *  below) has a place for it, and agent-share.js then draws nothing. */
-function Agents(props) {
-  const path = usePageParam("agent");
-  return html`
-    <${DashAgents} ...${props} />
-    <${AgentShare} itx=${props.itx} path=${path} zone=${zone} />
-  `;
-}
-// the kit's page keeps what it shows over a reconnect, and Share reads the page's itx at each use:
-// the Dash need not mount it again at a new session
-Agents.staysOverReconnect = true;
-
 const pages = [
   { id: "home", name: "Home", icon: LayoutDashboardIcon, component: DashHome },
   {
     id: "agents",
     name: "Agents",
     icon: BotIcon,
-    component: Agents,
+    component: DashAgents,
     // the chat shows who else has this agent open now and who is typing: the faces come from the
     // context's own subscription rows (who holds each open page), and a page says only its status
-    // (hidden, typing) in an ephemeral event. Nothing durable is written for it. Share's place in
-    // the header comes with it.
+    // (hidden, typing) in an ephemeral event. Nothing durable is written for it.
     presence: true,
     // a call on any agent's page: "Start a call" turns the call facet on for the agent (call.ts)
     call: {

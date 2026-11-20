@@ -27,7 +27,6 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
   // the Dash's page has the marks of iterate Cloud's apps too; no app keeps an icon of its own
   expect(Object.keys(dashFiles)).toEqual([
-    "agent-share.js",
     "app.css",
     "app.js",
     "brands/cloudflare.svg",

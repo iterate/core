@@ -4,10 +4,14 @@ The owner should come away with: an unusual or risky request waits for their sig
 
 ## Ready today
 
-- `AGENTS.md`, which every agent of the mind reads, already says: when it is unclear who stands
-  behind a request, and always before something consequential, ask for a signature. Its section
-  "When you are unsure who asks, ask for a signature" has the call,
+- The rule is in `AGENTS.md`, which every agent of the mind reads: "When you are unsure who asks,
+  ask for a signature". It says what counts as unusual, that an unusual request waits for a
+  signature even when it seems to come from a member, and how to ask:
   `itx.approvals.proposeStatement({ path, type, payload, signerEmail })`, which answers `signAt`.
+  Do not repeat its words here or in `mind.md`; point at it.
+- What the owner's line adds: `AGENTS.md` asks because an address or a number can be forged. The
+  line below is the owner's own word that every unusual request waits for their signature on
+  every channel, also on one the mind trusts (the Dash, a passkey session, their own phone).
 - `signAt` is a page that needs no sign-in. Whoever opens it signs with a passkey, for a day. A
   message from a friend's phone can get that link back, and the owner signs it there with their
   own passkey.
@@ -28,9 +32,9 @@ Offer it late, once the owner relies on the mind: it acts for them by mail, chat
 the idea in one sentence, then ask. On a yes, the helper `/agents/onboarding/mind-md` appends
 this to `mind.md`, under a heading `## Signed requests`, in one commit, the tip as `parent`:
 
-> Ask for a signed statement for any unusual or high-risk request, even on a channel you trust:
-> the owner's own mail, chat or phone. Send the `signAt` link, act only after the signed event
-> lands, and check its signer (AGENTS.md, "When you are unsure who asks, ask for a signature").
+> An unusual request (AGENTS.md, "When you are unsure who asks, ask for a signature") waits for my
+> signature on every channel, also on one you trust: the Dash, my own mail, chat or phone. Ask as
+> that section says.
 
 Then let them sign one, from another device if they have one at hand:
 

@@ -40,7 +40,6 @@ test("the Dash's Share makes a link that the call's share rules take: Meet's gue
     endLink(link: string): { type: string; payload: { link: string } };
     hashOfSecret(secret: string): Promise<string>;
     agentPathOf(value: unknown): string | null;
-    LIFETIMES: { ms: number }[];
     LONGEST_LIFETIME: number;
   };
   const now = Date.parse("2026-11-20T12:00:00.000Z");
@@ -64,8 +63,7 @@ test("the Dash's Share makes a link that the call's share rules take: Meet's gue
   expect(isLive(made.links[0]!, now + 1)).toBe(true);
   const ended = reduceShare(made, { ...links.endLink(event.payload.link), createdAt, source });
   expect(isLive(ended.links[0]!, now + 1)).toBe(false);
-  // the longest choice is within the share rules' own limit
-  expect(Math.max(...links.LIFETIMES.map((choice) => choice.ms))).toBe(7 * 24 * 3_600_000);
+  // the longest life is the share rules' own limit
   expect(links).toMatchObject({ LONGEST_LIFETIME: LONGEST_LIFETIME_MS });
   // an agent's path only, as written
   expect(

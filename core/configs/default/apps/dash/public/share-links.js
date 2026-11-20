@@ -1,6 +1,6 @@
 // share-links.js — PURE: THE TEMPLATE'S ONE LINK-MAKING for guests, and the event that ends a link.
-// The Dash's Share (app.js, agent-share.js) and Meet's page append what it makes through the
-// member's own stub; `itx.config.shareAgent` (../../../call/share-api.ts) appends it as the config.
+// The Dash's Share (the kit's, which app.js's `share` hands it to) and Meet's page append what it
+// makes through the member's own stub; `itx.config.shareAgent` (../../../call/share-api.ts) appends it as the config.
 // The events and their rules are the call's (../../../call/share.ts): a link lets a guest into that
 // one agent's chat and call, through Meet's guest page (`https://meet.<zone>/join<agent>#<secret>`,
 // ../../meet/app.ts), which checks the link by the call's state. It is a plain module because a
@@ -16,22 +16,8 @@ export const LINK_ENDED = "share/link-ended";
 const HOUR = 3_600_000;
 /** The longest life of a link: the share rules' own limit (call/share.ts `LONGEST_LIFETIME_MS`). */
 export const LONGEST_LIFETIME = 7 * 24 * HOUR;
-/** How long a new link lives: the choices, and the one chosen first. */
-export const LIFETIMES = [
-  { label: "For 1 hour", ms: HOUR },
-  { label: "For 1 day", ms: 24 * HOUR },
-  { label: "For 7 days", ms: 7 * 24 * HOUR },
-];
+/** How long a link lives when its maker says nothing. */
 export const DEFAULT_LIFETIME = 24 * HOUR;
-
-/** WHAT A GUEST GETS, right above "Make a link", so it is on screen at every press of it. True for
- *  an agent with tools and secrets: the platform's view of the context hides addresses, not what
- *  people typed. */
-export const GUEST_GETS = [
-  "Whoever has this link can read this whole conversation: everything people typed here, and the agent's scripts and their results.",
-  "They can write to the agent and join its call, and the agent acts for them with everything it can reach: its tools, its secrets and its files.",
-  "A link works until it ends, and you can end it here.",
-];
 
 /** One part of an agent's path: a letter or digit first, then letters, digits and `._:@+-`. */
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,127}$/;

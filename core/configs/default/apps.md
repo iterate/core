@@ -118,19 +118,17 @@ only draws around one of iterate's pages needs the one line alone.
 
 **Who else is here, and Share.** The Agents row has `presence: true`: an agent's chat shows who
 else has it open and who is typing (from the context's own subscription rows; nothing durable is
-written for it). Share, the button beside them in the agent's header
-(`apps/dash/public/agent-share.js`), makes links that let people who are not members into that
-one agent's chat and call, with a name and no account: its first open turns the agent's call on
-(the call's facet holds the links, `call/share.ts`), and a link opens Meet's guest page,
-`https://meet.<zone>/join<agent>#<secret>`. The link is shown once; the log keeps its secret's
-hash alone. A link lives an hour, a day or 7 days, and ends sooner when a member ends it there.
-The Agents row's `share` gives a kit build that knows it Share of its own, beside the call's
-controls: the same links and, below them, "Add to calendar" (Google Calendar's form or an .ics
-file), which holds the agent's page or the link just made. agent-share.js then draws nothing.
+written for it). It has `share` too: Share, a button beside the call's controls in the agent's
+header, makes links that let people who are not members into that one agent's chat and call, with
+a name and no account. Its first open turns the agent's call on (the call's facet holds the links,
+`call/share.ts`), and a link opens Meet's guest page, `https://meet.<zone>/join<agent>#<secret>`.
+The link is shown once; the log keeps its secret's hash alone. A link lives an hour, a day or 7
+days, and ends sooner when a member ends it there. Below the links, "Add to calendar" makes
+Google Calendar's form or an .ics file, which holds the agent's page or the link just made.
 `share.make` and `share.end` in `app.js` make and end a link with `share-links.js`, the one module
-that makes a link: Meet's page and `itx.config.shareAgent` (`call/share-api.ts`) use it too. The
-member's agent makes, lists and ends links with `itx.config.shareAgent`, `shareLinks` and
-`endShare` ([AGENTS.md](AGENTS.md)).
+that makes a link: Meet's page (its twin in Meet's folder) and `itx.config.shareAgent`
+(`call/share-api.ts`) use it too. The member's agent makes, lists and ends links with
+`itx.config.shareAgent`, `shareLinks` and `endShare` ([AGENTS.md](AGENTS.md)).
 
 **An agent's tools in the page are off.** `pageTools: true` on the Agents row of `app.js` makes
 each member's open agent page lend that agent `itx.page.<person>.<tab>` while the page is open:
@@ -339,7 +337,8 @@ chat with its call at `/contexts/<agent>`. It has no API of its own: the page ho
   call, and an agent starts a meeting the same way (`apps/meet/meeting.ts`).
 - **A meeting's page** is the agent's chat (Chat | Events: Events is the raw log), the call's bar,
   its tiles, a pop-out of the tiles, "Add to calendar" (Google Calendar's form, or an `.ics` file
-  built in the page) and the links for guests (7 days at most). The pop-out works in Chrome and
+  built in the page) and the links for guests (7 days at most). The Dash's agent page has the
+  same links and invite for a member (Share, "The Dash" above); a guest always comes in here. The pop-out works in Chrome and
   Edge alone (Document Picture-in-Picture): other browsers get no button.
 - **Guests** come by a share link, `/join/<agent>#<secret>`: the page keeps the secret in the tab
   (in the address, when the tab cannot store it), the guest signs in with a name, and `app.ts`'s
