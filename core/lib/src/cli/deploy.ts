@@ -23,6 +23,7 @@
 // the terminal.
 import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
+  appendFileSync,
   createWriteStream,
   existsSync,
   mkdirSync,
@@ -245,27 +246,80 @@ const MailForward = z.object({ forwardTo: z.string() });
 /** The forward address that a config's `mail` names, or undefined. */
 export const forwardOf = (mail: unknown) => MailForward.safeParse(mail).data?.forwardTo;
 
-/** THE CHECK AFTER A DEPLOY, which a read that failed does not fail: up to five reads of the
- *  boundary's settings, `pause` between them, until one answers 200 and holds all. A read that is
- *  not fresh yet, a 429 or a 5xx is read again. `held`; the last 200 read's miss; or `unread`
- *  with the last status when no read answered 200. */
-export async function boundaryCheck(
-  read: () => Promise<{ status: number; result?: unknown }>,
+/** The longest wait for Cloudflare to show the boundary's new settings. A NEW WORKER'S SETTINGS
+ *  LAG: for more than a minute after Alchemy made it, Cloudflare can answer "does not exist"
+ *  (10007), or a 200 without the deployed config (most likely the empty script that Alchemy
+ *  makes first). The slowest measured new Worker showed its config at 79 s; a Worker that exists
+ *  shows its new settings at the first read. 3 min is more than twice 79 s. */
+export const BOUNDARY_WAIT_MS = 3 * 60_000;
+
+/** What each line the command says while it waits for the boundary holds, after the time. */
+export const WAITING_FOR_BOUNDARY =
+  "waiting for Cloudflare to show the boundary Worker's new settings";
+
+/** One read of the boundary's settings as a line of the deploy's log: the status, Cloudflare's
+ *  error, the bindings' names, and the keys at which DEPLOY_CONFIG differs. Never a value. */
+export function boundaryRead(
+  answer: { status: number; result?: unknown; error?: string },
   deployed: Record<string, unknown>,
-  pause: () => Promise<unknown>,
 ) {
+  if (answer.status !== 200) return `${answer.status} ${answer.error || ""}`.trim();
+  const bindings = WorkerSettings.safeParse(answer.result).data?.bindings || [];
+  const text = bindings.find((binding) => binding.name === "DEPLOY_CONFIG")?.text;
+  const kept = parsed(z.record(z.string(), z.unknown()), text || "");
+  const wanted: Record<string, unknown> = JSON.parse(JSON.stringify(deployed));
+  const differs = kept
+    ? [...new Set([...Object.keys(kept), ...Object.keys(wanted)])].filter(
+        (key) => !isDeepStrictEqual(kept[key], wanted[key]),
+      )
+    : undefined;
+  return `200 bindings ${bindings.map((binding) => binding.name).join(",") || "none"}; DEPLOY_CONFIG ${
+    !kept ? "absent" : differs?.length ? `differs at ${differs.join(",")}` : "same"
+  }`;
+}
+
+/** THE CHECK AFTER A DEPLOY: reads of the boundary's settings, 3 s apart, until one answers 200
+ *  and holds all, for at most `BOUNDARY_WAIT_MS`. Each other read is "not yet": a new Worker's
+ *  settings lag (`BOUNDARY_WAIT_MS`). It says a line when it begins to wait and each 30 s.
+ *  `held`; else, at the bound, the last 200 read's miss or `unread` with the last status, and
+ *  each read as a line of the deploy's log (`boundaryRead`). */
+export async function boundaryCheck(
+  read: () => Promise<{ status: number; result?: unknown; error?: string }>,
+  deployed: Record<string, unknown>,
+  { say = () => {}, pause = sleep, now = Date.now }: BoundaryWaitDeps = {},
+): Promise<
+  { held: true } | { miss: string; reads: string[] } | { unread: number; reads: string[] }
+> {
+  const began = now();
+  const reads: string[] = [];
   let miss: string | null = null;
   let status = 0;
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    if (attempt > 1) await pause();
+  let told = -1;
+  for (;;) {
     const answer = await read();
     status = answer.status;
-    if (status !== 200) continue;
-    miss = boundaryMisses(answer.result, deployed);
-    if (!miss) return { held: true as const };
+    if (status === 200) miss = boundaryMisses(answer.result, deployed);
+    if (status === 200 && !miss) return { held: true };
+    const waited = now() - began;
+    reads.push(`${duration(waited)}: ${boundaryRead(answer, deployed)}`);
+    if (waited >= BOUNDARY_WAIT_MS) return miss ? { miss, reads } : { unread: status, reads };
+    if (Math.floor(waited / 30_000) > told) {
+      told = Math.floor(waited / 30_000);
+      say(
+        told
+          ? `${duration(waited)}: ${WAITING_FOR_BOUNDARY}`
+          : `0 s: ${WAITING_FOR_BOUNDARY}, for at most ${duration(BOUNDARY_WAIT_MS)}`,
+      );
+    }
+    await pause(3000);
   }
-  return miss ? { miss } : { unread: status };
 }
+
+type BoundaryWaitDeps = {
+  say?: (line: string) => void;
+  pause?: (ms: number) => Promise<unknown>;
+  now?: () => number;
+};
 
 /** WHETHER A PRODUCT OF THE ACCOUNT IS ON (Workers Paid, R2), by a read of one of its paths: 200
  *  is on, and Cloudflare's refusal (a 4xx but 429) is off. A READ THAT FAILED IS NOT A FACT: a
@@ -2278,26 +2332,31 @@ export async function deployMind(input: DeployInput) {
     rmSync(markerFile, { force: true });
     deploying.done(`Deployed (${seconds(deployBegan)}). Full log: ${log.replace(homedir(), "~")}`);
     const boundary = `/accounts/${account.id}/workers/scripts/iterate-${stageName}-boundary/settings`;
-    const check = await boundaryCheck(
-      () => cf("GET", boundary),
-      deployedConfig,
-      () => sleep(2000),
-    );
-    // A miss is a fault of this release, not of the person's account or input, and a second run
-    // deploys the same code: so the words say that the mind runs and ask for a report. The
-    // command still ends every later step (the mind's identity, its first sign-in) and then fails.
+    const checking = wait("Checking that the boundary Worker holds this deploy's config");
+    const check = await boundaryCheck(() => cf("GET", boundary), deployedConfig, {
+      say: checking.say,
+    });
+    if ("reads" in check)
+      appendFileSync(
+        log,
+        `\nThe check's reads of the boundary Worker's settings after the deploy:\n${check.reads.join("\n")}\n`,
+      );
+    // A miss after the whole wait: Cloudflare was slower still, or another deploy of the mind ran
+    // in between. A next run starts from the config that the boundary holds then and checks
+    // again, so it mends the one and keeps the other's config. The command still ends every later
+    // step (the mind's identity, its first sign-in) and then fails.
     const missed =
       "miss" in check
-        ? `The deploy finished and the mind runs. But its boundary Worker does not hold what this run deployed: ${check.miss}. This is a fault in this release of iterate, not in your account or in what you typed, and running the command again does not mend it. Please report it to iterate with this message. The deploy's log: ${log}`
+        ? `The deploy finished and the mind runs. But after ${duration(BOUNDARY_WAIT_MS)} of reads, its boundary Worker does not hold what this run deployed: ${check.miss}. Cloudflare may show a new Worker's settings late, or another deploy of this mind may have run since this one began. Run the command again in a few minutes: it starts from the config that the boundary Worker holds then, and checks again. If this message comes again, please report it to iterate with this message. Each read is in the deploy's log: ${log}`
         : undefined;
-    if (missed) p.log.error(missed);
+    if (missed) checking.fail(missed);
     else if ("unread" in check)
-      p.log.warn(
-        `Could not read the boundary Worker's settings (status ${check.unread}), so this run did not check that it holds the deploy's config. The deploy itself succeeded.`,
+      checking.fail(
+        `Could not read the boundary Worker's settings in ${duration(BOUNDARY_WAIT_MS)} (the last status ${check.unread}), so this run did not check that it holds the deploy's config. The deploy itself succeeded. Each read is in the deploy's log: ${log}`,
       );
     else {
       const forwardTo = forwardOf(config.mail);
-      p.log.success(
+      checking.done(
         forwardTo
           ? `The boundary holds this deploy's config, and forwards each mail to ${forwardTo}.`
           : "The boundary holds this deploy's config (no mail forward).",

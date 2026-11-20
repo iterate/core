@@ -14,6 +14,8 @@ import {
 } from "./cloudflare-access.ts";
 import {
   boundaryCheck,
+  boundaryRead,
+  BOUNDARY_WAIT_MS,
   boundaryMisses,
   candidatesOf,
   createDeployProgress,
@@ -45,6 +47,7 @@ import {
   STORE_WAIT_MS,
   waitForStore,
   WAITING_FOR_STORE,
+  WAITING_FOR_BOUNDARY,
   stageNameOf,
   telemetryTokenStep,
   unfinishedDeployIn,
@@ -1137,7 +1140,7 @@ test("after a deploy the boundary holds the whole config, and the mail forward e
   expect(boundaryMisses(settings(withoutMail), withoutMail)).toBeNull();
 });
 
-test("the check after a deploy reads again before it calls a miss, and a read that never answers is no miss", async () => {
+test("the check after a deploy waits, bounded, until the boundary holds the new settings; a read that never answers is no miss", async () => {
   const deployed = { ...deployConfigOf(answers), mail: { forwardTo: "team@group.example" } };
   const held = {
     status: 200,
@@ -1149,36 +1152,81 @@ test("the check after a deploy reads again before it calls a miss, and a read th
     },
   };
   const stale = { status: 200, result: { bindings: held.result.bindings.slice(0, 1) } };
-  const check = async (...reads: { status: number; result?: unknown }[]) => {
-    let pauses = 0;
-    const outcome = await boundaryCheck(
-      async () => reads.shift() ?? { status: 0 },
-      deployed,
-      async () => pauses++,
-    );
-    return { outcome, pauses };
+  // the reads of a new Worker's lag: the empty script that Alchemy makes first, and a Worker that
+  // Cloudflare says does not exist
+  const empty = { status: 200, result: { bindings: [] } };
+  const absent = { status: 404, error: "This Worker does not exist on your account. (code 10007)" };
+  const other = {
+    status: 200,
+    result: {
+      bindings: [
+        {
+          type: "plain_text",
+          name: "DEPLOY_CONFIG",
+          text: JSON.stringify({ ...deployed, mindId: "another-run" }),
+        },
+        held.result.bindings[1],
+      ],
+    },
   };
-  // 200 at once
-  expect(await check(held)).toEqual({ outcome: { held: true }, pauses: 0 });
-  // a 429, then a 200
-  expect(await check({ status: 429 }, held)).toEqual({ outcome: { held: true }, pauses: 1 });
-  // a read that is not fresh yet, then one that holds all
-  expect(await check(stale, held)).toEqual({ outcome: { held: true }, pauses: 1 });
-  // five reads that each miss the forward
-  expect(await check(stale, stale, stale, stale, stale)).toMatchObject({
-    outcome: { miss: expect.stringMatching(/forwards none/) },
-    pauses: 4,
+  // each read takes no time; each pause moves the clock on
+  const check = async (...reads: { status: number; result?: unknown; error?: string }[]) => {
+    let t = 0;
+    let pauses = 0;
+    const said: string[] = [];
+    const last = reads.at(-1);
+    const outcome = await boundaryCheck(async () => reads.shift() ?? last!, deployed, {
+      say: (line) => said.push(line),
+      pause: async (ms) => {
+        pauses++;
+        t += ms;
+      },
+      now: () => t,
+    });
+    return { outcome, pauses, said, waited: t };
+  };
+  // a Worker that exists holds the new settings at the first read, and nothing is said
+  expect(await check(held)).toEqual({ outcome: { held: true }, pauses: 0, said: [], waited: 0 });
+  // a new Worker: "does not exist", then the empty script, then for 75 s a stale read, then all
+  const lag = Array<typeof stale>(25).fill(stale);
+  expect(await check(absent, empty, ...lag, held)).toEqual({
+    outcome: { held: true },
+    pauses: 27,
+    said: [
+      `0 s: ${WAITING_FOR_BOUNDARY}, for at most 3 min`,
+      `30 s: ${WAITING_FOR_BOUNDARY}`,
+      `1 min: ${WAITING_FOR_BOUNDARY}`,
+    ],
+    waited: 81_000,
   });
-  // five reads that never answer 200: no miss, the last status
-  expect(
-    await check(
-      { status: 500 },
-      { status: 429 },
-      { status: 500 },
-      { status: 503 },
-      { status: 502 },
-    ),
-  ).toEqual({ outcome: { unread: 502 }, pauses: 4 });
+  // another run's config, to the bound: a miss, with each read for the deploy's log
+  const missed = await check(absent, other);
+  expect(missed).toMatchObject({
+    outcome: { miss: expect.stringMatching(/DEPLOY_CONFIG is not the config/) },
+    waited: BOUNDARY_WAIT_MS,
+  });
+  expect(missed.said).toHaveLength(BOUNDARY_WAIT_MS / 30_000);
+  expect(missed.said.at(-1)).toBe(`2 min 30 s: ${WAITING_FOR_BOUNDARY}`);
+  const reads = "reads" in missed.outcome ? missed.outcome.reads : [];
+  expect(reads).toHaveLength(BOUNDARY_WAIT_MS / 3000 + 1);
+  expect(reads.slice(0, 2)).toEqual([
+    "0 s: 404 This Worker does not exist on your account. (code 10007)",
+    "3 s: 200 bindings DEPLOY_CONFIG,MAIL_FORWARD_TO; DEPLOY_CONFIG differs at mindId",
+  ]);
+  expect(reads.at(-1)).toMatch(/^3 min: 200/);
+  // a read names no value of the config
+  expect(reads.join("\n")).not.toContain("another-run");
+  expect(reads.join("\n")).not.toContain("team@group.example");
+  // a forward that never shows is a miss too; the empty script's read says so
+  expect(await check(stale)).toMatchObject({
+    outcome: { miss: expect.stringMatching(/forwards none/) },
+  });
+  expect(boundaryRead(empty, deployed)).toBe("200 bindings none; DEPLOY_CONFIG absent");
+  // reads that never answer 200: no miss, the last status
+  expect(await check({ status: 500 }, { status: 429 }, { status: 502 })).toMatchObject({
+    outcome: { unread: 502 },
+    waited: BOUNDARY_WAIT_MS,
+  });
 });
 
 test("a product is on at 200 and off at Cloudflare's refusal; a read that failed is read again, and three are a stop, never 'off'", async () => {
