@@ -39,11 +39,16 @@ export function assertSecretPath(path: string): string {
 // the placeholder is substituted inside the decoded `user:password` and the credential encoded
 // again — the Authorization a git remote's userinfo becomes (`https://x:getSecret(…)@host/repo.git`,
 // as git and curl send it). No JSON-body template — the body is never scanned.
+//
+// NO TWO RUNS OF WHITESPACE STAND SIDE BY SIDE in the pattern: the run before the closing
+// parenthesis is inside the optional `{ … }` part. Two neighbours would share a long run of spaces
+// in every way it splits, and the time to refuse `getSecret("/secrets/x"` with n spaces after it
+// would grow with n squared. A header from outside is matched before anything else reads it.
 const QUOTE = '(?:"|%22)';
 const SPACE = "(?:\\s|%20)*";
 export const SECRET_PLACEHOLDER = new RegExp(
   `getSecret\\(${SPACE}${QUOTE}(/secrets/${SECRET_NAME})${QUOTE}${SPACE}` +
-    `(?:,${SPACE}(?:\\{|%7B)${SPACE}(?:field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}|(appJwt)${SPACE}:${SPACE}true)${SPACE}(?:\\}|%7D))?${SPACE}\\)`,
+    `(?:,${SPACE}(?:\\{|%7B)${SPACE}(?:field${SPACE}:${SPACE}${QUOTE}([^"%\\s]+)${QUOTE}|(appJwt)${SPACE}:${SPACE}true)${SPACE}(?:\\}|%7D)${SPACE})?\\)`,
   "g",
 );
 
