@@ -4,7 +4,7 @@
 //           and below it the optional card "Connect Cloudflare" (steps/connect-cloudflare.ts)
 //   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/onboarding's
 //           first assistant response, then show the verified result and clear Done state with link
-//           into https://dash.<zone>/agents?contextPath=/agents/onboarding)
+//           into https://dash.<zone>/agents/agents/onboarding)
 import { html, render, useCallback, useEffect, useRef, useState } from "@iterate-com/ui/page";
 import { Badge } from "@iterate-com/ui/components/ui/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";

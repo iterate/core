@@ -417,7 +417,7 @@ export default class extends IterateConfigEntrypoint {
 
   /** `itx.config.dashLink(input)`: a canonical URL to a view in this mind's Dash
    *  (`apps/dash/links.ts`). Takes a structured destination (`{ view: "agent", contextPath }`,
-   *  `{ view: "context", contextPath }`, `{ view: "repo", repo?, file? }`, `{ view: "page", page,
+   *  `{ view: "context", contextPath }`, `{ view: "repos", repo?, file? }`, `{ view: "page", page,
    *  rest? }`, or a named view like `"home"`, `"secrets"`, `"integrations"`). The origin is always
    *  this mind's Dash; the returned URL grants no permission. */
   async dashLink(input: DashLinkInput) {

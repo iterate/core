@@ -6,7 +6,8 @@ The owner should come away with: their own Claude or Codex can use the mind, and
 
 - The mind is an MCP server at `https://<control-plane hostname>/mcp`, with one tool, `run`: a script,
   `async (itx) => { … }`, run at the mind's root as the person signed in. Every run is logged.
-  The Dash shows the same commands at `https://dash.<zone>/mcp`.
+  Opening `https://<control-plane hostname>/mcp` in a browser shows the Claude and Claude Code
+  connect commands (the Dash no longer has an `/mcp` page).
 - Claude (the app or claude.ai): Settings, Connectors, "Add custom connector", with that address.
 - Claude Code: `claude mcp add --transport http <name> https://<control-plane hostname>/mcp`, where
   `<name>` is the control-plane hostname with a hyphen for each dot (`iterate-example-com` for
