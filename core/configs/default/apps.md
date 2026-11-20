@@ -244,12 +244,46 @@ Meet (below) is the template's page for it.
   and the host tab gives it to the model to say. One request at a time, 6 a minute; an answer
   waits 90 s at most, and the request ends when the voice agent leaves.
   Failures of the SFU and OpenAI go to the audit log `<agent>/call`.
+- **An agent calls a member to a call, on their Mac.** A member's Mac with the iterate menu-bar
+  app (`@iterate-com/mac-app`, lent as `itx.<name>`, for example `itx.jane.mac`) is an endpoint
+  device of the mind, and banners on its screen are one of its outputs (Banners not Off in its
+  panel). `mac.banner.show` shows a title, text and one to three buttons, and answers the label
+  pressed (`{ pressed }`, or `{ pressed: null, why }`); a button's `open` page, on the mind's own
+  domain, opens in the browser after the press. `mac.call.ring` is a banner that looks like a call:
+  Accept opens the agent's page in the Dash with `call=join`, which turns the call on if it is off
+  and joins it as the page loads, muted (`{ accepted }`, or `{ accepted: false, why }`). Show one only
+  when the person asked for it or said it may interrupt them.
+
+  ```js
+  const mac = itx.jane.mac; // the Macs: (await itx.rewriteRules.list()).filter((rule) => rule.description?.includes("iterate menu-bar app"))
+  await mac.call.ring({
+    agent: "/agents/lunch",
+    from: "Lunch planner",
+    reason: "Friday's table needs a yes",
+  });
+  await mac.banner.show({
+    title: "Design review is starting",
+    body: "Misha asks you to join",
+    buttons: [
+      {
+        label: "Join",
+        style: "accept",
+        open: "https://meet.<zone>/contexts/agents/meet/<meeting>",
+      },
+      { label: "Not now" },
+    ],
+  });
+  ```
+
 - **The page's parts** (the UI kit): `useCall(context, page, liveValue)` holds the call in the tab;
   `CallBar` is its controls, small enough for an agent's header; `CallTiles` is the cameras, the
   screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,
   pickers for the microphone, camera and speaker, repair of a failed connection, three simulcast
   layers for a camera. Capture starts only by the person's own press: a page that joins again by
-  itself keeps the mute, and its camera and screen stay off. `useCallPip`, `CallPipButton` and
+  itself keeps the mute, and its camera and screen stay off. A Dash link with `call=join`
+  (`/agents?contextPath=<agent>&call=join`) joins the call as the page loads, but anyone can send
+  a member such a link, so that join only listens: no microphone opens and nothing is sent until
+  the person presses Unmute, and the page says so. `useCallPip`, `CallPipButton` and
   `CallPipPlace` put the tiles in a floating window where the browser has Document
   Picture-in-Picture.
 
