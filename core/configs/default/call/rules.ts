@@ -161,11 +161,18 @@ const GONE = "This page's call ended.";
 /** The row is there, and `admission` (when the page sent one) is its current one. */
 const isCurrent = (row: { admission?: string } | undefined, admission: string | undefined) =>
   Boolean(row) && (!admission || row!.admission === admission);
+/** A ring's one-time code as a page sends it: any string, checked only by its hash. */
+const RingCode = z.string().min(1).max(64);
 const JoinInput = z
   .union([
     // `seq`: the page's own order of its admits (a page's later admit has a higher one). An admit
-    // with none (a kit from before it) replaces the row's admission as before.
-    z.object({ admit: z.string().min(1).max(64), seq: z.number().int().nonnegative().optional() }),
+    // with none (a kit from before it) replaces the row's admission as before. `ring`: the code
+    // of a ring (`ring`), which a member's new admission uses up.
+    z.object({
+      admit: z.string().min(1).max(64),
+      seq: z.number().int().nonnegative().optional(),
+      ring: RingCode.optional(),
+    }),
     z.object({ admission: z.string().min(1).max(64) }),
   ])
   .optional();
@@ -206,6 +213,10 @@ const CallData = z.object({
     .nullish(),
   /** When a delegation last ended with no answer: an untagged message is late for a while after. */
   unansweredAt: z.number().optional(),
+  /** The rings' codes not used yet (`ring`): each code's SHA-256, never the code. */
+  rings: z
+    .array(z.object({ hash: z.string(), until: z.number(), voiceAgent: z.boolean() }))
+    .optional(),
 });
 export type CallData = z.infer<typeof CallData>;
 // WHAT A PAGE SENDS, parsed where each method begins: a guest's view hands over any JSON.
@@ -242,6 +253,16 @@ const DelegateInput = z.object({
   delegation: z.string().regex(/^[\w-]{1,100}$/),
   transcript: z.string().max(20_000),
 });
+/** What a ring asks of the page its code opens: the voice agent too. */
+const RingInput = z.object({ voiceAgent: z.literal(true).optional() }).optional();
+/** A ring's code lasts two minutes. */
+const RING_MS = 2 * 60_000;
+/** A ring's code as the call keeps it: its SHA-256, in hex. */
+async function ringHash(code: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(code));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** The voice agent's act: start it with the host page's SDP offer, or stop it. */
 const ActInput = z.union([
   // `invite`: the page's own id of this invite, which the claim takes
@@ -353,9 +374,20 @@ export class Call {
     const refresh = parsed.data && "admission" in parsed.data ? parsed.data.admission : undefined;
     const admit = parsed.data && "admit" in parsed.data ? parsed.data.admit : undefined;
     const seq = parsed.data && "admit" in parsed.data ? parsed.data.seq : undefined;
+    const code = parsed.data && "admit" in parsed.data ? parsed.data.ring : undefined;
     const { who, member, own } = await this.#admit(asked, page);
+    const hash = code && member ? await ringHash(code) : undefined;
     let admission = refresh || admit || crypto.randomUUID();
     const closes: string[] = [];
+    let rang: { voiceAgent: boolean } | undefined;
+    // a member's new admission uses up a live code of a ring: its page may open the microphone
+    // at once, as the person's Accept on their Mac was their press. Any other code is no error.
+    const useRing = (data: CallData) => {
+      const now = this.#deps.now();
+      const found = data.rings?.find((one) => one.hash === hash && one.until > now);
+      data.rings = data.rings?.filter((one) => one !== found && one.until > now);
+      if (found) rang = { voiceAgent: found.voiceAgent };
+    };
     await this.#locked((data, after) => {
       if (refresh) {
         if (data.pages[own]?.admission !== refresh) refuse(GONE);
@@ -373,6 +405,7 @@ export class Call {
           // voice agent too
           closes.push(...[row.pub, row.sub].filter((id): id is string => Boolean(id)));
           Object.assign(row, { admission, seq, pub: undefined, sub: undefined, tracks: {} });
+          if (hash) useRing(data);
           if (data.ai?.page === own) this.#endAi(data, after, "its host joined again");
         } else admission = row.admission || admission;
         // who and whether a member, from this call's stamp: a member's row is never swept as a
@@ -396,6 +429,7 @@ export class Call {
         refuse(`A guest is in a call on ${MAX_PAGES_PER_GUEST} pages at most. Leave on one first.`);
       data.pages[own] = { who, member, since: this.#deps.now(), tracks: {}, admission, seq };
       data.since ??= this.#deps.now();
+      if (hash) useRing(data);
       after.notes.push([`${nameOf(who)} joined the call.`, { kind: "joined", who }]);
     });
     const { turnKeyId, appId } = await this.setup();
@@ -412,7 +446,31 @@ export class Call {
         await this.#deps.audit("call/turn-failed", { error: String(error) }).catch(() => {});
         return [];
       });
-    return { iceServers, ttlS, admission };
+    // `ring`: this join used a ring's code up (none: a plain join)
+    return { iceServers, ttlS, admission, ring: rang };
+  }
+
+  /** A ring of a member's device (the Mac's `call.ring`): a one-time code for the page it opens.
+   *  The agent's code or a member asks it; a guest never. The code lasts two minutes and one
+   *  join; the call keeps only its hash, and writes it in no note, audit line or live state.
+   *  `voiceAgent`: the page invites the voice agent too, as the member's press would. */
+  async ring(asked: Asked, input?: unknown) {
+    const parsed = RingInput.safeParse(input);
+    if (!parsed.success) refuse("A ring takes nothing or { voiceAgent: true }.");
+    if (asked?.principal?.actor && !asked.member) refuse("Only a member or the mind rings.");
+    const code = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(18))))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_");
+    const hash = await ringHash(code);
+    const until = this.#deps.now() + RING_MS;
+    const voiceAgent = parsed.data?.voiceAgent === true;
+    await this.#locked((data) => {
+      const now = this.#deps.now();
+      const live = (data.rings || []).filter((one) => one.until > now);
+      // the last 8 not used yet: a ring loop keeps no more
+      data.rings = [...live, { hash, until, voiceAgent }].slice(-8);
+    });
+    return { code, until };
   }
 
   /** One step of the SFU's signalling for this page. Answers the SFU's description (an answer to

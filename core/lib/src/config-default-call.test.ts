@@ -1241,6 +1241,65 @@ test("admits: a member always, a guest while a live link lists them, nobody else
   expect(await admits(undefined, live)).toBe(false);
 });
 
+test("a ring's code opens the microphone for one member's join, once, within two minutes, and is kept as a hash alone", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  // the agent's own code names nobody, and rings
+  const { code, until } = await room.call.ring(undefined);
+  expect(code).toMatch(/^[\w-]{24}$/);
+  expect(until).toBe(room.clock.now + 120_000);
+  expect(await room.call.join(owner, "page-owner", { admit: "a1", ring: code })).toMatchObject({
+    admission: "a1",
+    ring: { voiceAgent: false },
+  });
+  // used up: a new admission with the same code is a plain join
+  expect(await room.call.join(owner, "page-owner", { admit: "a2", ring: code })).toMatchObject({
+    ring: undefined,
+  });
+  // the code is in no note, audit line, live state or stored value
+  const written = JSON.stringify([
+    room.notes,
+    room.audits,
+    room.call.live(),
+    await room.deps.load(),
+  ]);
+  expect(written).not.toContain(code);
+});
+
+test("a ring's code that is wrong, old or a guest's is no error: the join goes on as a plain one", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  room.held.set("page-grace", "guest:grace");
+  room.share = shareWith({ guests: ["guest:grace"], until: room.clock.now + 3_600_000 });
+  const { code } = await room.call.ring(owner, { voiceAgent: true });
+  expect(await room.call.join(owner, "page-owner", { admit: "a1", ring: "wrong" })).toMatchObject({
+    ring: undefined,
+  });
+  // a guest's join does not use a member's ring up
+  expect(await room.call.join(grace, "page-grace", { admit: "g1", ring: code })).toMatchObject({
+    ring: undefined,
+  });
+  expect(await room.call.join(owner, "page-owner", { admit: "a2", ring: code })).toMatchObject({
+    ring: { voiceAgent: true },
+  });
+  // two minutes on, a code is old
+  const late = await room.call.ring(owner);
+  room.clock.now += 120_000;
+  expect(await room.call.join(owner, "page-owner", { admit: "a3", ring: late.code })).toMatchObject(
+    { ring: undefined },
+  );
+});
+
+test("a ring is the mind's code's or a member's, never a guest's", async () => {
+  const room = fakeCall();
+  await expect(room.call.ring(grace)).rejects.toThrow("Only a member or the mind rings.");
+  await expect(room.call.ring(owner, { voiceAgent: "please" })).rejects.toThrow(
+    "A ring takes nothing or { voiceAgent: true }.",
+  );
+  expect(CallDurableObject.publicMethods).toContain("ring");
+  expect(CallDurableObject.personMethods).not.toContain("ring");
+});
+
 test("the call's class is in a module that a publication offers a facet's class from", async () => {
   // the platform's rule (core/mind-worker/src/mind/publication.ts `publishedModules`, not exported):
   // a module at the config's root, or an app's backend.ts. The test holds the rule's text, so a
