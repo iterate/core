@@ -132,14 +132,11 @@ const RULE_STANDS =
   "Your signed rule still lets iterate send help and updates to this mind. End it with your passkey to stop that.";
 
 /** THE LINK TO THIS MIND'S PAGE ON iterate Cloud, on each card with a rule: a route of this app
- *  (open-cloud.ts) that signs the open and posts its one-use token, so no link is in the card. */
+ *  (open-cloud.ts) that goes on through this mind's own sign-in, which vouches for the member. */
 const openCloud = (context: StepContext) => ({
   label: "Open iterate Cloud",
   href: `https://onboarding.${context.zone}/open-cloud`,
 });
-
-/** The words of a reason the Cloud refused, for open-cloud.ts. */
-export const failureWords = (reason: string): string | undefined => FAILURES[reason];
 
 /** The reasons whose fix is the update command. */
 const UPDATE_REASONS = new Set(["not-recognised", "no-working-key", "stack-without-proxy"]);

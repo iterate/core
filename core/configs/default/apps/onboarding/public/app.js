@@ -591,8 +591,8 @@ function CloudStep({ card, busy, error, onPress, onSkip, onContinue }) {
     `;
   }
 
-  // this mind's page on iterate Cloud: a plain link to this app's /open-cloud, which signs the
-  // open and posts its one-use token in the new tab (open-cloud.ts)
+  // this mind's page on iterate Cloud: a plain link to this app's /open-cloud, which goes on
+  // through this mind's own sign-in in the new tab (open-cloud.ts)
   const openCloudLink = card.buttons.find((b) => b.href?.endsWith("/open-cloud"));
   let openCloudButton = null;
   if (openCloudLink) {

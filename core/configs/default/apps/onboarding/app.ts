@@ -5,7 +5,7 @@
 //   GET  /ai-status.json         configured AI credentials and mind address (verify-ai.ts `aiStatus`)
 //   POST /collect-openai-key     mind secret-collection link for /secrets/openai
 //   POST /verify-ai              real server-side test LLM inference request (verify-ai.ts `verifyAi`)
-//   GET  /open-cloud             this mind's page on iterate Cloud, by a one-use token (open-cloud.ts)
+//   GET  /open-cloud             303 to this mind's /sign-in/open, on to its page on iterate Cloud (open-cloud.ts)
 // worker.ts guards the host before this file runs: only a member gets here, and nothing of the
 // mind is read or written for anyone else.
 import { type AppDescription, serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
@@ -16,7 +16,6 @@ import { openFile } from "../open-files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
-import { cloudCredit } from "./cloud-credit.ts";
 import { openCloud } from "./open-cloud.ts";
 import { onboardingCards, runStep, stepContext } from "./steps.ts";
 import { aiStatus, collectOpenAiKey, verifyAi } from "./verify-ai.ts";
@@ -55,7 +54,7 @@ export function onboardingApp() {
       }
       if (pathname === "/open-cloud" && request.method === "GET") {
         using itx = host.getItx();
-        return await openCloud(cloudCredit(itx));
+        return openCloud((await itx.whoami()).mindSlug);
       }
       const press = PRESS.exec(pathname);
       if (press && request.method === "POST") {

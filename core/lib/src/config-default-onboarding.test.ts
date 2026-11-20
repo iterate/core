@@ -51,7 +51,6 @@ const MELD = `/minds/${ITERATE_ID}`;
 const NOW = Date.parse("2026-11-18T22:00:00Z");
 const BALANCE = { grantedUsd: 10, spentUsd: 0.42, remainingUsd: 9.58 };
 const MIND_ID = "this-mind-id";
-const OPEN_TOKEN = "one-use-token-aaaaabbbbbccccc";
 const OPEN_LINK = {
   label: "Open iterate Cloud",
   href: "https://onboarding.example.com/open-cloud",
@@ -1297,48 +1296,55 @@ test("enrolled for THIS mind's id settles the step connected, with the secrets, 
   });
 });
 
-test("GET /open-cloud signs one open for each load, and its page posts the one-use token to iterate Cloud at once; no event of the mind holds the token", async () => {
+test("GET /open-cloud for a member: a 303 to this mind's own /sign-in/open, on to its page on iterate Cloud, with no call to iterate.com", async () => {
   const mind = fakeMind({ meld: "member" });
   const fake = fakeCredit();
   const context = contextOf(mind, fake.credit);
   const connected = await runStep(context, STEP, "connect");
   expect(connected.words).toMatch(/Buttons: Try a voice call · Open iterate Cloud · Disconnect/);
   const [card] = await onboardingCards(context);
-  // a plain link to the app's own route: no token in the card
+  // a plain link to the app's own route
   expect(card?.buttons).toContainEqual(OPEN_LINK);
   fake.calls.length = 0;
-  for (const load of [1, 2]) {
-    const answer = await openCloud(fake.credit);
-    expect(answer).toMatchObject({ status: 200 });
-    expect(answer.headers.get("cache-control")).toBe("no-store");
-    expect(answer.headers.get("referrer-policy")).toBe("no-referrer");
-    const html = await answer.text();
-    expect(html).toContain('<form method="post" action="https://cloud.iterate.com/open">');
-    expect(html).toContain(`<input type="hidden" name="token" value="${OPEN_TOKEN}">`);
-    expect(html).toContain("<script>document.forms[0].submit()</script>");
-    expect(html).toContain('<button type="submit">Continue</button>');
-    expect(fake.calls).toHaveLength(load);
-  }
-  expect(fake).toMatchObject({ calls: ["open", "open"] });
-  expect(JSON.stringify([...mind.logs.values()])).not.toContain(OPEN_TOKEN);
+
+  const fetches = vi.spyOn(globalThis, "fetch");
+  const config = Object.create(Config.prototype, {
+    auth: { value: auth },
+    getItx: {
+      value: () => ({
+        whoami: async () => ({ mindSlug: "mind.example.com" }),
+        [Symbol.dispose]: () => {},
+      }),
+    },
+  }) as { fetch(request: Request): Promise<Response> };
+  const answer = await config.fetch(
+    new Request("https://onboarding.example.com/open-cloud", {
+      headers: {
+        "x-itx-principal": JSON.stringify({ actor: "user-1", email: "owner@example.org" }),
+      },
+    }),
+  );
+  expect(answer).toMatchObject({ status: 303 });
+  const location = answer.headers.get("location")!;
+  expect(location).toBe(
+    "https://mind.example.com/sign-in/open?to=https%3A%2F%2Fcloud.iterate.com%2Fmind%3Fmind%3Dmind.example.com",
+  );
+  expect(new URL(location).searchParams.get("to")).toBe(
+    "https://cloud.iterate.com/mind?mind=mind.example.com",
+  );
+  expect(answer.headers.get("cache-control")).toBe("no-store");
+  expect(answer.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(fetches).not.toHaveBeenCalled();
+  expect(fake).toMatchObject({ calls: [] });
+  fetches.mockRestore();
 });
 
-test.for([
-  ["not-recognised", "iterate Cloud did not recognise this mind&#39;s signature. Update your mind"],
-  ["not-approved", "iterate has your request. A person at iterate approves each mind."],
-  ["cloud-unreachable", "<p>iterate Cloud did not answer. Try again.</p>"],
-] as const)(
-  "GET /open-cloud refused as %s: a plain page with the words, and no form",
-  async ([reason, words]) => {
-    const fake = fakeCredit();
-    fake.state.open = { ok: false, reason };
-    const answer = await openCloud(fake.credit);
-    expect(answer).toMatchObject({ status: 502 });
-    const html = await answer.text();
-    expect(html).toContain(words);
-    expect(html).not.toContain("<form");
-  },
-);
+test("GET /open-cloud with no hostname from the mind: a 503 with words, and no redirect", async () => {
+  const answer = openCloud(undefined);
+  expect(answer).toMatchObject({ status: 503 });
+  expect(answer.headers.get("location")).toBeNull();
+  expect(await answer.text()).toBe("This mind did not say its own hostname. Try again.");
+});
 
 test("Open iterate Cloud is on every card with a rule (connected, waiting, spent, ended), and on none without one", async () => {
   const waiting = fakeMind({ meld: "member" });
@@ -1369,22 +1375,6 @@ test("Open iterate Cloud is on every card with a rule (connected, waiting, spent
   const fresh = fakeMind();
   const [offer] = await onboardingCards(contextOf(fresh, fakeCredit().credit));
   expect(offer?.buttons.map((button) => button.label)).not.toContain("Open iterate Cloud");
-});
-
-test("the real open signs one POST to /secret-proxy/open, and takes only a token from its answer", async () => {
-  const good = realCredit({
-    cloud: async () => Response.json({ token: OPEN_TOKEN, expiresAt: NOW + 300_000 }),
-  });
-  expect(await good.credit.open()).toEqual({ ok: true, token: OPEN_TOKEN });
-  expect(good).toMatchObject({
-    cloudRequests: ["POST https://cloud.iterate.com/secret-proxy/open"],
-  });
-  const odd = realCredit({
-    cloud: async () => Response.json({ token: '"><script>', expiresAt: NOW }),
-  });
-  expect(await odd.credit.open()).toMatchObject({ ok: false, reason: "cloud-unreachable" });
-  const refused = realCredit({ cloud: async () => Response.json({}, { status: 401 }) });
-  expect(await refused.credit.open()).toMatchObject({ ok: false, reason: "not-recognised" });
 });
 
 test("the tool refuses a step or an action it does not have, with the ones it has", async () => {
@@ -2342,7 +2332,6 @@ function fakeCredit(
   const state = {
     connect: init.connect || ({ ok: true, balance: BALANCE } as Answer),
     balance: init.balance || ({ ok: true, balance: BALANCE } as Answer),
-    open: { ok: true, token: OPEN_TOKEN } as Awaited<ReturnType<CloudCredit["open"]>>,
     /** A delete of each path named here throws, until the test removes it. */
     deleteThrows: new Set<string>(),
     /** The vault keeps each path named here (a key form or a sign-in on it is open). */
@@ -2366,10 +2355,6 @@ function fakeCredit(
       if (secrets[path] === "own") return "own";
       secrets[path] = "iterate-proxy";
       return "set";
-    },
-    open: async () => {
-      calls.push("open");
-      return state.open;
     },
     deleteProxy: async (path) => {
       if (state.deleteThrows.has(path)) throw new Error("the vault did not answer");

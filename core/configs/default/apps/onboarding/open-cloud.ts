@@ -1,46 +1,24 @@
 // open-cloud.ts — "OPEN ITERATE CLOUD": the route `GET /open-cloud` of the onboarding app, for
-// members (worker.ts guards the host). Each load signs one `POST /secret-proxy/open` as the mind
-// (cloud-credit.ts `open`) and answers a page that posts the answer's token to iterate Cloud's
-// `/open` at once. The token is for one use and lives 5 minutes: it is in this one answer's body
-// alone, never in a URL, a log or an event of the mind.
+// members (worker.ts guards the host). It answers a 303 to this mind's own `/sign-in/open`, which
+// sends the member on to iterate Cloud's page for this mind (`/mind?mind=<hostname>`), and the
+// Cloud signs them in through this mind. It calls nothing at iterate.com: the mind's sign-in
+// vouches for the member (core/auth-worker/src/vouch.ts `opened`).
 import { ITERATE_CLOUD } from "../../cloud-deliveries.ts";
-import type { CloudCredit } from "./cloud-credit.ts";
-import { failureWords } from "./steps/connect-iterate-cloud.ts";
 
-const HEADERS = {
-  "content-type": "text/html; charset=utf-8",
-  "cache-control": "no-store",
-  "referrer-policy": "no-referrer",
-};
-
-export async function openCloud(credit: Pick<CloudCredit, "open">): Promise<Response> {
-  const answer = await credit.open();
-  if (!answer.ok)
-    return page(
-      `<p>${escape(
-        (answer.reason !== "cloud-unreachable" && failureWords(answer.reason)) ||
-          "iterate Cloud did not answer. Try again.",
-      )}</p>`,
-      502,
-    );
-  return page(
-    `<form method="post" action="${ITERATE_CLOUD}/open">` +
-      `<input type="hidden" name="token" value="${escape(answer.token)}">` +
-      `<p>Opening iterate Cloud…</p><button type="submit">Continue</button></form>` +
-      `<script>document.forms[0].submit()</script>`,
-    200,
-  );
+/** `mind`: this mind's control-plane hostname (`itx.whoami().mindSlug`), where its sign-in is. */
+export function openCloud(mind: string | undefined): Response {
+  if (!mind)
+    return new Response("This mind did not say its own hostname. Try again.", {
+      status: 503,
+      headers: { "cache-control": "no-store" },
+    });
+  const to = `${ITERATE_CLOUD}/mind?mind=${encodeURIComponent(mind)}`;
+  return new Response(null, {
+    status: 303,
+    headers: {
+      location: `https://${mind}/sign-in/open?to=${encodeURIComponent(to)}`,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    },
+  });
 }
-
-function page(body: string, status: number): Response {
-  return new Response(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>iterate Cloud</title></head><body>${body}</body></html>`,
-    { status, headers: HEADERS },
-  );
-}
-
-const escape = (text: string) =>
-  text.replace(
-    /[&<>"']/g,
-    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
-  );

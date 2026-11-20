@@ -51,9 +51,6 @@ type CreditRefusal = { ok: false; reason: CreditFailure; message?: string };
 
 export type CreditAnswer = { ok: true; balance: Balance } | CreditRefusal;
 
-/** The token that opens this mind's page on iterate Cloud: one use, 5 minutes. */
-export type OpenAnswer = { ok: true; token: string } | CreditRefusal;
-
 /** What a secret path holds, for the step: nothing, the owner's own value, iterate's proxy, or a
  *  proxy of someone else's. */
 export type SecretKind = "unset" | "own" | "iterate-proxy" | "other-proxy";
@@ -74,9 +71,6 @@ export type CloudCredit = {
   connect(): Promise<CreditAnswer>;
   /** The balance, with no write. */
   balance(): Promise<CreditAnswer>;
-  /** A token that opens this mind's page on iterate Cloud (`POST /secret-proxy/open`, signed as
-   *  `connect`). One use, 5 minutes: open-cloud.ts posts it once, and nothing stores it. */
-  open(): Promise<OpenAnswer>;
   secret(path: string): Promise<SecretKind>;
   /** A secret by iterate's proxy at `path`, where the path holds no value: "own" when it holds
    *  the owner's own (the platform refuses to replace it), "no-proxy-layer" when the stack has no
@@ -107,8 +101,6 @@ const Description = z.object({
   proxy: z.object({ mind: z.string(), url: z.string() }).optional(),
 });
 const StackKey = z.object({ listed: z.boolean().optional() });
-/** The open's answer: a token for one use (32 random bytes, base64url). */
-const OpenToken = z.object({ token: z.string().regex(/^[\w-]{20,200}$/) });
 const Refusal = z.object({ error: z.object({ code: z.string(), message: z.string().optional() }) });
 
 /** The refusal codes of the secret proxy (402, 403 and 409), by the step's name for each. */
@@ -145,7 +137,7 @@ function inTime<T>(answer: Promise<T>): Promise<T> {
 export function cloudCredit(itx: OnboardingItx): CloudCredit {
   /** One request to the proxy, signed as the mind: a 200's body read by `shape`, or why not. */
   const ask = async <T>(
-    path: "connect" | "balance" | "open",
+    path: "connect" | "balance",
     shape: z.ZodType<T>,
   ): Promise<{ ok: true; value: T } | CreditRefusal> => {
     const cloud = itx.minds.get(ITERATE_PROXY.mind);
@@ -206,11 +198,6 @@ export function cloudCredit(itx: OnboardingItx): CloudCredit {
     },
     connect: () => credit("connect"),
     balance: () => credit("balance"),
-    async open() {
-      const answer = await ask("open", OpenToken);
-      if (!answer.ok) return answer;
-      return { ok: true, token: answer.value.token };
-    },
     secret,
     async setByProxy(path, urls) {
       if ((await secret(path)) === "own") return "own";
