@@ -266,11 +266,35 @@ test.for([
     lines: [["warn", retryLine("overloaded", { attempt: 1, retryInMs: 2_000 })]],
   },
   {
-    name: "a call that is not idempotent is made once, and its failure is the caller's",
+    name: "a call that is not idempotent is made once, and its failure is the caller's, with one line",
     failures: ["disconnected"],
     schedule: ONCE_NOW,
     idempotent: false,
     outcome: { error: "disconnected" },
+    lines: [["warn", notRepeatedLine("disconnected")]],
+  },
+  {
+    name: "an overloaded failure of a call that is not idempotent is never made again, on any schedule",
+    failures: ["overloaded"],
+    schedule: CI_HTTP,
+    idempotent: false,
+    outcome: { error: "overloaded" },
+    lines: [["warn", notRepeatedLine("overloaded")]],
+  },
+  {
+    name: "a deploy's reset of a call that is not idempotent is logged at info",
+    failures: ["deploy-reset"],
+    schedule: ONCE_NOW,
+    idempotent: false,
+    outcome: { error: "deploy-reset" },
+    lines: [["info", notRepeatedLine("deploy-reset")]],
+  },
+  {
+    name: "a refusal of a call that is not idempotent logs nothing",
+    failures: ["refused"],
+    schedule: ONCE_NOW,
+    idempotent: false,
+    outcome: { error: "refused" },
     lines: [],
   },
   {
@@ -420,11 +444,11 @@ test.for([
     lines: [],
   },
   {
-    name: "a request that is not idempotent is sent once, its 5xx thrown quoting the answer",
+    name: "a request that is not idempotent is sent once, its 5xx thrown quoting the answer, with one line",
     answers: [500],
     idempotent: false,
     outcome: { error: "POST /things answered HTTP 500: down" },
-    lines: [],
+    lines: ["not-repeated"],
   },
   {
     name: "a 429 is sent again whatever the request: the far side refused it unrun",
@@ -555,6 +579,16 @@ function gaveUpLine(kind: FailureKind, attempts: number) {
     name: "the-call",
     message: `Error: ${kind}`,
     attempts,
+  };
+}
+
+/** The line a platform failure logs when it ends a call that is not idempotent. */
+function notRepeatedLine(kind: FailureKind) {
+  return {
+    event: `call.${kind === "deploy-reset" ? "deploy-reset" : "platform-failure"}-not-repeated`,
+    kind,
+    name: "the-call",
+    message: `Error: ${kind}`,
   };
 }
 

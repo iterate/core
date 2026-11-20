@@ -262,8 +262,10 @@ export const durableLadderDelayMs = (attempt: number, capMs = 30 * 60_000) =>
  *
  * Each repeat logs one line, and so does giving up on an idempotent call the platform still fails
  * (`logPlatformFailure`): `<area>.deploy-reset-retry` at info, `<area>.platform-failure-retry` at
- * warn, then `<area>.…-gave-up`. `describe` says what else a line carries: the call's `name`, which
- * the prd fault alarm groups by, and what it named.
+ * warn, then `<area>.…-gave-up`. A call that is not idempotent is made once, and a platform failure
+ * that ends it logs `<area>.…-not-repeated`: the caller alone can send it again, and without the
+ * line a lost message leaves no trace. `describe` says what else a line carries: the call's `name`,
+ * which the prd fault alarm groups by, and what it named.
  */
 export async function retryPlatformFailures<T>(
   attempt: () => Promise<T>,
@@ -284,8 +286,12 @@ export async function retryPlatformFailures<T>(
       const kind = options.kind(error);
       const idempotent =
         typeof options.idempotent === "function" ? options.idempotent(error) : options.idempotent;
-      if (!idempotent || !isPlatformFailureKind(kind)) throw error;
+      if (!isPlatformFailureKind(kind)) throw error;
       const fields = { message: String(error), ...options.describe(error) };
+      if (!idempotent) {
+        logPlatformFailure(options.area, "not-repeated", kind, fields);
+        throw error;
+      }
       const delayMs = schedule.delaysMs[attempts - 1];
       const repeats =
         delayMs !== undefined &&
