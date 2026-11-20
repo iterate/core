@@ -1,6 +1,6 @@
 // links.ts — CANONICAL DASH URLS for a mind: one pure formatter shared by config code, Slack and
 // mail writers, and `itx.config.dashLink(input)` for agents. Keeps the same encoding rules as
-// `@iterate-com/ui`'s `dashPaths` (`dash-href.ts`), pinned by `dash-routes.fixture.json`.
+// `@iterate-com/ui`'s `dashPaths` (`dash-paths.ts`), pinned by `dash-routes.fixture.json`.
 import { z } from "zod";
 
 /** Page ids allowed as the first path segment (host-reserved paths and dotted names are rejected). */
@@ -50,6 +50,13 @@ function contextPathQuery(contextPath: string): string {
 function finish(origin: string, pathname: string, query = ""): string {
   const href = query ? `${pathname}?${query}` : pathname;
   return `${origin}${href.replace(/[.,:]$/, (char) => TRAILING_PUNCTUATION[char]!)}`;
+}
+
+/** Shared context-path formatter for `/agents` and `/contexts`: sayable non-root paths go in the
+ *  pathname; root `/` and unsayable paths stay in `?contextPath=`. */
+function contextRoute(origin: string, page: "agents" | "contexts", contextPath: string): string {
+  if (sayable(contextPath)) return finish(origin, `/${page}${urlPathOf(contextPath)}`);
+  return finish(origin, `/${page}`, contextPathQuery(contextPath));
 }
 
 function assertApex(apex: string): string {
@@ -102,7 +109,7 @@ export const DashLinkInput = z.discriminatedUnion("view", [
   z.object({ view: z.literal("agent"), contextPath: ContextPath }),
   z.object({ view: z.literal("context"), contextPath: ContextPath }),
   z.object({
-    view: z.literal("repo"),
+    view: z.literal("repos"),
     repo: RepoName.optional(),
     file: RelativePath.optional(),
   }),
@@ -111,12 +118,11 @@ export const DashLinkInput = z.discriminatedUnion("view", [
     page: PageId,
     rest: RelativePath.optional(),
   }),
-  z.object({ view: z.literal("agents"), rest: RelativePath.optional() }),
+  z.object({ view: z.literal("agents") }),
   z.object({ view: z.literal("contexts") }),
   z.object({ view: z.literal("secrets"), rest: RelativePath.optional() }),
   z.object({ view: z.literal("integrations"), rest: RelativePath.optional() }),
   z.object({ view: z.literal("analytics"), rest: RelativePath.optional() }),
-  z.object({ view: z.literal("mcp"), rest: RelativePath.optional() }),
 ]);
 
 export type DashLinkInput = z.infer<typeof DashLinkInput>;
@@ -134,25 +140,21 @@ export function dashLinks(apex: string) {
     home: () => `${origin}/`,
     page,
     agent: (contextPath: string) =>
-      finish(origin, "/agents", contextPathQuery(assertContextPath(contextPath, "agent path"))),
-    context: (contextPath: string) => {
-      assertContextPath(contextPath, "context path");
-      if (sayable(contextPath)) return finish(origin, `/contexts${urlPathOf(contextPath)}`);
-      return finish(origin, "/contexts", contextPathQuery(contextPath));
-    },
-    repo: (repo?: string, file?: string) => {
-      if (!repo && !file) return `${origin}/repo`;
+      contextRoute(origin, "agents", assertContextPath(contextPath, "agent path")),
+    context: (contextPath: string) =>
+      contextRoute(origin, "contexts", assertContextPath(contextPath, "context path")),
+    repos: (repo?: string, file?: string) => {
+      if (!repo && !file) return `${origin}/repos`;
       const target = repo || "config";
       if (!sayableSegment(target)) throw new Error(`dashLinks: invalid repo "${target}"`);
       const fileTail = file ? urlPathOf(`/${assertRelative(file, "repo file")}`) : "";
-      return finish(origin, `/repo${urlPathOf(`/${target}`)}${fileTail}`);
+      return finish(origin, `/repos${urlPathOf(`/${target}`)}${fileTail}`);
     },
-    agents: (rest?: string) => page("agents", rest),
+    agents: () => `${origin}/agents`,
     contexts: () => page("contexts"),
     secrets: (rest?: string) => page("secrets", rest),
     integrations: (rest?: string) => page("integrations", rest),
     analytics: (rest?: string) => page("analytics", rest),
-    mcp: (rest?: string) => page("mcp", rest),
   };
 }
 
@@ -167,12 +169,12 @@ export function dashLink(apex: string, input: DashLinkInput): string {
       return links.agent(parsed.contextPath);
     case "context":
       return links.context(parsed.contextPath);
-    case "repo":
-      return links.repo(parsed.repo, parsed.file);
+    case "repos":
+      return links.repos(parsed.repo, parsed.file);
     case "page":
       return links.page(parsed.page, parsed.rest);
     case "agents":
-      return links.agents(parsed.rest);
+      return links.agents();
     case "contexts":
       return links.contexts();
     case "secrets":
@@ -181,7 +183,5 @@ export function dashLink(apex: string, input: DashLinkInput): string {
       return links.integrations(parsed.rest);
     case "analytics":
       return links.analytics(parsed.rest);
-    case "mcp":
-      return links.mcp(parsed.rest);
   }
 }

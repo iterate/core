@@ -69,8 +69,8 @@ test.for(z.array(FixtureRow).parse(fixture))(
 test("dashLinks and dashLink validate structured inputs and reject unsafe destinations", () => {
   const dash = dashLinks("example.com");
   expect(dash.home()).toBe("https://dash.example.com/");
-  expect(dash.repo("config", "apps/dash/index.html")).toBe(
-    "https://dash.example.com/repo/config/apps/dash/index.html",
+  expect(dash.repos("config", "apps/dash/index.html")).toBe(
+    "https://dash.example.com/repos/config/apps/dash/index.html",
   );
   expect(() => dashLinks("https://evil.com")).toThrow("invalid apex");
   expect(() => dashLinks("example.com/path")).toThrow("invalid apex");
@@ -80,8 +80,8 @@ test("dashLinks and dashLink validate structured inputs and reject unsafe destin
     expect(() => dash.page(reserved)).toThrow("not a valid Dash page id");
     expect(() => dashLink("example.com", { view: "page", page: reserved })).toThrow();
   }
-  expect(() => dash.repo("a/b")).toThrow("invalid repo");
-  expect(() => dash.repo("config", "../secret")).toThrow("invalid repo file");
+  expect(() => dash.repos("a/b")).toThrow("invalid repo");
+  expect(() => dash.repos("config", "../secret")).toThrow("invalid repo file");
   expect(() => dash.page("notes", "/leading")).toThrow("invalid page remainder");
   expect(() =>
     // Cast simulates an untyped RPC caller passing an unknown view name at runtime.

@@ -59,7 +59,7 @@ const hostSession =
   window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
 const mind = new URL((await hostSession).issuer).hostname;
 const zone = location.hostname.split(".").slice(1).join(".");
-const dashOnboardingUrl = `https://dash.${zone}/agents?contextPath=${AGENT}`;
+const dashOnboardingUrl = `https://dash.${zone}/agents${AGENT}`;
 
 async function ask(path, method = "GET") {
   const response = await fetch(path, { method });

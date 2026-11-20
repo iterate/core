@@ -58,7 +58,7 @@ test("the one link is the MCP server's consent page, for the mind as its own cli
       extra: { resource: MCP },
       straightToProvider: true,
       // the consent brings the member back to the chat of the agent that asked
-      next: "https://dash.example.com/agents?contextPath=/agents/onboarding",
+      next: "https://dash.example.com/agents/agents/onboarding",
     },
   });
   expect(Object.keys(begun?.options || {})).not.toContain("clientSecret");

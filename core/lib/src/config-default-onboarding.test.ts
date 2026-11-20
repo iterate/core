@@ -254,7 +254,7 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
     buttons: [
       {
         label: "Try a voice call",
-        href: "https://dash.example.com/agents?contextPath=/agents/onboarding",
+        href: "https://dash.example.com/agents/agents/onboarding",
       },
       OPEN_LINK,
       { label: "Disconnect", action: "disconnect", opens: true },
@@ -1935,7 +1935,7 @@ test("onboarding page is a centered no-AI wizard with no AgentChat, the optional
   // a failed press on the optional card shows on that card, not on Configure AI below it
   expect(pageJs).toContain("error=${optionalError}");
   expect(pageJs).toContain("/verify-ai");
-  expect(pageJs).toContain("https://dash.${zone}/agents?contextPath=${AGENT}");
+  expect(pageJs).toContain("https://dash.${zone}/agents${AGENT}");
   expect(pageJs).toContain("approves each mind");
   expect(pageJs).toContain("llmRequestOffset");
   expect(pageJs).toContain('status === "disconnecting"');

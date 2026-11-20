@@ -347,7 +347,7 @@ test("a member's !debug gets the agent's path, its Dash link and the catalog's f
       text: [
         "Debug info",
         "Agent: `/agents/slack/T1/C1/17-1`",
-        "Dash: https://dash.example.com/agents?contextPath=/agents/slack/T1/C1/17-1",
+        "Dash: https://dash.example.com/agents/agents/slack/T1/C1/17-1",
         "Kind: iterate · status idle · created 2026-11-20T09:00:00.000Z · last active 2026-11-20T09:05:00.000Z",
         "Log: 412 events, last event 2026-11-20T09:05:00.000Z",
         "Mind: example.com",
@@ -405,7 +405,7 @@ test("any other message is no command, and answerSlackDebug leaves it alone", as
 
 test("the Dash link to an agent encodes each segment", () => {
   expect(dashAgentLink("example.com", "/agents/a b/c#d")).toBe(
-    "https://dash.example.com/agents?contextPath=/agents/a%20b/c%23d",
+    "https://dash.example.com/agents/agents/a%20b/c%23d",
   );
 });
 

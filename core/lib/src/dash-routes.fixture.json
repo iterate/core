@@ -24,32 +24,20 @@
     "link": { "view": "analytics" }
   },
   {
-    "name": "mcp page",
-    "href": "/mcp",
-    "keys": { "page": "mcp" },
-    "link": { "view": "mcp" }
-  },
-  {
     "name": "agents overview",
     "href": "/agents",
     "keys": { "page": "agents" },
     "link": { "view": "agents" }
   },
   {
-    "name": "agents path remainder",
-    "href": "/agents/drafts/1",
-    "keys": { "page": "agents", "rest": "drafts/1" },
-    "link": { "view": "agents", "rest": "drafts/1" }
-  },
-  {
     "name": "agent under /agents/",
-    "href": "/agents?contextPath=/agents/onboarding",
+    "href": "/agents/agents/onboarding",
     "keys": { "agent": "/agents/onboarding" },
     "link": { "view": "agent", "contextPath": "/agents/onboarding" }
   },
   {
     "name": "agent outside /agents/",
-    "href": "/agents?contextPath=/people/ada",
+    "href": "/agents/people/ada",
     "keys": { "agent": "/people/ada" },
     "link": { "view": "agent", "contextPath": "/people/ada" }
   },
@@ -60,8 +48,14 @@
     "link": { "view": "agent", "contextPath": "/" }
   },
   {
+    "name": "unsayable agent with dot-dot segment",
+    "href": "/agents?contextPath=/a/../b",
+    "keys": { "agent": "/a/../b" },
+    "link": { "view": "agent", "contextPath": "/a/../b" }
+  },
+  {
     "name": "agent with special characters",
-    "href": "/agents?contextPath=/agents/ada%2Bnotes@example.com/a:b,c%3Bd%3De%26f%23g%3Fh%2520i%27j%20k",
+    "href": "/agents/agents/ada+notes@example.com/a:b,c;d=e&f%23g%3Fh%2520i'j%20k",
     "keys": { "agent": "/agents/ada+notes@example.com/a:b,c;d=e&f#g?h%20i'j k" },
     "link": {
       "view": "agent",
@@ -70,19 +64,19 @@
   },
   {
     "name": "agent with trailing dot",
-    "href": "/agents?contextPath=/agents/a%2E",
+    "href": "/agents/agents/a%2E",
     "keys": { "agent": "/agents/a." },
     "link": { "view": "agent", "contextPath": "/agents/a." }
   },
   {
     "name": "agent with trailing comma",
-    "href": "/agents?contextPath=/agents/a%2C",
+    "href": "/agents/agents/a%2C",
     "keys": { "agent": "/agents/a," },
     "link": { "view": "agent", "contextPath": "/agents/a," }
   },
   {
     "name": "agent with trailing colon",
-    "href": "/agents?contextPath=/agents/a%3A",
+    "href": "/agents/agents/a%3A",
     "keys": { "agent": "/agents/a:" },
     "link": { "view": "agent", "contextPath": "/agents/a:" }
   },
@@ -129,36 +123,36 @@
     "link": { "view": "context", "contextPath": "/a/../b" }
   },
   {
-    "name": "default repo",
-    "href": "/repo",
-    "keys": { "page": "repo" },
-    "link": { "view": "repo" }
+    "name": "default repos",
+    "href": "/repos",
+    "keys": { "page": "repos" },
+    "link": { "view": "repos" }
   },
   {
     "name": "explicit config repo",
-    "href": "/repo/config",
-    "keys": { "page": "repo", "repo": "config" },
-    "link": { "view": "repo", "repo": "config" }
+    "href": "/repos/config",
+    "keys": { "page": "repos", "repo": "config" },
+    "link": { "view": "repos", "repo": "config" }
   },
   {
     "name": "other repo",
-    "href": "/repo/docs",
-    "keys": { "page": "repo", "repo": "docs" },
-    "link": { "view": "repo", "repo": "docs" }
+    "href": "/repos/docs",
+    "keys": { "page": "repos", "repo": "docs" },
+    "link": { "view": "repos", "repo": "docs" }
   },
   {
     "name": "repo file with dot",
-    "href": "/repo/config/worker.ts",
-    "keys": { "page": "repo", "repo": "config" },
+    "href": "/repos/config/worker.ts",
+    "keys": { "page": "repos", "repo": "config" },
     "view": { "file": "worker.ts" },
-    "link": { "view": "repo", "repo": "config", "file": "worker.ts" }
+    "link": { "view": "repos", "repo": "config", "file": "worker.ts" }
   },
   {
     "name": "nested repo file named like a static asset",
-    "href": "/repo/config/apps/dash/app.js",
-    "keys": { "page": "repo", "repo": "config" },
+    "href": "/repos/config/apps/dash/app.js",
+    "keys": { "page": "repos", "repo": "config" },
     "view": { "file": "apps/dash/app.js" },
-    "link": { "view": "repo", "repo": "config", "file": "apps/dash/app.js" }
+    "link": { "view": "repos", "repo": "config", "file": "apps/dash/app.js" }
   },
   {
     "name": "custom page with remainder",
