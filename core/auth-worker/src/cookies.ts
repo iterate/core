@@ -424,6 +424,8 @@ export async function mindSessionOf(
 /** What a sign-in by another mind waits for (./mind-sign-in.ts). */
 export type MindForm = {
   next: string;
+  /** The host of the app the sign-in is for; a form from before it was kept has none. */
+  app?: string;
   hostname: string;
   mind: string;
   state: string;
@@ -441,6 +443,7 @@ export async function mindFormOf(env: Env, request: Request): Promise<MindForm |
   const form = z
     .object({
       next: z.string().min(1),
+      app: z.string().min(1).optional(),
       hostname: z.string().min(1),
       mind: z.string().min(1),
       state: z.string().min(1),
@@ -480,6 +483,37 @@ export async function vouchIntentOf(env: Env, request: Request) {
 
 export const clearVouchIntentCookie = cookie(VOUCH_INTENT_COOKIE, "", 0);
 export const clearMindCookie = cookie(MIND_COOKIE, "", 0);
+
+// A MIND SIGN-IN THAT JUST COMPLETED (./mind-sign-in.ts): set at the return, for the person it
+// made and the app it was for, for 30 seconds: the return goes on to the app, whose guard asks
+// the authorization endpoint at once. There it answers that host's `prompt=select_account` once
+// (./authorize.ts): a host that the person signed out of asks who they are, and they just said.
+// Any authorization clears it, and its `jti` is taken once (`statements`), so it answers one
+// prompt at most.
+export const MIND_FRESH_COOKIE = "__Host-iterate-auth-mind-fresh";
+const MIND_FRESH_SECONDS = 30;
+
+export async function mindFreshCookie(env: Env, fresh: { user: string; app: string }) {
+  const token = await signed(env, "mind-fresh", fresh)
+    .setJti(crypto.randomUUID())
+    .setExpirationTime(`${MIND_FRESH_SECONDS}s`)
+    .sign(keyOf(env));
+  return cookie(MIND_FRESH_COOKIE, token, MIND_FRESH_SECONDS);
+}
+
+export async function mindFreshOf(env: Env, request: Request) {
+  const fresh = z
+    .object({
+      user: z.string().min(1),
+      app: z.string().min(1),
+      jti: z.string().min(1),
+      exp: z.number(),
+    })
+    .safeParse(await claimsOf(env, request, MIND_FRESH_COOKIE, "mind-fresh"));
+  return fresh.success ? fresh.data : null;
+}
+
+export const clearMindFreshCookie = cookie(MIND_FRESH_COOKIE, "", 0);
 
 const signed = (env: Env, audience: string, claims: Record<string, string>) =>
   new SignJWT(claims)

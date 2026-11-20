@@ -53,9 +53,11 @@ test("a member of B signs in at A's app: one press at B, a person of the way min
   expect(asked).toMatchObject({ status: 200 });
   expect(page).toContain(`as a member of <strong>${B}</strong>`);
   expect(page).toContain("It does not learn your email address.");
-  // the page names A's issuer, which A's log proves, and no app: an app's name is A's word
-  expect(page).toContain(`<h1>Sign in to ${A}</h1>`);
-  expect(page).not.toContain(`cloud.${ZONE}`);
+  // the page names the app as A's issuer names it, and that issuer, which A's log proves
+  expect(page).toContain(`<h1>Sign in to cloud.${ZONE}</h1>`);
+  expect(page).toContain(
+    `Sign in to <strong>cloud.${ZONE}</strong>, an app of ${A}, as a member of <strong>${B}</strong>.`,
+  );
   const vouched = await b.press(page, owner);
   expect(vouched).toMatchObject({ status: 200 });
   expect(decodeFacts(vouched.headers.get(FACTS_HEADER)!)).toMatchObject([
@@ -226,6 +228,20 @@ test("the way is for an app that names it: another app has no field, and its sig
   expect(await (await a.get(`/sign-in?next=${mixed.next}`)).text()).toContain(
     "Sign in with your mind",
   );
+  // an app that opens on the mailed code's page offers the way there too, with the same `next`
+  const mailFirst = await hostSignInOf(a.env, APP, "email passkey mind");
+  const mailPage = await (await a.get(`/sign-in?next=${mailFirst.next}`)).text();
+  expect(mailPage).toContain("Send a code");
+  expect(mailPage).toMatch(
+    /<form method="get" action="\/sign-in\/mind" class="stack">\s*<input type="hidden" name="next" value="([^"]+)">\s*<button type="submit" class="secondary">Sign in with your mind<\/button>/,
+  );
+  expect(
+    unescaped(/action="\/sign-in\/mind"[\s\S]*?name="next" value="([^"]+)"/.exec(mailPage)![1]!),
+  ).toBe(decodeURIComponent(mailFirst.next));
+  const mailOnly = await hostSignInOf(a.env, APP, "email passkey");
+  const plain = await (await a.get(`/sign-in?next=${mailOnly.next}`)).text();
+  expect(plain).toContain("Send a code");
+  expect(plain).not.toContain("Sign in with your mind");
   const first = await hostSignInOf(a.env, APP, "mind");
   const opened = await a.get(`/sign-in?next=${first.next}`);
   expect(opened.headers.get("location")).toMatch(new RegExp(`^https://${A}/sign-in/mind\\?next=`));
@@ -408,6 +424,147 @@ test("a token of the way mind is not refreshed, and ends with the vouch's 24 hou
   );
 });
 
+test("after a sign-out at the app, a mind sign-in that just completed answers the host's prompt once, for that host alone", async () => {
+  const { a, b } = await twoMinds();
+  // the app's page started it (iterate/sdk `auth.mindSignIn`): the return goes to that page, and
+  // its guard asks with the prompt that the host's sign-out mark adds
+  const asking = await hostSignInOf(a.env, APP, "mind", "select_account");
+  const signedIn = async () => {
+    const { form, ask } = await a.started(encodeURIComponent(`${APP}/mind?signin=mind`));
+    const back = await a.back(
+      await signedByStack(b.env, {
+        mind: a.log.mind,
+        path: "/",
+        type: SIGN_IN_VOUCHED_TYPE,
+        payload: { ...ask, user: "user_b", member: true, to: `https://${A}` },
+        expiresInSeconds: 60,
+      }),
+      form,
+    );
+    expect(back.headers.get("location")).toBe(`${APP}/mind?signin=mind`);
+    const [session, , , fresh] = back.headers.getSetCookie();
+    expect(fresh).toMatch(
+      /^__Host-iterate-auth-mind-fresh=[^;]+; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=30$/,
+    );
+    return `${session!.split(";")[0]}; ${fresh!.split(";")[0]}`;
+  };
+  const clearsFresh = (answer: Response) =>
+    expect(answer.headers.getSetCookie()).toContainEqual(
+      expect.stringMatching(/^__Host-iterate-auth-mind-fresh=; .*Max-Age=0$/),
+    );
+  const endsMind = (answer: Response) => {
+    expect([answer.status, new URL(answer.headers.get("location")!).pathname]).toEqual([
+      302,
+      "/sign-in",
+    ]);
+    expect(answer.headers.getSetCookie()).toContainEqual(
+      expect.stringMatching(/^__Host-iterate-auth-mind-session=; /),
+    );
+  };
+
+  // the answer: a code for the host, no page, and the mark is spent
+  const cookies = await signedIn();
+  const answered = await asking.ask(cookies);
+  expect(answered).toMatchObject({ status: 302 });
+  expect(new URL(answered.headers.get("location")!).searchParams.has("code")).toBe(true);
+  clearsFresh(answered);
+  // the same mark again, as a replay would send it: the prompt ends the mind's cookie
+  endsMind(await asking.ask(cookies));
+
+  // a mark for this app answers no other host's prompt, and any authorization clears it
+  const notes = await hostSignInOf(a.env, `https://notes.${ZONE}`, "mind", "select_account");
+  const forApp = await signedIn();
+  const elsewhere = await notes.ask(forApp);
+  endsMind(elsewhere);
+  clearsFresh(elsewhere);
+
+  // `login` asks again, whatever just happened
+  const login = await hostSignInOf(a.env, APP, "mind", "login");
+  endsMind(await login.ask(await signedIn()));
+
+  // with no mark: the prompt ends the mind's cookie
+  endsMind(await asking.ask((await signedIn()).split("; ")[0]));
+
+  // a member's session is read first, and gets the chooser
+  const member = await a.ownerCookie();
+  const chooser = await (
+    await hostSignInOf(a.env, `https://notes.${ZONE}`, "passkey mind", "select_account")
+  ).ask(`${member}; ${(await signedIn()).split("; ")[1]}`);
+  expect(chooser).toMatchObject({ status: 200 });
+  expect(await chooser.text()).toContain(`Continue as ${OWNER}`);
+});
+
+test("A names its app to B only for an app of A that names mind, and B's page says so as A's word", async () => {
+  const { a, b, app } = await twoMinds();
+  const named = async (name: string) => {
+    const key = `iterate-app-description:cloud.${ZONE}`;
+    const kept = JSON.parse((await a.env.OAUTH_KV.get(key))!);
+    await a.env.OAUTH_KV.put(key, JSON.stringify({ ...kept, name }));
+  };
+  await named("iterate Cloud");
+  const asked = (host: string) => a.get(`/sign-in/mind/app?${new URLSearchParams({ host })}`);
+  const yes = await asked(`cloud.${ZONE}`);
+  expect([yes.status, await yes.json()]).toEqual([
+    200,
+    { host: `cloud.${ZONE}`, name: "iterate Cloud" },
+  ]);
+  // anything else: one 404, the same words, whether no app or an app that does not name mind
+  await hostSignInOf(a.env, `https://notes.${ZONE}`, "email passkey");
+  for (const host of [
+    `notes.${ZONE}`,
+    `nothing.${ZONE}`,
+    "cloud.other.example",
+    A,
+    `cloud.${ZONE}/x`,
+    `cloud.${ZONE}:8443`,
+    "",
+  ]) {
+    const no = await asked(host);
+    expect([no.status, await no.text()], host).toEqual([404, "Not found"]);
+  }
+  // a long name is bounded
+  await named("n".repeat(100));
+  expect(((await (await asked(`cloud.${ZONE}`)).json()) as { name: string }).name).toHaveLength(64);
+
+  // B's page: the name escaped, then the host, as an app of the issuer
+  await named("iterate <b>Cloud</b>");
+  const owner = await b.ownerCookie();
+  const pageFor = async (appHost = `cloud.${ZONE}`) => {
+    const { location } = await a.started(app.next);
+    return (await b.get(location.replace(`app=cloud.${ZONE}`, `app=${appHost}`), owner)).text();
+  };
+  const proven = await pageFor();
+  expect(proven).toContain(
+    `(cloud.${ZONE}), an app of ${A}, as a member of <strong>${B}</strong>.`,
+  );
+  expect(proven).not.toContain("<b>Cloud");
+  expect(unescaped(proven)).toContain(`<h1>Sign in to iterate <b>Cloud</b></h1>`);
+  // the browser's `app` alone names nothing: A says no, and the page names the issuer
+  for (const host of [`notes.${ZONE}`, "bank.example"]) {
+    const page = await pageFor(host);
+    expect(page, host).toContain(`<h1>Sign in to ${A}</h1>`);
+    expect(page, host).not.toContain(host);
+  }
+  // A's answer fails, is not JSON, names another host, or a name too long: the issuer alone
+  const served = globalThis.fetch;
+  for (const answer of [
+    () => Promise.reject(new Error("down")),
+    () => new Response("gone", { status: 500 }),
+    () => new Response("not json"),
+    () => Response.json({ host: `notes.${ZONE}`, name: "Notes" }),
+    () => Response.json({ host: `cloud.${ZONE}`, name: "n".repeat(65) }),
+  ]) {
+    vi.stubGlobal("fetch", async (input: Request | string, init?: RequestInit) => {
+      const request = new Request(input, init);
+      return new URL(request.url).pathname === "/sign-in/mind/app" ? answer() : served(request);
+    });
+    const page = await pageFor();
+    expect(page).toContain(`<h1>Sign in to ${A}</h1>`);
+    expect(page).not.toContain(`cloud.${ZONE}`);
+  }
+  vi.stubGlobal("fetch", served);
+});
+
 /** A, B, the app of A that names "mind", and the global fetch as both minds' Workers. */
 async function twoMinds() {
   minds += 1;
@@ -584,8 +741,9 @@ const unescaped = (html: string) =>
 
 const cookieOf = (answer: Response) => (answer.headers.get("set-cookie") || "").split(";")[0]!;
 
-/** An authorization of `resource`'s own sign-in at A, for an app that names `ways`. */
-async function hostSignInOf(env: Env, resource: string, ways: string) {
+/** An authorization of `resource`'s own sign-in at A, for an app that names `ways`; with
+ *  `prompt`, as the host asks after its own sign-out. */
+async function hostSignInOf(env: Env, resource: string, ways: string, prompt?: string) {
   const verifier = generateRandomCodeVerifier();
   const { host } = new URL(resource);
   const clientId = await hostClientOf(env, host);
@@ -609,6 +767,7 @@ async function hostSignInOf(env: Env, resource: string, ways: string) {
     code_challenge: await calculatePKCECodeChallenge(verifier),
     code_challenge_method: "S256",
   });
+  if (prompt) query.set("prompt", prompt);
   const path = `/oauth2/auth?${query}`;
   return {
     path,

@@ -29,7 +29,7 @@ import { AccountFacts } from "./account-facts.ts";
 import { type AskingApp, askingAppOf, signInOf } from "./asking-app.ts";
 import { isBlocked } from "./blocked.ts";
 import { isOwner } from "./config.ts";
-import { emailSessionCookie, sessionsOverRemoved } from "./cookies.ts";
+import { emailSessionCookie, MIND_FORM_PATH, sessionsOverRemoved } from "./cookies.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import { clientOf, TOO_MANY } from "./device/limits.ts";
 import { passkeysOf } from "./enrolment.ts";
@@ -178,10 +178,16 @@ export function emailAddressPage(
         <label>Email <input type="email" name="email" value="${text(typed)}" autocomplete="email" placeholder="you@example.com" required></label>
         <button type="submit">Send a code</button>
       </form>
-      ${passkey.body}${asking?.about || ""}`,
+      ${passkey.body}${signIn.app && signIn.methods.includes("mind") ? mindWay(next) : ""}${asking?.about || ""}`,
     script: passkey.script,
   });
 }
+
+/** The way to "sign in with your mind" (./mind-sign-in.ts), for an app that names it. */
+const mindWay = (next: string) => `<form method="get" action="${MIND_FORM_PATH}" class="stack">
+        <input type="hidden" name="next" value="${text(next)}">
+        <button type="submit" class="secondary">Sign in with your mind</button>
+      </form>`;
 
 async function start(env: Env, request: Request) {
   const form = await request.formData().catch(() => null);

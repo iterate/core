@@ -10,6 +10,9 @@
 //                                          it to B's ./vouch.ts
 //   POST /sign-in/mind/return              B's page posts B's signed statement here; checked, it
 //                                          opens this mind's own session of the person
+//   GET  /sign-in/mind/app?host=<host>     B asks which app of this mind it vouches for: `{ host,
+//                                          name }` for an app of this mind that names "mind", a
+//                                          404 for any other hostname (`appNamed`)
 //
 // THE STATEMENT is one of B's, signed with the working key that B's log lists, in the form of every
 // statement between minds: for A's id, from B's id, of the type `SIGN_IN_VOUCHED_TYPE`, at path
@@ -54,6 +57,7 @@ import {
   MIND_KEY_PREFIX,
   mindFormCookie,
   mindFormOf,
+  mindFreshCookie,
   mindSessionCookie,
 } from "./cookies.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
@@ -66,6 +70,10 @@ import { stackKeyOf } from "./stack-key.ts";
 import { userOf } from "./users.ts";
 
 export const MIND_RETURN_PATH = `${MIND_FORM_PATH}/return`;
+/** Where B asks which app of this mind a sign-in is for (./vouch.ts). */
+export const MIND_APP_PATH = `${MIND_FORM_PATH}/app`;
+/** The longest app name that B's page shows. */
+export const APP_NAME_MAX = 64;
 /** Where a mind vouches for its member (./vouch.ts). */
 export const VOUCH_PATH = "/sign-in/vouch";
 export const SIGN_IN_VOUCHED_TYPE = "events.iterate.com/account/sign-in-vouched";
@@ -99,6 +107,10 @@ export async function mindSignInResponse(env: Env, request: Request): Promise<Re
     return request.method === "POST"
       ? returned(env, request)
       : new Response("Method not allowed", { status: 405, headers: { allow: "POST" } });
+  if (url.pathname === MIND_APP_PATH)
+    return request.method === "GET"
+      ? appNamed(env, url.searchParams.get("host") || "")
+      : new Response("Method not allowed", { status: 405, headers: { allow: "GET" } });
   if (url.pathname !== MIND_FORM_PATH) return null;
   if (request.method === "GET" || request.method === "HEAD") {
     const sign = await signInFor(env, url.searchParams.get("next"));
@@ -173,6 +185,7 @@ async function start(env: Env, request: Request, sign: SignIn, typed: string): P
       location: at.href,
       "set-cookie": await mindFormCookie(env, {
         next: sign.next,
+        app: sign.app.host,
         hostname,
         mind: published.expected,
         state,
@@ -181,6 +194,23 @@ async function start(env: Env, request: Request, sign: SignIn, typed: string): P
       "cache-control": "no-store",
     },
   });
+}
+
+/** WHICH APP OF THIS MIND `host` IS, for B's Continue page (./vouch.ts): B asks this issuer,
+ *  which this mind's log names, so the answer is this mind's word and not the browser's. Only a
+ *  hostname of this mind's zones is read, and an app that does not name "mind" gets the same 404
+ *  as no app: the page names an app only where this way can sign in to it. */
+async function appNamed(env: Env, host: string): Promise<Response> {
+  const origin = URL.parse(`https://${host}`)?.origin;
+  const resource =
+    origin && origin === `https://${host}` ? mindHostResourceOf(configOf(env), origin) : null;
+  const app = resource ? await appOf(env, resource) : null;
+  if (!app?.signIn.includes("mind"))
+    return new Response("Not found", { status: 404, headers: { "cache-control": "no-store" } });
+  return Response.json(
+    { host: app.host, name: app.name.slice(0, APP_NAME_MAX) },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
 
 /** Whether the mind at `hostname` has the vouch route: a release before it answers 404 there. */
@@ -228,6 +258,10 @@ async function returned(env: Env, request: Request): Promise<Response> {
   headers.append("set-cookie", clearMindFormCookie);
   // one way at a time: authorize reads a guest's cookie before this one
   headers.append("set-cookie", clearGuestCookie);
+  // the app's next authorization takes this sign-in as the answer to a prompt, once
+  // (./authorize.ts): it was the person's answer, made after any sign-out
+  if (form.app)
+    headers.append("set-cookie", await mindFreshCookie(env, { user: user.id, app: form.app }));
   return facts.on(new Response(null, { status: 303, headers }));
 }
 

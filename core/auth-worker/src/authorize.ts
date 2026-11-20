@@ -4,16 +4,20 @@ import {
   authorizationErrorRedirect,
   CimdFetchError,
 } from "@cloudflare/workers-oauth-provider";
+import { cookieValueOf } from "iterate/lib";
 import { mindMcpUrlOf, mindProvideConnectResourceOf } from "iterate/mind-api";
 import { AccountFacts } from "./account-facts.ts";
 import { appOf, appTakes, askingAppOf } from "./asking-app.ts";
 import {
   clearGuestCookie,
   clearMindCookie,
+  clearMindFreshCookie,
   clearSessionCookie,
   endThisSession,
   guestCookie,
   guestOf,
+  MIND_FRESH_COOKIE,
+  mindFreshOf,
   mindSessionOf,
   type PersonSession,
   personSessionOf,
@@ -37,6 +41,19 @@ import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { deviceStore } from "./device/store.ts";
 
 export async function authorizeResponse(env: Env, request: Request) {
+  const answer = await authorizeAnswer(env, request);
+  // a mind sign-in's fresh mark answers this authorization or none (./cookies.ts `mindFreshCookie`)
+  if (!cookieValueOf(request.headers.get("cookie"), MIND_FRESH_COOKIE)) return answer;
+  const headers = new Headers(answer.headers);
+  headers.append("set-cookie", clearMindFreshCookie);
+  return new Response(answer.body, {
+    status: answer.status,
+    statusText: answer.statusText,
+    headers,
+  });
+}
+
+async function authorizeAnswer(env: Env, request: Request) {
   try {
     return request.method === "POST" ? await decide(env, request) : await describe(env, request);
   } catch (error) {
@@ -104,11 +121,19 @@ async function describe(env: Env, request: Request) {
   const taken = hostResource ? await hostTakes(env, hostResource, session) : true;
   if (taken === null) return errorPage(TOO_MANY, 429);
   if (!taken) return Response.redirect(signIn, 302);
+  // A MIND SIGN-IN THAT JUST COMPLETED for this host is the answer to its `select_account`, once:
+  // the person signed out here, then signed in with their mind (./cookies.ts `mindFreshCookie`).
+  const answered =
+    prompt === "select_account" &&
+    hostSignIn &&
+    session.method === "mind" &&
+    (await freshAnswers(env, request, session.userId, new URL(hostResource).host));
+  const asked = answered ? null : prompt;
   // OpenID Connect's `prompt`. `login`: sign in again, whoever is signed in. `select_account`: say
   // who is signed in and offer another account. Either comes back here without it. A guest's
   // cookie ends for either: the name form is the page that says who they are, and its answer is
-  // a new guest.
-  if (prompt === "login" || (prompt && cookieOnly)) {
+  // a new guest. A member of another mind's cookie ends too: their mind is asked again.
+  if (asked === "login" || (asked && cookieOnly)) {
     const facts = new AccountFacts();
     if (!cookieOnly) await endThisSession(env, request, facts);
     return facts.on(
@@ -126,7 +151,7 @@ async function describe(env: Env, request: Request) {
       }),
     );
   }
-  if (prompt === "select_account")
+  if (asked === "select_account")
     return chooserPage({
       mind: config.controlPlaneHostname,
       email: session.email,
@@ -271,6 +296,21 @@ async function guestAt(env: Env, hostResource: string, request: Request): Promis
   return guest && !guest.blocked
     ? { userId: guest.userId, email: guest.email, method: "guest", name: guest.name }
     : null;
+}
+
+/** Whether this browser's fresh mind sign-in (./cookies.ts `mindFreshCookie`) is the one of
+ *  `userId` for the app at `host`, taken now for the first time. */
+async function freshAnswers(env: Env, request: Request, userId: string, host: string) {
+  const fresh = await mindFreshOf(env, request);
+  if (!fresh || fresh.user !== userId || fresh.app !== host) return false;
+  // once: a repeat cannot insert (the statements' table, as ./mind-sign-in.ts takes a vouch)
+  const [, inserted] = await env.DB.batch([
+    env.DB.prepare(`delete from statements where expires <= ?1`).bind(Date.now()),
+    env.DB.prepare(
+      `insert into statements (hash, expires) values (?1, ?2) on conflict do nothing`,
+    ).bind(`mind-fresh:${fresh.jti}`, fresh.exp * 1000),
+  ]);
+  return Boolean(inserted?.meta.changes);
 }
 
 /** Whether the app at `hostResource` takes `session` (./asking-app.ts `appTakes`). Null: the
