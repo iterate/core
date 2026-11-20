@@ -167,6 +167,10 @@ test("a guest is refused on a member's page, and taken on the pages for guests",
   expect(await mind.get(nobody, `/in${AGENT}`)).toMatchObject({ status: 401 });
   expect(await mind.get(guest, `/in${AGENT}`)).toMatchObject({ status: 200 });
   expect(await mind.get(nobody, "/invite.js")).toMatchObject({ status: 200 });
+  expect(await mind.get(nobody, "/snapshot-capture.js")).toMatchObject({ status: 200 });
+  // a picture for the agent is a POST alone, for an agent's path
+  expect(await mind.get(member, `/snapshot${AGENT}`)).toMatchObject({ status: 405 });
+  expect(await mind.get(member, "/snapshot/repos/config")).toMatchObject({ status: 404 });
   // the app describes itself: a guest's sign-in, or a member's passkey
   expect(await (await mind.get(nobody, "/.well-known/iterate-app")).json()).toEqual({
     name: "Meet",

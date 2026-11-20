@@ -270,13 +270,28 @@ Meet (below) is the template's page for it.
 - **The voice agent can ask the agent of the context** (OpenAI's client delegation, its one way
   out). The model asks on its host tab; the tab hands the request to `delegate` (a member's call,
   from the host page alone), and the call puts it on the agent's log as a message that starts a
-  turn and is owed an answer: who is in the call, the recent talk as quoted material, and a tag. The
-  agent always answers, in one short spoken reply that begins with the tag, and may look things up
+  turn and is owed an answer: who is in the call, what video is shared, and the recent talk as
+  quoted material. The agent always answers, in one short spoken reply, and may look things up
   for anyone; while a guest is in the call it takes no action with an effect on the transcript
-  alone, and says that a member must type it in the chat. The answer comes back in the live state,
-  and the host tab gives it to the model to say. One request at a time, 6 a minute; an answer
+  alone, and says that a member must type it in the chat. The answer is the agent's first message
+  from a turn or a script that began after the request, never words written beside a script; it
+  comes back in the live state, and the host tab gives it to the model to say. A request of the
+  agent's turn that fails ends the delegation at once. One request at a time, 6 a minute; an answer
   waits 90 s at most, and the request ends when the voice agent leaves.
   Failures of the SFU and OpenAI go to the audit log `<agent>/call`.
+- **"Let the agent look."** A member who shares a camera or a screen in Meet may turn it on for
+  that source; it is off by default, and ends when the source stops or the page leaves. Then the
+  agent of the call may take ONE still picture: `await itx.config.callSnapshot({ source: "screen" })`
+  (or `"camera"`, and `of: "<name>"` to choose a person), from the agent's own context alone. The
+  member's page takes the picture and sends it to Meet (`POST /snapshot<agent>`); it comes to the
+  agent as a quiet note with the JPEG attached, stored at `/call-snapshots<agent>/`, outside the
+  agent's path, so a guest's view cannot read it. A refusal says why (`{ status: "refused",
+reason }`); never try again without asking. A request lives 20 s, one at a time, 10 a minute;
+  each step is on `<agent>/call` (`call/snapshot-requested`, `-taken`, `-failed`, `-refused`).
+- **What is said shows in Meet**, from the call's notes: a caption strip over the composer, which
+  opens to the whole transcript. `caption` takes a page's words while they are still spoken, as
+  an ephemeral `call/caption-frame` on the agent's context (never stored); the template's pages do
+  not send them yet.
 - **An agent calls a member to a call, on their Mac.** A member's Mac with the iterate menu-bar
   app (`@iterate-com/mac-app`, lent as `itx.<name>`, for example `itx.jane.mac`) is an endpoint
   device of the mind, and banners on its screen are one of its outputs (Banners not Off in its

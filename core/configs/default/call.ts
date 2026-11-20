@@ -7,12 +7,16 @@
 // root module (or an app's `backend.ts`).
 //
 // - THE PROCESSOR folds the context's share links (call/share.ts) into its state, and tells the call
-//   when the agent wrote a message (a delegation's answer, maybe), when a page's row is un-set (`itx/subscription-configured` with no target) and when its own
-//   look is due (`call/due`, the schedule the call sets). Its live state is what a page draws:
-//   the call (call/rules.ts `live`) and the live links, with no secret's hash.
+//   when the agent wrote a message (a delegation's answer, maybe), when a request of the agent's
+//   turn settled (a failed one ends a delegation at once), when a script began (`itx/run-requested`,
+//   which says whose turn an answer is), when a page's row is un-set
+//   (`itx/subscription-configured` with no target) and when its own look is due (`call/due`, the
+//   schedule the call sets). Its live state is what a page draws: the call (call/rules.ts `live`)
+//   and the live links, with no secret's hash.
 // - THE METHODS read who asked from the kernel (`onBehalfOf()`, iterate/sdk). `join`, `signal`,
-//   `leave`, `transcription` and `said` are person methods too: a guest's one-context view may
-//   call them, and the call checks the guest's link at each. `voiceAgent` is a member's alone.
+//   `leave`, `transcription`, `said` and `caption` are person methods too: a guest's one-context
+//   view may call them, and the call checks the guest's link at each. `voiceAgent`, `delegate`,
+//   `look` and the snapshot methods (call/snapshot.ts) are a member's.
 // - WHAT IT REACHES: the agent's own context (rows, lent stubs, the quiet notes, its schedule),
 //   the audit log `<agent>/call`, and the mind's root for `fetch` and secrets, which fill each
 //   placeholder on the way out.
@@ -41,11 +45,23 @@ const ROW_SET = "events.iterate.com/itx/subscription-configured";
 const RowUnset = z.object({ name: z.string(), target: z.null() });
 /** The agent's message: the answer to the voice agent's request, when it is one. */
 const AGENT_SAID = "events.iterate.com/agent/web-message-sent";
-const AgentSaid = z.object({ message: z.string() });
+const AgentSaid = z.object({
+  message: z.string(),
+  llmRequestOffset: z.number().optional(),
+  besideScript: z.boolean().optional(),
+});
+/** An LLM request settled: fail a waiting delegation immediately on terminal failure. */
+const LLM_SETTLED = "events.iterate.com/agent/llm-request-settled";
+const LlmSettled = z.object({
+  requestOffset: z.number(),
+  result: z.object({ status: z.string() }),
+});
+/** A script run started: used to correlate script `sendMessage()` with an open delegation. */
+const RUN_REQUESTED = "events.iterate.com/itx/run-requested";
 
 /** How a page turns the call on for an agent: `itx.cd(agent).processors.enable("call", CALL_FACET)`.
  *  The class is this file, in the mind's published config. */
-const CONSUMES = [...SHARE_EVENTS, ROW_SET, CALL_DUE, AGENT_SAID];
+const CONSUMES = [...SHARE_EVENTS, ROW_SET, CALL_DUE, AGENT_SAID, LLM_SETTLED, RUN_REQUESTED];
 export const CALL_FACET = {
   className: "CallDurableObject",
   mainModule: "call.ts",
@@ -97,10 +113,26 @@ export class CallProcessor extends StreamProcessor<State> {
   }
 
   override processEvent({ event, state, delivery, runInBackground }: ProcessEventArgs<State>) {
+    if (event?.type === RUN_REQUESTED && typeof event.offset === "number") {
+      this.#call.runRequested(event.offset);
+    }
+    if (event?.type === LLM_SETTLED) {
+      const settled = LlmSettled.safeParse(event.payload);
+      if (settled.success)
+        runInBackground(() =>
+          this.#call.llmSettled(settled.data.requestOffset, settled.data.result.status),
+        );
+    }
     if (event?.type === AGENT_SAID) {
       const said = AgentSaid.safeParse(event.payload);
       const offset = event.offset;
-      if (said.success) runInBackground(() => this.#call.agentSaid(said.data.message, offset));
+      if (said.success)
+        runInBackground(() =>
+          this.#call.agentSaid(said.data.message, offset, {
+            llmRequestOffset: said.data.llmRequestOffset,
+            besideScript: said.data.besideScript,
+          }),
+        );
     }
     const unset = event?.type === ROW_SET ? RowUnset.safeParse(event.payload) : null;
     if (unset?.success) {
@@ -128,6 +160,23 @@ export const noteEvent = (content: string, callNote: Record<string, unknown>) =>
   },
 });
 
+/** One quiet snapshot attachment for the agent's context (`files` + `callNote`, no turn). */
+export const snapshotNoteEvent = (
+  content: string,
+  files: { contentType: string; filename: string; path: string; size: number }[],
+  callNote: Record<string, unknown>,
+) => ({
+  type: "events.iterate.com/agent/context-added",
+  payload: {
+    role: "user",
+    actor: { type: "user" },
+    content,
+    files,
+    callNote,
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  },
+});
+
 export class CallDurableObject extends StreamProcessorDurableObject<State> {
   static override publicMethods = [
     ...super.publicMethods,
@@ -137,10 +186,27 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
     "voiceAgent",
     "transcription",
     "said",
+    "caption",
     "delegate",
+    "look",
+    "requestSnapshot",
+    "authorizeSnapshot",
+    "fulfillSnapshot",
+    "declineSnapshot",
+    "expireSnapshot",
     "admits",
   ];
-  static override personMethods = ["join", "signal", "leave", "transcription", "said", "admits"];
+  // a guest's view may call these; each checks the guest's link (call/rules.ts `#admit`). The voice
+  // agent, a delegation, "Let the agent look" and the snapshots stay a member's
+  static override personMethods = [
+    "join",
+    "signal",
+    "leave",
+    "transcription",
+    "said",
+    "caption",
+    "admits",
+  ];
 
   readonly #call = new Call({
     path: String(this.ctx.props.iterateContextName),
@@ -158,9 +224,16 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
       using itx = this.getItx();
       await itx.append(noteEvent(content, callNote));
     },
+    snapshotNote: async (content, files, callNote) => {
+      using itx = this.getItx();
+      await itx.append(snapshotNoteEvent(content, files, callNote));
+    },
     audit: async (type, payload) => {
       using itx = this.getItx();
-      await itx.cd(`${this.ctx.props.iterateContextName}/call`).append({ type, payload });
+      const [event] = await itx
+        .cd(`${this.ctx.props.iterateContextName}/call`)
+        .append({ type, payload });
+      return Number(event?.offset) || 0;
     },
     schedule: async (at) => {
       using itx = this.getItx();
@@ -170,7 +243,7 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
         events: [{ type: CALL_DUE }],
       });
     },
-    ask: async (content, idempotencyKey) => {
+    ask: async (content, idempotencyKey, callNote) => {
       using itx = this.getItx();
       const [event] = await itx.append({
         type: "events.iterate.com/agent/context-added",
@@ -180,10 +253,18 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
           actor: { type: "user" },
           content,
           answerOwed: true,
-          callNote: { kind: "asked" },
+          callNote,
         },
       });
       return Number(event?.offset) || 0;
+    },
+    caption: async (payload) => {
+      using itx = this.getItx();
+      await itx.append({
+        type: "call/caption-frame",
+        ephemeral: true,
+        payload,
+      });
     },
     outbound: () => ({
       // each call in its own scope, and the answer read whole inside it: no stub outlives a block
@@ -241,6 +322,10 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
   said(page: unknown, line: unknown, admission?: unknown) {
     return this.#call.said(this.onBehalfOf(), page, line, admission);
   }
+  /** A live partial caption frame (ephemeral, never stored): `{ id, text, done?, ai? }`. */
+  caption(page: unknown, frame: unknown, admission?: unknown) {
+    return this.#call.caption(this.onBehalfOf(), page, frame, admission);
+  }
   /** The voice agent's request for the agent: `{ delegation, transcript }`, from its host page. */
   delegate(page: unknown, request: unknown, admission?: unknown) {
     return this.#call.delegate(this.onBehalfOf(), page, request, admission);
@@ -248,5 +333,36 @@ export class CallDurableObject extends StreamProcessorDurableObject<State> {
   /** The voice agent: `{ start: sdpOffer }` (a member, from the host page), or `{ stop: why }`. */
   voiceAgent(page: unknown, act: unknown, admission?: unknown) {
     return this.#call.voiceAgent(this.onBehalfOf(), page, act, admission);
+  }
+  /** Per-source "Let the agent look" opt-in for this page's own published camera or screen. */
+  look(page: unknown, input: unknown, admission?: unknown) {
+    return this.#call.look(this.onBehalfOf(), page, input, admission);
+  }
+  /** Request one still image of a consenting participant's camera or screen (called by
+   *  `itx.config.callSnapshot`; any member or agent of the mind could call it too — protection is
+   *  the participant's own "Let the agent look" switch, capture on their own page, and the page,
+   *  actor, admission, track and consent checks at upload). */
+  requestSnapshot(input: unknown) {
+    return this.#call.requestSnapshot(input);
+  }
+  /** Verify upload authorization before reading any byte of the upload body (called by
+   *  `apps/meet/app.ts` `POST /snapshot`; any member or agent of the mind could call it too). */
+  authorizeSnapshot(input: unknown) {
+    return this.#call.authorizeSnapshot(input);
+  }
+  /** Settle a stored snapshot and append its visible trail (called by `apps/meet/app.ts`
+   *  `POST /snapshot`; any member or agent of the mind could call it too). */
+  fulfillSnapshot(input: unknown) {
+    return this.#call.fulfillSnapshot(input);
+  }
+  /** Record that the target page declined or failed to capture (called by `apps/meet/app.ts`
+   *  `POST /snapshot`; any member or agent of the mind could call it too). */
+  declineSnapshot(input: unknown) {
+    return this.#call.declineSnapshot(input);
+  }
+  /** Settle an expired snapshot request or return its settled outcome (called by
+   *  `itx.config.callSnapshot`; any member or agent of the mind could call it too). */
+  expireSnapshot(input: unknown) {
+    return this.#call.expireSnapshot(input);
   }
 }

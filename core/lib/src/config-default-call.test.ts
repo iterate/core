@@ -10,8 +10,14 @@ import {
   CallDurableObject,
   CallProcessor,
   noteEvent,
+  snapshotNoteEvent,
 } from "../../configs/default/call.ts";
 import { Call, claimedName, pickAnswer, type Asked } from "../../configs/default/call/rules.ts";
+import {
+  callSnapshot,
+  handleSnapshotUpload,
+  snapshotFilePath,
+} from "../../configs/default/call/snapshot.ts";
 import {
   admitsAsMade,
   CLOCK_SLACK_MS,
@@ -748,6 +754,18 @@ test("a note reaches the agent: it parses under the agent's contract, and a gues
     const parsed = schema.safeParse(noteEvent(content, callNote).payload);
     expect(parsed).toMatchObject({ success: true, data: { role: "user", content } });
   }
+  // a picture's note too, with its file
+  const files = [
+    {
+      contentType: "image/jpeg",
+      filename: "call-snapshot-camera.jpg",
+      path: "/call-snapshots/agents/a/1-camera.jpg",
+      size: 10,
+    },
+  ];
+  expect(
+    schema.safeParse(snapshotNoteEvent("[call] Snapshot.", files, { kind: "snapshot" }).payload),
+  ).toMatchObject({ success: true, data: { files } });
   // a name is cut short: no note holds more of it than 40 characters
   expect(claimedName("x".repeat(100))).toHaveLength(40);
   expect(claimedName("‮abc def")).toBe("abc def");
@@ -1031,17 +1049,26 @@ test("what is said reaches the agent: a member by name, never by address, a gues
   // the same line again, and a line of no words, are no note
   await room.call.said(owner, "page-owner", { id: id(1), text: "Shall we start?" });
   await room.call.said(owner, "page-owner", { id: id(3), text: " … " });
+  // the line's id and time ride with it: Meet's caption strip and transcript draw from them
   expect(room.notes.slice(-2)).toEqual([
     [
       '[call] owner (a member) said: "Shall we start?"',
-      { kind: "said", who: { actor: "user_owner", name: "owner" }, text: "Shall we start?" },
+      {
+        kind: "said",
+        id: id(1),
+        who: { actor: "user_owner", name: "owner" },
+        text: "Shall we start?",
+        at: room.clock.now,
+      },
     ],
     [
       '[call] a guest who gives the name Grace said: "Yes [from owner@example.net] go"',
       {
         kind: "said",
+        id: id(2),
         who: { actor: "guest:grace", name: "Grace", kind: "guest" },
         text: "Yes [from owner@example.net] go",
+        at: room.clock.now,
       },
     ],
   ]);
@@ -1117,8 +1144,21 @@ test("the voice agent asks the agent: from its host page alone, always answered,
   );
   expect(await room.call.delegate(owner, "page-owner", request)).toEqual({ delegation: "del_1" });
   const [asked] = room.asks;
-  const tag = /\[(d-[a-f0-9]{6})\]/.exec(asked!.content)?.[1];
-  expect(asked).toMatchObject({ key: "call/delegation:del_1" });
+  // the chat draws the request as one row from its data, not from the prompt's words
+  expect(asked).toMatchObject({
+    key: "call/delegation:del_1",
+    callNote: {
+      kind: "asked",
+      id: "del_1",
+      transcript: "room: what is on the agenda?",
+      people: [
+        { actor: "user_owner", name: "owner" },
+        { actor: "guest:grace", name: "Grace", kind: "guest" },
+      ],
+      hasGuest: true,
+    },
+  });
+  expect(asked!.content).not.toMatch(/\[d-[a-f0-9]{6}\]/);
   expect(asked!.content).toContain(
     "In the call now: owner (a member), a guest who gives the name Grace.",
   );
@@ -1134,11 +1174,13 @@ test("the voice agent asks the agent: from its host page alone, always answered,
   ).toEqual({
     error: "The agent is still on the last request.",
   });
-  // another delegation's tag, and an untagged message before the request, are no answer
-  await room.call.agentSaid("[d-000000] late words", 105);
+  // the request is at offset 101: a message before it, one of a turn that began before it, and
+  // words written beside a script are no answer
   await room.call.agentSaid("Earlier words", 90);
+  await room.call.agentSaid("An earlier turn's words", 105, { llmRequestOffset: 99 });
+  await room.call.agentSaid("Let me look.", 106, { llmRequestOffset: 103, besideScript: true });
   expect(room.call.live().delegation).toMatchObject({ status: "waiting" });
-  await room.call.agentSaid(`[${tag}] The agenda is the launch.`, 106);
+  await room.call.agentSaid("The agenda is the launch.", 107, { llmRequestOffset: 103 });
   expect(room.call.live()).toMatchObject({
     delegation: {
       id: "del_1",
@@ -1168,12 +1210,258 @@ test("the voice agent asks the agent: from its host page alone, always answered,
   });
 });
 
-test("an answer is its own delegation's: the tag is cut off, another tag is never taken", () => {
-  expect(pickAnswer("[d-abc123] Yes, at three.", "d-abc123", true)).toBe("Yes, at three.");
-  expect(pickAnswer("[d-ffffff] Yes.", "d-abc123", false)).toBeNull();
-  expect(pickAnswer("Yes.", "d-abc123", false)).toBe("Yes.");
-  // after an unanswered request, an untagged message may be that one's late answer
-  expect(pickAnswer("Yes.", "d-abc123", true)).toBeNull();
+test("an answer: a tag of a request from before is cut off, and another request's tag is never taken", () => {
+  expect(pickAnswer("Yes, at three.")).toBe("Yes, at three.");
+  expect(pickAnswer("[d-abc123] Yes, at three.")).toBe("Yes, at three.");
+  expect(pickAnswer("[d-abc123] Yes, at three.", "d-abc123")).toBe("Yes, at three.");
+  expect(pickAnswer("[d-ffffff] Yes.", "d-abc123")).toBeNull();
+  expect(pickAnswer("[d-abc123]")).toBeNull();
+});
+
+test("a delegation's answer is the first message of a script that began after it; a failed request ends it at once", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner");
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_a" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer" });
+  const request = { delegation: "del_1", transcript: "room: what time is it?" };
+  await room.call.delegate(owner, "page-owner", request);
+  // a script's sendMessage() names no request: the last script before the request is not its turn
+  room.call.runRequested(100);
+  await room.call.agentSaid("From an earlier script.", 102);
+  expect(room.call.live().delegation).toMatchObject({ status: "waiting" });
+  room.call.runRequested(103);
+  await room.call.agentSaid("It is three.", 104);
+  expect(room.call.live().delegation).toMatchObject({ status: "answered", answer: "It is three." });
+  // the agent's request after the delegation failed: the delegation fails now, not after 90 s
+  await room.call.delegate(owner, "page-owner", { ...request, delegation: "del_2" });
+  await room.call.llmSettled(101, "failed");
+  expect(room.call.live().delegation).toMatchObject({ id: "del_2", status: "waiting" });
+  await room.call.llmSettled(110, "succeeded");
+  expect(room.call.live().delegation).toMatchObject({ status: "waiting" });
+  await room.call.llmSettled(110, "failed");
+  expect(room.call.live().delegation).toMatchObject({
+    id: "del_2",
+    status: "failed",
+    reason: "the agent request failed",
+  });
+});
+
+test("live captions: an ephemeral frame for each speaker, the voice agent's from its host alone, within bounds", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  room.held.set("page-grace", "guest:grace");
+  room.share = shareWith({ guests: ["guest:grace"], until: room.clock.now + 3_600_000 });
+  await room.call.join(owner, "page-owner");
+  await room.call.join(grace, "page-grace");
+  await room.call.caption(grace, "page-grace", { id: "t1", text: "Hello every" });
+  await room.call.caption(grace, "page-grace", { id: "t1", text: "" });
+  await room.call.caption(grace, "page-grace", { id: "t1", text: "Hello everyone", done: true });
+  expect(room).toMatchObject({
+    captions: [
+      {
+        page: "page-grace",
+        turnId: "t1",
+        who: { actor: "guest:grace", name: "Grace", kind: "guest" },
+        text: "Hello every",
+        done: false,
+        at: room.clock.now,
+      },
+      expect.objectContaining({ text: "Hello everyone", done: true }),
+    ],
+  });
+  // a caption is no note: the agent reads the finished line from `said`
+  expect(room.notes.some(([content]) => content.includes("Hello"))).toBe(false);
+  await expect(
+    room.call.caption(owner, "page-owner", { id: "t2", text: "Hi", ai: true }),
+  ).rejects.toThrow("Only the voice agent's host streams its captions.");
+  for (let n = 0; n < 300; n++)
+    await room.call.caption(owner, "page-owner", { id: `n${n}`, text: "ok" });
+  expect(room.captions.filter((frame) => frame.page === "page-owner")).toHaveLength(240);
+});
+
+test('"Let the agent look": off by default, for a source the page shares, and one picture at a time of a page that turned it on', async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner");
+  await expect(room.call.look(owner, "page-owner", { camera: true })).rejects.toThrow(
+    'Turn on your camera before turning on "Let the agent look" for it.',
+  );
+  await room.call.signal(owner, "page-owner", { publish: "camera", sdp: "offer", mid: "0" });
+  // off by default: a request takes nothing
+  expect(await room.call.requestSnapshot({ source: "camera" })).toEqual({
+    status: "refused",
+    reason:
+      'owner is sharing a camera, but has not turned on "Let the agent look" (in Meet). Nothing was captured.',
+  });
+  expect(await room.call.look(owner, "page-owner", { camera: true })).toEqual({
+    look: { camera: true, screen: false },
+  });
+  expect(room.notes.at(-1)?.[0]).toBe(
+    '[call] owner turned "Let the agent look" on for their camera.',
+  );
+  expect(room.call.live().inCall["page-owner"]).toMatchObject({ look: { camera: true } });
+  const asked = await room.call.requestSnapshot({ source: "camera" });
+  expect(asked).toMatchObject({
+    status: "requested",
+    source: "camera",
+    of: { actor: "user_owner" },
+  });
+  const id = requestedId(asked);
+  // the page sees the request, with no file path
+  expect(room.call.live()).toMatchObject({
+    snapshot: {
+      id,
+      page: "page-owner",
+      source: "camera",
+      requestedAt: room.clock.now,
+      status: "requested",
+    },
+  });
+  // one at a time
+  expect(await room.call.requestSnapshot({ source: "camera" })).toMatchObject({
+    status: "refused",
+  });
+  // the upload is checked against the request's page and person before a byte is read
+  expect(
+    await room.call.authorizeSnapshot({ id, page: "page-owner", actor: "user_ada" }),
+  ).toMatchObject({ ok: false, status: 403 });
+  expect(
+    await room.call.authorizeSnapshot({ id, page: "page-owner", actor: "user_owner" }),
+  ).toMatchObject({ ok: true, snapshot: { source: "camera" } });
+  const path = `/call-snapshots/agents/standup/${id}-camera.jpg`;
+  expect(
+    await room.call.fulfillSnapshot({
+      id,
+      page: "page-owner",
+      actor: "user_owner",
+      path,
+      bytes: 1_000,
+      width: 640,
+      height: 480,
+    }),
+  ).toMatchObject({ ok: true, snapshot: { path } });
+  // the picture reaches the agent as one quiet note with the file, and is on the audit log
+  expect(room).toMatchObject({
+    snapshotNotes: [
+      {
+        content: expect.stringContaining("[call] Snapshot of owner's camera (640×480)"),
+        files: [
+          { contentType: "image/jpeg", filename: "call-snapshot-camera.jpg", path, size: 1_000 },
+        ],
+        callNote: expect.objectContaining({ kind: "snapshot", id, path }),
+      },
+    ],
+  });
+  expect(room.audits.map(([type]) => type)).toEqual(
+    expect.arrayContaining([
+      "call/snapshot-refused",
+      "call/snapshot-requested",
+      "call/snapshot-taken",
+    ]),
+  );
+  // a settled request takes no second upload
+  expect(
+    await room.call.fulfillSnapshot({
+      id,
+      page: "page-owner",
+      actor: "user_owner",
+      path,
+      bytes: 1_000,
+      width: 640,
+      height: 480,
+    }),
+  ).toMatchObject({ ok: false, status: 409, fulfilled: true });
+  // a request no page answers ends after 20 s
+  const next = requestedId(await room.call.requestSnapshot({ source: "camera" }));
+  room.clock.now += 21_000;
+  expect(await room.call.expireSnapshot({ id: next })).toMatchObject({ status: "failed" });
+  // the switch turned off: no request
+  await room.call.look(owner, "page-owner", { camera: false });
+  expect(room.call.live().inCall["page-owner"]).not.toHaveProperty("look");
+  expect(await room.call.requestSnapshot({ source: "camera" })).toMatchObject({
+    status: "refused",
+  });
+});
+
+test("a snapshot's upload: a member's, checked and capped before it is read, stored outside the agent's path; callSnapshot acts on its caller's own call alone", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner");
+  await room.call.signal(owner, "page-owner", { publish: "screen", sdp: "offer", mid: "0" });
+  await room.call.look(owner, "page-owner", { screen: true });
+  const stored = new Map<string, Uint8Array>();
+  const facet = {
+    requestSnapshot: (input: unknown) => room.call.requestSnapshot(input),
+    authorizeSnapshot: (input: unknown) => room.call.authorizeSnapshot(input),
+    fulfillSnapshot: (input: unknown) => room.call.fulfillSnapshot(input),
+    declineSnapshot: (input: unknown) => room.call.declineSnapshot(input),
+    expireSnapshot: (input: unknown) => room.call.expireSnapshot(input),
+  };
+  const itx = {
+    cd: (path: string) => ({
+      processors: { list: async () => (path === A ? [{ name: "call" }] : []) },
+      facets: { get: () => facet },
+      waitForEvent: async () => {
+        throw new Error("no event in this test");
+      },
+    }),
+    files: {
+      get: (path: string) => ({
+        put: async ({ data }: { data: Uint8Array }) => {
+          stored.set(path, data);
+          return { path, contentType: "image/jpeg", size: data.byteLength };
+        },
+        delete: async () => void stored.delete(path),
+      }),
+    },
+    [Symbol.dispose]() {},
+  };
+  // the casts: these fakes hold only the verbs the two functions call, not the whole itx and host
+  const fakeItx = itx as never;
+  const host = (userId: string | null) =>
+    ({
+      auth: { require: () => null, person: () => (userId ? { userId } : null) },
+      getItx: () => itx,
+    }) as never;
+  // callSnapshot takes no agent, and needs a call on its caller's context
+  await expect(
+    callSnapshot(fakeItx, { source: "screen", agent: A }, { callerPath: () => A }),
+  ).rejects.toThrow("callSnapshot acts only on the calling agent's own call");
+  expect(
+    await callSnapshot(fakeItx, { source: "screen" }, { callerPath: () => `${A}/other` }),
+  ).toEqual({ status: "refused", reason: "This agent has no active call." });
+  const askedId = requestedId(await room.call.requestSnapshot({ source: "screen" }));
+  const jpeg = new Uint8Array(256);
+  jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
+  const send = (userId: string | null, headers: Record<string, string> = {}) =>
+    handleSnapshotUpload(
+      new Request(`https://meet.example.com/snapshot${A}`, {
+        method: "POST",
+        headers: {
+          "x-request": askedId,
+          "x-page": "page-owner",
+          "content-type": "image/jpeg",
+          "x-length": "256",
+          ...headers,
+        },
+        body: jpeg,
+      }),
+      host(userId),
+      A,
+    );
+  expect(await send(null)).toMatchObject({ status: 401 });
+  expect(await send("user_owner", { "content-type": "image/png" })).toMatchObject({ status: 415 });
+  expect(await send("user_owner", { "x-length": "3000000" })).toMatchObject({ status: 413 });
+  // another person's upload for the request is refused, unread
+  expect(await send("user_ada")).toMatchObject({ status: 403 });
+  const answer = await send("user_owner");
+  const path = `/call-snapshots${A}/${askedId}-screen.jpg`;
+  expect(answer).toMatchObject({ status: 200 });
+  expect(await answer.json()).toEqual({ ok: true, path });
+  expect(snapshotFilePath(A, askedId, "screen")).toBe(path);
+  expect(stored.get(path)?.byteLength).toBe(256);
+  expect(room.snapshotNotes.at(-1)?.files[0]?.path).toBe(path);
 });
 
 test("a guest's typed name adds no line to the agent's request: it is cleaned as the notes clean it", async () => {
@@ -1277,11 +1565,16 @@ test("the call's class is in a module that a publication offers a facet's class 
   const exported = (await import("../../configs/default/call.ts")) as Record<string, unknown>;
   expect(exported[CALL_FACET.className]).toBe(CallDurableObject);
   expect(CallDurableObject.personMethods.join(" ")).toBe(
-    "join signal leave transcription said admits",
+    "join signal leave transcription said caption admits",
   );
-  // the voice agent's request is its host's, a member's: no person method
-  expect(CallDurableObject.publicMethods).toContain("delegate");
-  // the row is pushed the share events, a page's row un-set, and its own look, alone
+  // the voice agent's request is its host's, a member's, and so are the switch and the pictures:
+  // no person method
+  for (const method of ["delegate", "look", "requestSnapshot", "fulfillSnapshot"]) {
+    expect(CallDurableObject.publicMethods).toContain(method);
+    expect(CallDurableObject.personMethods).not.toContain(method);
+  }
+  // the row is pushed the share events, a page's row un-set, its own look, the agent's messages,
+  // its settled requests and its scripts' starts, alone
   expect(CALL_FACET).toMatchObject({
     consumes: [
       "share/link-made",
@@ -1290,9 +1583,17 @@ test("the call's class is in a module that a publication offers a facet's class 
       "events.iterate.com/itx/subscription-configured",
       "call/due",
       "events.iterate.com/agent/web-message-sent",
+      "events.iterate.com/agent/llm-request-settled",
+      "events.iterate.com/itx/run-requested",
     ],
   });
 });
+
+/** The id of a snapshot request the call took; the test fails here when the call refused it. */
+function requestedId(answer: Awaited<ReturnType<Call["requestSnapshot"]>>) {
+  if (answer.status !== "requested") throw new Error(`the call refused: ${answer.reason}`);
+  return answer.id;
+}
 
 // ── who asks, as the kernel hands it to the facet ──
 const owner: Asked = {
@@ -1344,9 +1645,17 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
     /** How often the live state was published. */
     published: 0,
     /** The requests the call put on the agent's log, each starting a turn. */
-    asks: [] as { content: string; key: string }[],
+    asks: [] as { content: string; key: string; callNote: Record<string, unknown> }[],
     /** The status OpenAI answers a new transcription key with. */
     clientSecret: 200,
+    /** The live caption frames the call put on the agent's context, ephemeral. */
+    captions: [] as Record<string, unknown>[],
+    /** The pictures the call attached to the agent's context. */
+    snapshotNotes: [] as {
+      content: string;
+      files: { contentType: string; filename: string; path: string; size: number }[];
+      callNote: Record<string, unknown>;
+    }[],
   };
   const deps: ConstructorParameters<typeof Call>[0] = {
     path: "/agents/standup",
@@ -1356,11 +1665,15 @@ function fakeCall({ secrets = true, outboundMs }: { secrets?: boolean; outboundM
     share: async () => room.share,
     holds: async (page, actor) => room.held.get(page) === actor,
     note: async (content, payload) => void room.notes.push([content, payload]),
-    ask: async (content, key) => {
-      room.asks.push({ content, key });
+    ask: async (content, key, callNote) => {
+      room.asks.push({ content, key, callNote });
       return 100 + room.asks.length;
     },
-    audit: async (type, payload) => void room.audits.push([type, payload]),
+    caption: async (payload) => void room.captions.push(payload),
+    snapshotNote: async (content, files, callNote) =>
+      void room.snapshotNotes.push({ content, files, callNote }),
+    // the audit log's offset: one more for each event
+    audit: async (type, payload) => room.audits.push([type, payload]),
     schedule: async (at) => void room.schedules.push(at),
     publish: () => void (room.published += 1),
     outboundMs,

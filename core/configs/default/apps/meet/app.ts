@@ -12,6 +12,8 @@
 //   POST /guest/check/<agent>       anyone: { secret } → { live }
 //   POST /guest/join/<agent>        anyone signed in: { secret } → the guest on the link
 //   GET  /guest/itx/<agent>         a guest of a live link: the WebSocket of their view of the agent
+//   POST /snapshot/<agent>          a member: the one picture their page took for the agent's
+//                                   request ("Let the agent look", ../../call/snapshot.ts)
 //
 // `<agent>` is the agent's path (`/agents/meet/2026-11-19-1030-standup`). Before anyone who is no
 // member reaches an agent's context, the mind's catalog must list it: a stranger makes no context.
@@ -20,6 +22,7 @@ import { type AppDescription, type IterateConfigEntrypoint, serveFiles } from "i
 import { errorCode, reportIssue } from "iterate/lib";
 import { z } from "zod";
 import { GUEST_JOINED, isLive, isLiveGuest, type ShareState } from "../../call/share.ts";
+import { handleSnapshotUpload } from "../../call/snapshot.ts";
 import { openFile } from "../open-files.ts";
 import theme from "../theme.css";
 import index from "./index.html";
@@ -33,7 +36,7 @@ const MEET: AppDescription = { name: "Meet", icon: "/icon.svg", signIn: ["guest"
 const AGENT = /^\/agents(?:\/[A-Za-z0-9][\w.@+-]{0,99}){1,8}$/;
 /** What a check and a join send: the link's secret. */
 const SecretBody = z.object({ secret: z.string().max(200) });
-const ROUTE = /^\/(contexts|join|in|guest\/check|guest\/join|guest\/itx)(\/.*)$/;
+const ROUTE = /^\/(contexts|join|in|snapshot|guest\/check|guest\/join|guest\/itx)(\/.*)$/;
 
 type Host = Pick<IterateConfigEntrypoint, "auth" | "getItx">;
 type Itx = ReturnType<Host["getItx"]>;
@@ -198,6 +201,11 @@ export function meetApp({ joinFoldMs = JOIN_FOLD_MS }: { joinFoldMs?: number } =
       if (/^\/[^/]+\.[a-z]+$/.test(pathname))
         return serveFiles(request, { files: { ...files, "theme.css": theme } });
       const [, route = "", agent = ""] = ROUTE.exec(pathname) || [];
+      if (route === "snapshot") {
+        if (!AGENT.test(agent)) return notFound();
+        if (request.method !== "POST") return new Response("Method not allowed\n", { status: 405 });
+        return handleSnapshotUpload(request, host, agent);
+      }
       if (route.startsWith("guest/")) {
         if (!AGENT.test(agent)) return notFound();
         if (route === "guest/itx" || request.method === "POST")

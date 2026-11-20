@@ -21,6 +21,7 @@ import {
 } from "./apps/onboarding/steps.ts";
 import { meetApp } from "./apps/meet/app.ts";
 import { startMeeting } from "./apps/meet/meeting.ts";
+import { callSnapshot } from "./call/snapshot.ts";
 import { endShare, shareAgent, type ShareItx, shareLinks } from "./call/share-api.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
 // Voice devices and the phone line (apps.md, "Voice devices") are off: take the "// " off this
@@ -472,6 +473,15 @@ export default class extends IterateConfigEntrypoint {
     // (`IterateConfigProcessEventArgs<"agents">`) says. The SDK has no typed getItx for it.
     using itx = this.getItx() as IterateContextApiWith<"agents"> & Disposable;
     return await startMeeting(itx, options);
+  }
+
+  /** `itx.config.callSnapshot({ source, of? })`: ONE still picture of the camera or the shared
+   *  screen of a person in the CALLING AGENT'S OWN CALL who turned "Let the agent look" on
+   *  (call/snapshot.ts). The picture is attached to the agent's context for its next step; a
+   *  refusal says why (`{ status: "refused", reason }`). */
+  async callSnapshot(input: { source: "camera" | "screen"; of?: string }) {
+    using itx = this.getItx();
+    return await callSnapshot(itx, input, { callerPath: () => this.callerPath() });
   }
 
   /** `itx.config.shareAgent({ agent, lifetimeMs? })`: a link that lets people who are not members

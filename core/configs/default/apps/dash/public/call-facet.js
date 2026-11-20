@@ -12,5 +12,7 @@ export const CALL_FACET = {
     "events.iterate.com/itx/subscription-configured",
     "call/due",
     "events.iterate.com/agent/web-message-sent",
+    "events.iterate.com/agent/llm-request-settled",
+    "events.iterate.com/itx/run-requested",
   ],
 };

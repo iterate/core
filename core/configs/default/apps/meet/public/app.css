@@ -96,3 +96,17 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+/* who lets the agent look now, and the note that it took a picture: one quiet line under the head */
+.meet-look-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+/* the transcript over the composer: the strip, and the whole transcript when it is open */
+.meet-transcript {
+  display: grid;
+  gap: 0.25rem;
+}

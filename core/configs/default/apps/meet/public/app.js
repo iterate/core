@@ -13,12 +13,28 @@
 // guest's page holds the platform's view of the one agent's context. The call is the kit's
 // (`useCall`, `CallBar`, `CallTiles`); nothing polls. Join opens the kit's lobby (`CallLobby`)
 // first: the person checks their camera and their sound, then joins with what they turned on.
-import { html, render, useCallback, useEffect, useState } from "@iterate-com/ui/page";
+//
+// What is said runs along the kit's caption strip over the composer, and opens to the whole
+// transcript. A member who shares a camera or a screen may turn on "Let the agent look" for it:
+// then, when the agent asks (`itx.config.callSnapshot`, ../../../call/snapshot.ts), this page takes
+// ONE picture of its own video and sends it (snapshot-capture.js). It is off by default, and ends
+// when the source stops.
+import {
+  html,
+  render,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "@iterate-com/ui/page";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
 import { CallBar } from "@iterate-com/ui/components/call/call-bar";
 import { CallLobby } from "@iterate-com/ui/components/call/call-lobby";
 import { CallPipButton, CallPipPlace, useCallPip } from "@iterate-com/ui/components/call/call-pip";
 import { CallTiles } from "@iterate-com/ui/components/call/call-tiles";
+import { CaptionStrip } from "@iterate-com/ui/components/call/caption-strip";
+import { TranscriptHistory } from "@iterate-com/ui/components/call/transcript-history";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
 import {
   Dialog,
@@ -37,6 +53,7 @@ import {
   useIterateContext,
 } from "@iterate-com/ui/live";
 import { googleCalendarUrl, icsOf, localInput, nextQuarter } from "./invite.js";
+import { sendSnapshot } from "./snapshot-capture.js";
 // the template's one link-making for guests: the twin of the Dash's file (its header says why)
 import { endLink, makeLink } from "./share-links.js";
 
@@ -105,6 +122,140 @@ function Front({ itx }) {
   `;
 }
 
+// ── what is said, and "Let the agent look" ──
+const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
+const SOURCES = ["camera", "screen"];
+/** The caption strip's live words: none yet, the strip shows the lines said. */
+const NO_CAPTIONS = { captions: [], pending: 0 };
+const NO_OLDER = { loading: false, exhausted: true, load: () => {} };
+
+/** The lines said, from the call's quiet notes (`callNote.kind === "said"`, ../../../call/rules.ts
+ *  `said`), oldest first, as the kit's caption strip and transcript take them. */
+function saidLines(events) {
+  const lines = [];
+  for (const event of events) {
+    const note = event?.type === CONTEXT_ADDED ? event.payload?.callNote : null;
+    if (note?.kind !== "said" || typeof note.text !== "string") continue;
+    lines.push({
+      key: note.id || `said:${event.offset}`,
+      offset: typeof event.offset === "number" ? event.offset : undefined,
+      who:
+        note.who?.actor === "voice-agent"
+          ? "The voice agent"
+          : note.who?.name || note.who?.actor || "Someone",
+      text: note.text,
+      at: typeof note.at === "number" ? note.at : Date.parse(event.createdAt ?? "") || Date.now(),
+    });
+  }
+  return lines;
+}
+
+/** A snapshot note with its picture taken off: what a guest's page shows. */
+function withoutSnapshotFiles(event) {
+  if (event?.type !== CONTEXT_ADDED || event.payload?.callNote?.kind !== "snapshot") return event;
+  return { ...event, payload: { ...event.payload, files: undefined } };
+}
+
+/** "Let the agent look" on this page: the switch for the page's own camera and screen (the call's
+ *  `look`), and the answer to the agent's request for one picture of one of them. The page answers
+ *  only a request for its own page and a source it shares with the switch on; the call checks the
+ *  same again at the upload. */
+function useLook({ stub, page, member, call, ui, rawLive }) {
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  // what the switch holds now, read at the capture too: a switch turned off stops a capture
+  const allowed = useRef({});
+  const videos = useRef([]);
+  const handled = useRef(new Set());
+  const server = page ? rawLive?.inCall?.[page]?.look : undefined;
+  const camera = Boolean(ui.joined && ui.camera && server?.camera);
+  const screen = Boolean(ui.joined && ui.screen && server?.screen);
+  const on = useMemo(
+    () => ({ ...(camera && { camera: true }), ...(screen && { screen: true }) }),
+    [camera, screen],
+  );
+  useEffect(() => {
+    allowed.current = on;
+  }, [on]);
+  useEffect(() => {
+    videos.current = ui.videos;
+  }, [ui.videos]);
+
+  const toggle = useCallback(async () => {
+    if (!member || !stub || !page || !ui.joined) return;
+    const anyOn = SOURCES.some((kind) => ui[kind] && allowed.current[kind]);
+    const desired = anyOn
+      ? { camera: false, screen: false }
+      : Object.fromEntries(SOURCES.filter((kind) => ui[kind]).map((kind) => [kind, true]));
+    if (!Object.keys(desired).length) return;
+    // off at once on this page: no capture goes on while the call takes the change
+    if (anyOn) allowed.current = {};
+    setBusy(true);
+    try {
+      const answer = await stub.invoke(["itx", "facets", ["get", "call"], ["look", page, desired]]);
+      allowed.current = { ...answer?.look };
+    } catch (failure) {
+      call?.fail(`"Let the agent look" could not change: ${messageOf(failure)}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [member, stub, page, ui, call]);
+
+  // the agent's request for one picture, when it is this page's
+  const pending = rawLive?.snapshot;
+  useEffect(() => {
+    if (!member || !page || pending?.status !== "requested" || pending.page !== page) return;
+    const { id, source, requestedAt } = pending;
+    if (!id || handled.current.has(id) || Date.now() - requestedAt > 20_000) return;
+    handled.current.add(id);
+    const own = videos.current.find((video) => video.local && video.kind === source);
+    const preview = own?.stream
+      ? [...document.querySelectorAll('[data-slot="call-tiles"] video')].find(
+          (element) => element.srcObject === own.stream,
+        )
+      : null;
+    void sendSnapshot({
+      url: `/snapshot${AGENT}`,
+      requestId: id,
+      page,
+      stream: own?.stream,
+      checkAllowed: () => Boolean(allowed.current[source]),
+      fallbackVideo: preview,
+    }).then((result) => {
+      if (result.ok) setNotice(`The agent took one picture of your ${source}. It is in the chat.`);
+    });
+  }, [member, page, pending]);
+
+  // who has it on now, for everyone in the call to see
+  const lookingNow = Object.values(rawLive?.inCall || {}).flatMap((row) => {
+    const kinds = SOURCES.filter((kind) => row?.look?.[kind] && kind in (row?.tracks || {}));
+    return kinds.length ? [`${row.who?.name || "Someone"} (${kinds.join(" and ")})`] : [];
+  });
+  return { on, busy, toggle, notice, setNotice, lookingNow };
+}
+
+/** The switch, while the member's page shares a camera or a screen. */
+function LookButton({ look, ui }) {
+  const shared = SOURCES.filter((kind) => ui[kind]);
+  if (!ui.joined || !shared.length) return null;
+  const onNow = shared.filter((kind) => look.on[kind]);
+  const title = onNow.length
+    ? `The agent may take one picture of your ${onNow.join(" and ")} when it is asked to look. Each picture shows in the chat. Press to stop.`
+    : `Let the agent take one picture of your ${shared.join(" and ")} when it is asked to look. Off until you press.`;
+  return html`
+    <${Button}
+      size="sm"
+      variant=${onNow.length ? "default" : "outline"}
+      aria-pressed=${onNow.length > 0}
+      title=${title}
+      disabled=${look.busy}
+      onClick=${() => void look.toggle()}
+    >
+      ${onNow.length ? "The agent may look" : "Let the agent look"}
+    <//>
+  `;
+}
+
 // ── one meeting: the agent's chat with its call ──
 /** The chat and the call on `stub`, the agent's context: a member's `itx.cd(agent)`, or a guest's
  *  view's. `session` is what the page holds (the member's itx, or the guest's view), which sends
@@ -114,16 +265,37 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
   const [state, setState] = useState({});
   const patch = useCallback((change) => setState((previous) => ({ ...previous, ...change })), []);
   const context = useIterateContext(stub.stub, AgentChat.contextOptions);
-  const { call, ui, live } = useCall(
-    stub.stub,
-    context.subscription,
-    context.liveState.call?.value,
-  );
+  const rawLive = context.liveState.call?.value;
+  const { call, ui, live } = useCall(stub.stub, context.subscription, rawLive);
   const pip = useCallPip(ui);
   const signedUrl = useCallback(
     async (file) => (await stub.stub.files.get(file).url()).url,
     [stub.stub],
   );
+  const said = useMemo(() => saidLines(context.events), [context.events]);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const look = useLook({ stub: stub.stub, page: context.subscription, member, call, ui, rawLive });
+  // a guest sees that a picture was taken, never the picture: its file is no guest's to read
+  const chatContext = useMemo(
+    () => (member ? context : { ...context, events: context.events.map(withoutSnapshotFiles) }),
+    [context, member],
+  );
+  const transcript = transcriptOpen
+    ? html`<${TranscriptHistory} said=${said} older=${context.older || NO_OLDER} me=${me || ""} />`
+    : null;
+  const strip = html`
+    <${CaptionStrip}
+      said=${said}
+      live=${NO_CAPTIONS}
+      me=${me || ""}
+      open=${transcriptOpen}
+      onOpen=${() => setTranscriptOpen((was) => !was)}
+    />
+  `;
+  const aboveComposer =
+    ui.joined || live?.voiceAgent || said.length > 0
+      ? html`<div className="meet-transcript">${transcript}${strip}</div>`
+      : undefined;
   // the lobby before a join, while it is open: a press of the person's opened it, so its
   // microphone is on (the kit's CallLobby says why)
   const [lobby, setLobby] = useState(false);
@@ -154,9 +326,32 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
         </div>
         <div className="meet-row">
           <${CallBar} ...${bar} />
+          ${member && html`<${LookButton} look=${look} ui=${ui} />`}
           ${live && html`<${CallPipButton} pip=${pip} />`}
         </div>
       </header>
+      ${
+        (look.lookingNow.length > 0 || look.notice) &&
+        html`
+          <div className="meet-look-strip" role="status">
+            ${
+              look.lookingNow.length > 0 &&
+              html`<span>The agent may look: ${look.lookingNow.join(", ")}</span>`
+            }
+            ${
+              look.notice &&
+              html`
+                <span className="meet-row">
+                  ${look.notice}
+                  <${Button} size="xs" variant="ghost" onClick=${() => look.setNotice("")}>
+                    Dismiss
+                  <//>
+                </span>
+              `
+            }
+          </div>
+        `
+      }
       <${Dialog} open=${lobby} onOpenChange=${setLobby}>
         <${DialogContent} className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
           <${DialogHeader}>
@@ -175,7 +370,7 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
         <div className="meet-chat-pane">
           <${AgentChat}
             path=${AGENT}
-            context=${context}
+            context=${chatContext}
             error=${stub.error}
             state=${state}
             onStateChange=${patch}
@@ -185,6 +380,7 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
             signedUrl=${signedUrl}
             me=${me}
             presence=${true}
+            aboveComposer=${aboveComposer}
             placeholder="Message this meeting's agent"
           />
         </div>
