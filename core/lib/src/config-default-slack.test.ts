@@ -53,6 +53,18 @@ test("a mention starts the agent of its own thread", () => {
   );
 });
 
+test("the agent is told to show Slack's status in its thread while it works, and to clear it", () => {
+  const content = slackContentOf(
+    slackMessageOf(
+      delivery({ type: "message", ts: "18.000200", thread_ts: "17.000100", text: "and this?" }),
+    )!,
+  );
+  expect(content).toContain(
+    'await itx.config.slack("assistant.threads.setStatus", { channel_id: "C1", thread_ts: "17.000100", status: "is thinking", loading_messages: ["Planning a response"] })',
+  );
+  expect(content).toContain('Clear it with `status: ""`');
+});
+
 test("a later message of the thread has the same agent, and starts none", () => {
   const message = slackMessageOf(
     delivery({ type: "message", ts: "18.000200", thread_ts: "17.000100", text: "and this?" }),

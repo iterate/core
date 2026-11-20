@@ -1,7 +1,8 @@
 // The default config's words to an agent about a request whose sender it cannot be sure of
 // (core/configs/default/worker.ts, AGENTS.md "When you are unsure who asks, ask for a signature"):
 // an outside person's mail, another mind's agent's mail and an X message each name the signature,
-// `itx.approvals.proposeStatement`, as the agent's first move. An X message is answered through the
+// `itx.approvals.proposeStatement`, as the agent's first move; a member's own mail names it for a
+// request that does not fit the member. An X message is answered through the
 // secret of the X account it came to.
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
@@ -16,6 +17,14 @@ test("an outside person's reply tells the agent to get a signature, theirs at th
   expect(told).toContain("first get a signature with itx.approvals.proposeStatement");
   expect(told).toContain("theirs about themselves at /people/ada@outside.example");
   expect(told).not.toContain("member's word");
+});
+
+test("a member's own mail tells the agent to get the member's signature for a request that does not fit them", async () => {
+  const told = await toldOf(received({ from: "member@mind.example", member: true }));
+  expect(told).toContain("Email from member@mind.example: Your order");
+  expect(told).toContain(
+    "first get the member's signature with itx.approvals.proposeStatement, sent to their address on record",
+  );
 });
 
 test("another mind's agent's mail tells the agent to get a member's signature", async () => {
@@ -57,7 +66,7 @@ test("every agent's instructions ask for a signature before their first task lis
 
 /** A mail received on `/integrations/email` at offset 5, in a thread whose first mail, at
  *  offset 1, the agent `/agents/web/a1` sent to `from`. */
-function received(input: { from: string; mind?: { hops: number } }) {
+function received(input: { from: string; mind?: { hops: number }; member?: boolean }) {
   return {
     type: "events.iterate.com/email/received",
     path: "/integrations/email",
@@ -65,7 +74,7 @@ function received(input: { from: string; mind?: { hops: number } }) {
     payload: {
       ...message({ from: input.from, to: ["agent@mind.example"] }),
       envelope: { from: input.from, to: "agent@mind.example" },
-      sender: { verified: true, member: false, direct: true },
+      sender: { verified: true, member: Boolean(input.member), direct: true },
       automated: false,
       authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
       mind: input.mind || null,
