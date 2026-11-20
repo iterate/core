@@ -2,6 +2,7 @@
 // (iterate/workers). The boundary sends it the requests for the control-plane hostname (./http.ts) and
 // asks it who a token or a cookie is.
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { isMindId } from "iterate/signed";
 import type { AuthService } from "iterate/workers";
 import { isBlocked } from "./blocked.ts";
 import { personSessionOf } from "./cookies.ts";
@@ -11,6 +12,7 @@ import { identityFactsDelivered, identityFactsToDeliver, identityLogResponse } f
 import { verifiedStatement } from "./keys.ts";
 import { isMember, isMemberSession } from "./members.ts";
 import { mindOfSignedRequest } from "./mind-fetch.ts";
+import { enrolledHere } from "./minds.ts";
 import { hostClientOf } from "./oauth.ts";
 import { signedByStack, signedDeliveryByStack } from "./stack-key.ts";
 import { proposeStatement } from "./statement-drafts.ts";
@@ -91,5 +93,14 @@ export class Auth extends WorkerEntrypoint<Env> implements AuthService {
 export class Deliveries extends WorkerEntrypoint<Env> {
   async sign(input: Parameters<typeof signedDeliveryByStack>[1]) {
     return signedDeliveryByStack(this.env, input);
+  }
+}
+
+/** WHETHER THIS MIND LET ANOTHER MIND IN, for a Worker of the same account over a binding to this
+ *  entrypoint alone: the Cloud's clients ask it for each mind they serve. Yes or no, and nothing
+ *  of the rule (./minds.ts `enrolledHere`). */
+export class Enrolments extends WorkerEntrypoint<Env> {
+  async enrolled(mind: string) {
+    return isMindId(mind) && enrolledHere(this.env, mind);
   }
 }

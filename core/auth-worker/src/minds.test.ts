@@ -19,7 +19,7 @@ import {
 import { expect, test, vi } from "vitest";
 import { newIdentityLog } from "../../lib/src/test-support/identity-log.ts";
 import { identityIntakeResponse } from "./identity.ts";
-import { mindKeyOf, mindSignerOf } from "./minds.ts";
+import { enrolledHere, mindKeyOf, mindSignerOf } from "./minds.ts";
 import { signedByStack, signedDeliveryByStack, stackKeyResponse } from "./stack-key.ts";
 import { statementsResponse } from "./statements.ts";
 import { sqliteStack, stackKeyPair } from "./test-support.ts";
@@ -589,6 +589,23 @@ test("a rule that names a key takes that key alone", async () => {
   expect(await send(await peer.signs({ path: `/minds/${peer.mind}/x` }))).toMatchObject({
     status: 200,
   });
+});
+
+test("a mind is enrolled while the row of its id reaches its own context: by id, or by a hostname rule pinned to the id; not for one path below it, and not after an end", async () => {
+  const { env, db, send, rule, peer } = await stack("peer-enrolled.net");
+  expect(await enrolledHere(env, peer.mind)).toBe(false);
+  await send(await rule([`/minds/${peer.mind}/feedback/`]));
+  expect(await enrolledHere(env, peer.mind)).toBe(false);
+  await send(await rule([`/minds/${peer.mind}/`]));
+  expect(await enrolledHere(env, peer.mind)).toBe(true);
+  await send(await rule([]));
+  expect(await enrolledHere(env, peer.mind)).toBe(false);
+  // a rule by hostname from before, once its first use pinned it to the id
+  db.prepare(
+    `update mind_melds set append = '["/minds/peer-enrolled.net/"]' where domain = 'peer-enrolled.net'`,
+  ).run();
+  expect(await enrolledHere(env, peer.mind)).toBe(true);
+  expect(await enrolledHere(env, "f".repeat(64))).toBe(false);
 });
 
 test("the stack signs with ML-DSA-65 under the key that it publishes, with the mind's id beside its hostname, and a reader verifies it there", async () => {

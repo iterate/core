@@ -2,7 +2,7 @@
 // (./rpc.ts), which answers requests through ./http.ts. It has no route of its own.
 import type { Env } from "./env.ts";
 
-export { Auth, Deliveries } from "./rpc.ts";
+export { Auth, Deliveries, Enrolments } from "./rpc.ts";
 
 export default {
   fetch: () => new Response("Not found", { status: 404 }),

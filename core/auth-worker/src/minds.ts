@@ -152,6 +152,18 @@ export async function mindKeyOf(
   };
 }
 
+/** A MIND IS ENROLLED HERE when the row that holds its id lets it append under its own context,
+ *  `/minds/<id>/`, in either form (`pathsOf`). An empty rule, a rule for one path below it, or no
+ *  row is not enrolled. A point read: `mind` has a unique index. */
+export async function enrolledHere(env: Env, mind: string): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `select domain, mind, append, key, state from mind_melds where mind = ?1`,
+  )
+    .bind(mind)
+    .first<MeldRow>();
+  return !!row && pathsOf(row, mind).includes(`/minds/${mind}/`);
+}
+
 /** The log state kept for the mind a statement names: its id's row, or, for a statement that
  *  names a hostname alone, the pinned row at that hostname. */
 async function keptStateOf(env: Env, mind: string) {
