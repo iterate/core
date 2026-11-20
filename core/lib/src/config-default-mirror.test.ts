@@ -27,6 +27,7 @@ test("the default config's pages and folders load here as the platform's loader 
   expect(dashIndex).toMatch(/<title>Dash<\/title>/);
   // the Dash's page has the marks of iterate Cloud's apps too; no app keeps an icon of its own
   expect(Object.keys(dashFiles)).toEqual([
+    "agent-share.js",
     "app.css",
     "app.js",
     "brands/cloudflare.svg",
@@ -35,6 +36,7 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/slack.svg",
     "brands/x.svg",
     "call-facet.js",
+    "share-links.js",
   ]);
   expect(onboardingIndex).toMatch(/<title>Onboarding<\/title>/);
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);

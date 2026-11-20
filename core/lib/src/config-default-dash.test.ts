@@ -8,12 +8,57 @@ import { expect, test } from "vitest";
 import { z } from "zod";
 import { dashLink, DashLinkInput, dashLinks } from "../../configs/default/apps/dash/links.ts";
 import { CALL_FACET } from "../../configs/default/call.ts";
+import { isLive, reduceShare, type ShareEvent } from "../../configs/default/call/share.ts";
 // @ts-expect-error -- a plain browser module of the Dash, with no types
 import { CALL_FACET as DASH_CALL_FACET } from "../../configs/default/apps/dash/public/call-facet.js";
+// @ts-expect-error -- a plain browser module of the Dash, with no types
+import * as shareLinks from "../../configs/default/apps/dash/public/share-links.js";
 import fixture from "./dash-routes.fixture.json" with { type: "json" };
 
 test("the Dash's call facet spec is the config's own: the Dash turns on the call that call.ts hosts", () => {
   expect(DASH_CALL_FACET).toEqual(CALL_FACET);
+});
+
+test("the Dash's Share makes a link that the call's share rules take: Meet's guest page, the secret's hash alone in the log, and End ends it", async () => {
+  const links = shareLinks as {
+    makeLink(input: { zone: string; agent: string; lifetimeMs: number; now: number }): Promise<{
+      event: { type: string; payload: { link: string; secretHash: string; until: number } };
+      url: string;
+    }>;
+    endLink(link: string): { type: string; payload: { link: string } };
+    hashOfSecret(secret: string): Promise<string>;
+    agentPathOf(value: unknown): string | null;
+    LIFETIMES: { ms: number }[];
+  };
+  const now = Date.parse("2026-11-20T12:00:00.000Z");
+  const { event, url } = await links.makeLink({
+    zone: "example.com",
+    agent: "/agents/standup",
+    lifetimeMs: 24 * 3_600_000,
+    now,
+  });
+  // the link opens Meet's guest page for the agent; the secret is in the fragment alone
+  const [page, secret] = url.split("#");
+  expect(page).toBe("https://meet.example.com/join/agents/standup");
+  expect(secret).toMatch(/^[\w-]{43}$/);
+  expect(JSON.stringify(event)).not.toContain(secret);
+  expect(event.payload).toMatchObject({ secretHash: await links.hashOfSecret(secret!) });
+  // a member's link, as the call folds it (call/share.ts): live until its end
+  const source = { principal: { actor: "user_1", name: "jonas" } } as ShareEvent["source"];
+  const createdAt = new Date(now).toISOString();
+  const made = reduceShare({ links: [] }, { ...event, createdAt, source });
+  expect(made.links).toHaveLength(1);
+  expect(isLive(made.links[0]!, now + 1)).toBe(true);
+  const ended = reduceShare(made, { ...links.endLink(event.payload.link), createdAt, source });
+  expect(isLive(ended.links[0]!, now + 1)).toBe(false);
+  // the longest choice is within the share rules' own limit
+  expect(Math.max(...links.LIFETIMES.map((choice) => choice.ms))).toBe(7 * 24 * 3_600_000);
+  // an agent's path only, as written
+  expect(
+    ["/agents/standup", "/agents/meet/a-b", "/", "/agents", "/agents/../x", "/docs/a"].map(
+      links.agentPathOf,
+    ),
+  ).toEqual(["/agents/standup", "/agents/meet/a-b", null, null, null, null]);
 });
 
 test("no file of the template names a path of the Dash that acts: the Integrations page's buttons call the mind's config", () => {

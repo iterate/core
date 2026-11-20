@@ -116,6 +116,15 @@ is drawn again, and a typed draft in it is lost. To keep them, say on the compon
 `useKeptContext` from `@iterate-com/ui/live`, which open them again by themselves. A wrapper that
 only draws around one of iterate's pages needs the one line alone.
 
+**Who else is here, and Share.** The Agents row has `presence: true`: an agent's chat shows who
+else has it open and who is typing (from the context's own subscription rows; nothing durable is
+written for it). Share, the button beside them in the agent's header
+(`apps/dash/public/agent-share.js`), makes links that let people who are not members into that
+one agent's chat and call, with a name and no account: its first open turns the agent's call on
+(the call's facet holds the links, `call/share.ts`), and a link opens Meet's guest page,
+`https://meet.<zone>/join<agent>#<secret>`. The link is shown once; the log keeps its secret's
+hash alone. A link lives an hour, a day or 7 days, and ends sooner when a member ends it there.
+
 **An agent's tools in the page are off.** `pageTools: true` on the Agents row of `app.js` makes
 each member's open agent page lend that agent `itx.page.<person>.<tab>` while the page is open:
 `banner.show(…)`, and, inside the element that `index.html` marks with `data-page-tools="scope"`

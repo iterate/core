@@ -11,13 +11,22 @@
 // The page has no API of its own. A member's page holds the member's `/itx` socket: a meeting
 // starts by `itx.config.startMeeting` (../meeting.ts), the one function an agent calls too. A
 // guest's page holds the platform's view of the one agent's context. The call is the kit's
-// (`useCall`, `CallBar`, `CallTiles`); nothing polls.
+// (`useCall`, `CallBar`, `CallTiles`); nothing polls. Join opens the kit's lobby (`CallLobby`)
+// first: the person checks their camera and their sound, then joins with what they turned on.
 import { html, render, useCallback, useEffect, useState } from "@iterate-com/ui/page";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
 import { CallBar } from "@iterate-com/ui/components/call/call-bar";
+import { CallLobby } from "@iterate-com/ui/components/call/call-lobby";
 import { CallPipButton, CallPipPlace, useCallPip } from "@iterate-com/ui/components/call/call-pip";
 import { CallTiles } from "@iterate-com/ui/components/call/call-tiles";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@iterate-com/ui/components/ui/dialog";
 import { Input } from "@iterate-com/ui/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import { useCall } from "@iterate-com/ui/lib/call-engine";
@@ -113,8 +122,23 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
     async (file) => (await stub.stub.files.get(file).url()).url,
     [stub.stub],
   );
-  // "Start a call" only while the agent has no call (no live state): then the bar's Join
-  const bar = { call, ui, live, member, start: live ? undefined : start };
+  // the lobby before a join, while it is open: a press of the person's opened it, so its
+  // microphone is on (the kit's CallLobby says why)
+  const [lobby, setLobby] = useState(false);
+  const fromLobby = (media) => {
+    setLobby(false);
+    void call?.join({ ...media, listenOnly: !media.mic });
+  };
+  // "Start a call" only while the agent has no call (no live state): then the bar's Join, which
+  // opens the lobby
+  const bar = {
+    call,
+    ui,
+    live,
+    member,
+    start: live ? undefined : start,
+    join: () => setLobby(true),
+  };
   return html`
     <div className="meet">
       <header className="meet-head">
@@ -131,6 +155,17 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
           ${live && html`<${CallPipButton} pip=${pip} />`}
         </div>
       </header>
+      <${Dialog} open=${lobby} onOpenChange=${setLobby}>
+        <${DialogContent} className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
+          <${DialogHeader}>
+            <${DialogTitle}>Join the call<//>
+            <${DialogDescription}>
+              Check your camera and your sound first. Nothing is sent until you join.
+            <//>
+          <//>
+          ${lobby && html`<${CallLobby} live=${live} action="join" micAtStart onJoin=${fromLobby} />`}
+        <//>
+      <//>
       <${CallPipPlace} pip=${pip}>
         <${CallTiles} call=${call} ui=${ui} live=${live} member=${member} />
       <//>
