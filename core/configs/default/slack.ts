@@ -13,6 +13,11 @@
 // what guests and other workspaces' people wrote. So every message in an answer of
 // `itx.config.slack` says who wrote it (`slackForAgent`), and the words of anyone who is no member
 // come as a quote, with a line that says they are no instruction.
+//
+// `!DEBUG`: a member's message that is exactly `!debug` (after at most one mention of this bot)
+// reaches no agent. The thread gets the agent's path, its Dash link and a few facts (debug.ts).
+
+import { DEBUG_COMMAND, debugAnswer } from "./debug.ts";
 
 /** The secret a member linked the workspace into, through iterate Cloud's Slack app. */
 const SLACK_SECRET = "/secrets/slack";
@@ -52,6 +57,14 @@ export function slackMessageOf(payload: unknown) {
   if (event.user_team && event.user_team !== teamId) return null;
   // a message outside a thread starts one: Slack's thread is named by its first message's `ts`
   const thread = event.thread_ts || event.ts;
+  // `!debug`: the person's own text, after at most one mention of this bot, and nothing else.
+  // A quote (`> !debug`) or a forward (Slack puts its words in `attachments`) is no command.
+  const text = event.text || "";
+  const mention = /^<@([A-Z0-9]+)>\s*/.exec(text);
+  const own =
+    mention && body?.authorizations?.some((authorization) => authorization.user_id === mention[1])
+      ? text.slice(mention[0].length)
+      : text;
   return {
     /** A path segment takes no dot: the thread's `ts` with a dash in the dot's place. */
     agent: `/agents/slack/${teamId}/${event.channel}/${thread.replace(".", "-")}`,
@@ -64,8 +77,31 @@ export function slackMessageOf(payload: unknown) {
     channel: event.channel,
     thread,
     user: event.user,
-    text: event.text || "",
+    text,
+    /** The message is the command `!debug` (debug.ts): it gets `answerSlackDebug`, and no agent. */
+    debug: own.trim() === DEBUG_COMMAND,
   };
+}
+
+/** `!debug` IN A THREAD (debug.ts): the answer, in the thread where the agent's own replies go,
+ *  once for each Slack message, and true; any other message, false. Call it after
+ *  `slackSenderIsMember`: a person who is no member gets what they got before. It makes no
+ *  agent and gives none a turn. */
+export async function answerSlackDebug(
+  itx: SlackItx & Parameters<typeof debugAnswer>[0],
+  message: NonNullable<ReturnType<typeof slackMessageOf>>,
+): Promise<boolean> {
+  if (!message.debug) return false;
+  const key = `slack-debug:${message.teamId}:${message.idempotencyKey}`;
+  // kept before the post, as for a refusal: a redelivery posts nothing
+  if (await itx.kv.get(key)) return true;
+  await itx.kv.put(key, "1");
+  await callSlack(itx, "chat.postMessage", {
+    channel: message.channel,
+    thread_ts: message.thread,
+    text: await debugAnswer(itx, message.agent),
+  });
+  return true;
 }
 
 /** What the agent reads: who said what, and how to answer. */

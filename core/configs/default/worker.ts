@@ -62,6 +62,7 @@ import {
   whoGetsTheMail,
 } from "./mail-replies.ts";
 import {
+  answerSlackDebug,
   refuseSlackSender,
   slackContentOf,
   slackForAgent,
@@ -590,6 +591,8 @@ async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs
         await refuseSlackSender(itx, message);
         break;
       }
+      // a member's `!debug`: the agent's path, its Dash link and a few facts, with no turn (debug.ts)
+      if (await answerSlackDebug(itx, message)) break;
       if (message.starts) await itx.agents.create(message.agent);
       else if (!(await itx.agents.list()).some((agent) => agent.path === message.agent)) break;
       await itx
