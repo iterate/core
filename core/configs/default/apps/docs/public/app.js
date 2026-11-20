@@ -15,7 +15,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
-import { AppShell } from "@iterate-com/ui/components/app-shell";
+import { AppShell, AppShellBrand } from "@iterate-com/ui/components/app-shell";
 import {
   commitAuthorOf,
   cursorColor,
@@ -68,6 +68,10 @@ const author = principal ? commitAuthorOf(principal) : undefined;
 const hostSession =
   window.__session ?? fetch("/.auth/session.json").then((answer) => answer.json());
 const mind = new URL((await hostSession).issuer).hostname;
+// The sidebar's head: the mind's icon above its address, as in the Dash. The app's own
+// `/icon.svg` is the mind's icon (../../open-files.ts), so the page asks its own host for it.
+// This app serves one mind, so it shows the plain head, with no list of minds to switch to.
+const MIND_ICON = html`<img src="/icon.svg" alt="" className="size-8 rounded-md" />`;
 
 // ── where the editor's processors are ──
 // The page starts a doc's processors (../processors/classes.ts says why from here) under a name
@@ -189,6 +193,7 @@ function App() {
       app="Docs"
       mind=${mind}
       mindHref=${() => "./"}
+      switcher=${html`<${AppShellBrand} app="Docs" line=${mind} logo=${MIND_ICON} href="./" />`}
       nav=${html`<${Files} repo=${repo} list=${list} path=${path} open=${open} />`}
       account=${principal}
       locationKey=${location.pathname + search}

@@ -6,7 +6,12 @@
 import { expect, test } from "vitest";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import dashFiles from "../../configs/default/apps/dash/public/";
-import { PROFILE_PATH, profileOf, serveProfile } from "../../configs/default/profile.ts";
+import {
+  PROFILE_PATH,
+  profileHtml,
+  profileOf,
+  serveProfile,
+} from "../../configs/default/profile.ts";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import templateFiles from "../../configs/default/profile/";
 import Config from "../../configs/default/worker.ts";
@@ -67,6 +72,38 @@ test("the homepage's title is the mind's name, and it shows the icon in the tab 
   expect(html).toContain("<title>example.com</title>");
   expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
   expect(html).toContain('<img src="/favicon.svg" alt="" width="64" height="64"');
+  // the heading is the name; the line under it still says which mind's default page this is
+  expect(html).toContain("<h1>example.com</h1>");
+  expect(html).toContain("Homepage of mind iterate.example.com</p>");
+});
+
+test("on a page, the name is the heading and the description is under it, both as text", () => {
+  const hostile = profileOf(
+    {
+      "profile.json": JSON.stringify({
+        name: 'Ada <script>alert(1)</script> & "co"',
+        description: "First line <b>bold</b>\nSecond & last",
+      }),
+      "icon.svg": "<svg/>",
+    },
+    "example.com",
+  );
+  expect(profileHtml(hostile)).toEqual({
+    head: [
+      '<title>Ada &lt;script>alert(1)&lt;/script> &amp; "co"</title>',
+      '<link rel="icon" href="/favicon.svg" type="image/svg+xml">',
+    ],
+    body: [
+      '<img src="/favicon.svg" alt="" width="64" height="64" style="border-radius:14px">',
+      '<h1>Ada &lt;script>alert(1)&lt;/script> &amp; "co"</h1>',
+      '<p style="white-space:pre-line">First line &lt;b>bold&lt;/b>\nSecond &amp; last</p>',
+    ],
+  });
+  // no icon and no description: the name alone
+  expect(profileHtml(profileOf({}, "example.com"))).toEqual({
+    head: ["<title>example.com</title>"],
+    body: ["<h1>example.com</h1>"],
+  });
 });
 
 test.for(["dash", "docs", "meet", "onboarding"])(

@@ -100,6 +100,30 @@ export function serveProfile(request: Request, files: ProfileFiles): Response | 
   );
 }
 
+/** THE PROFILE AS THE TOP OF A PAGE of the mind's website: `head` holds the title and the icon's
+ *  link; `body` the icon, the name as the heading, and the description under it when there is
+ *  one. The owner's words are text: they are escaped, and a line feed of the description stays a
+ *  line break. */
+export function profileHtml(profile: Profile): { head: string[]; body: string[] } {
+  const text = (words: string) => words.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
+  const [icon] = ICON_PATHS;
+  return {
+    head: [
+      `<title>${text(profile.name)}</title>`,
+      ...(profile.icon ? [`<link rel="icon" href="${icon}" type="image/svg+xml">`] : []),
+    ],
+    body: [
+      ...(profile.icon
+        ? [`<img src="${icon}" alt="" width="64" height="64" style="border-radius:14px">`]
+        : []),
+      `<h1>${text(profile.name)}</h1>`,
+      ...(profile.description
+        ? [`<p style="white-space:pre-line">${text(profile.description)}</p>`]
+        : []),
+    ],
+  };
+}
+
 /** THE MIND'S ICON AS AN ANSWER, or 404 for a mind with none. The website answers it at the icon
  *  paths above, and each app of the template at its own icon path (apps/open-files.ts): one file,
  *  `profile/icon.svg`, is the icon of the mind and of every app. */

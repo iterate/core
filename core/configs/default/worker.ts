@@ -62,7 +62,7 @@ import {
   mindMailSettingsOf,
   whoGetsTheMail,
 } from "./mail-replies.ts";
-import { profileOf, serveProfile } from "./profile.ts";
+import { profileHtml, profileOf, serveProfile } from "./profile.ts";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import profileFiles from "./profile/";
 import {
@@ -405,21 +405,16 @@ export default class extends IterateConfigEntrypoint {
         const zone = new URL(await itx.url()).hostname;
         const safeSlug = (mindSlug || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;");
         const safeZone = zone.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
-        const profile = profileOf(profileFiles, zone);
-        const safeName = profile.name.replaceAll("&", "&amp;").replaceAll("<", "&lt;");
+        // the mind's icon, its name as the heading and its description, as the owner wrote them
+        const profile = profileHtml(profileOf(profileFiles, zone));
         return new Response(
           [
             "<!doctype html>",
             '<meta charset="utf-8">',
-            `<title>${safeName}</title>`,
-            ...(profile.icon ? ['<link rel="icon" href="/favicon.svg" type="image/svg+xml">'] : []),
+            ...profile.head,
             '<body style="font-family:system-ui,-apple-system,sans-serif;max-width:36rem;margin:4rem auto;padding:0 1.25rem;line-height:1.6">',
-            ...(profile.icon
-              ? [
-                  '<img src="/favicon.svg" alt="" width="64" height="64" style="border-radius:14px">',
-                ]
-              : []),
-            `<h1>Homepage of mind ${safeSlug}</h1>`,
+            ...profile.body,
+            `<p style="color:#71717a;font-size:0.875rem">Homepage of mind ${safeSlug}</p>`,
             `<p><a href="https://onboarding.${safeZone}/">Continue setup</a> &middot; <a href="https://dash.${safeZone}/">Open Dash</a></p>`,
             "</body>",
             "",
