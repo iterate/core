@@ -354,6 +354,7 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
       offersEmail: true,
       offersGuest: false,
       asksAtOpen: false,
+      noPasskeyYet: false,
     }),
     chooser: chooserPage({ mind: MIND, email: "guest@example.net", here: next, app }),
   };
@@ -457,6 +458,7 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
     offersEmail: true,
     offersGuest: false,
     asksAtOpen: false,
+    noPasskeyYet: false,
   }).text();
   // an app's name and its host are text
   expect(passkey).toContain(

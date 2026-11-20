@@ -46,6 +46,7 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
       offersEmail: false,
       offersGuest: false,
       asksAtOpen: true,
+      noPasskeyYet: false,
     }),
   );
   expect(html).toContain(`<h1>Sign in to ${MIND}</h1>`);
@@ -70,6 +71,7 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
     offersEmail: true,
     offersGuest: false,
     asksAtOpen: false,
+    noPasskeyYet: false,
   }).text();
   expect(withEmail).toMatch(
     /<button type="submit">Sign in with a passkey<\/button>[^]*<form method="get" action="\/sign-in\/email" class="stack">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=c">\s*<button type="submit" class="secondary">Sign in with your email address<\/button>/,
@@ -84,6 +86,7 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
       offersEmail: false,
       offersGuest: false,
       asksAtOpen: false,
+      noPasskeyYet: false,
     }),
   );
   expect(forApp).toContain(
@@ -112,10 +115,57 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
     offersEmail: false,
     offersGuest: false,
     asksAtOpen: false,
+    noPasskeyYet: false,
   }).text();
   expect(forOnboarding).toContain(
     `<a href="/sign-in/access?next=%2Foauth2%2Fauth%3Fclient_id%3Donboarding">prove your email address with Cloudflare</a>`,
   );
+});
+
+test("on a mind where nobody has a passkey yet, the sign-in for owners has the first passkey as its main button and asks the browser for nothing as it opens; an app for anyone keeps the passkey's page", async () => {
+  const onboarding = {
+    host: "onboarding.example.com",
+    origin: "https://onboarding.example.com",
+    name: "Onboarding",
+    icon: "https://onboarding.example.com/icon.svg",
+    members: true,
+    signIn: ["passkey" as const],
+  };
+  const next = "/oauth2/auth?client_id=onboarding&state=a";
+  const html = await kept(
+    "sign-in-first-passkey",
+    signInPage({
+      mind: MIND,
+      next,
+      app: onboarding,
+      offersEmail: false,
+      offersGuest: false,
+      asksAtOpen: true,
+      noPasskeyYet: true,
+    }),
+  );
+  expect(html).toMatch(
+    /<p class="muted">Nobody has a passkey here yet. An owner proves their email address with Cloudflare, and then adds the first one.<\/p>\s*<form method="get" action="\/sign-in\/access" class="stack">\s*<input type="hidden" name="next" value="\/oauth2\/auth\?client_id=onboarding&#38;state=a">\s*<button type="submit">Set up your first passkey<\/button>\s*<\/form><p class="or">or<\/p>\s*<form id="passkey" class="stack" data-next="[^"]*">\s*<button type="submit" class="secondary">Sign in with a passkey<\/button>/,
+  );
+  expect(html).not.toMatch(
+    /signIn\(false\)|An owner with no passkey yet|Use a passkey you added here/,
+  );
+  // Access is for owners alone: an app for anyone has the passkey's page, as on any mind
+  const forAnyone = { ...onboarding, members: false };
+  const page = async (noPasskeyYet: boolean) =>
+    (
+      await signInPage({
+        mind: MIND,
+        next,
+        app: forAnyone,
+        offersEmail: false,
+        offersGuest: false,
+        asksAtOpen: true,
+        noPasskeyYet,
+      }).text()
+    ).replace(/ nonce="[^"]*"/g, "");
+  expect(await page(true)).toBe(await page(false));
+  expect(await page(true)).toContain("\nsignIn(false);");
 });
 
 test("the consent page asks one question, with Deny and Allow as a pair", async () => {

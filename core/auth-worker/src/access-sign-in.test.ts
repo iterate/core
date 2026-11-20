@@ -60,9 +60,12 @@ test("the sign-in goes on to the `next` it was given, when that is an explicit a
 test("new owner path from /sign-in (no next) through Cloudflare Access lands on the onboarding wizard, never the control-plane root", async () => {
   const { env } = sqliteStack();
   const signInHtml = await (await ask(env, "/sign-in", null)).text();
-  const match = /href="(\/sign-in\/access\?[^"]+)"/.exec(signInHtml);
-  expect(match?.[1]).toBe("/sign-in/access?next=%2F");
-  const accessAnswer = await ask(env, match![1]!, await tokenOf());
+  const match =
+    /<form method="get" action="(\/sign-in\/access)" class="stack">\s*<input type="hidden" name="(next)" value="([^"]+)">/.exec(
+      signInHtml,
+    );
+  expect(match?.slice(1)).toEqual(["/sign-in/access", "next", "/"]);
+  const accessAnswer = await ask(env, "/sign-in/access?next=%2F", await tokenOf());
   expect({
     status: accessAnswer.status,
     location: accessAnswer.headers.get("location"),
@@ -210,10 +213,10 @@ test.for([
   });
 });
 
-test("the sign-in page has an owner's link to Cloudflare Access, with where the sign-in goes on", async () => {
+test("the sign-in page has an owner's way to Cloudflare Access, with where the sign-in goes on", async () => {
   const page = await ask(sqliteStack().env, "/sign-in?next=%2Fkeys", null);
-  expect(await page.text()).toContain(
-    `An owner with no passkey yet: <a href="/sign-in/access?next=%2Fkeys">prove your email address with Cloudflare</a>, and then add one.`,
+  expect(await page.text()).toMatch(
+    /<form method="get" action="\/sign-in\/access" class="stack">\s*<input type="hidden" name="next" value="\/keys">\s*<button type="submit">Set up your first passkey<\/button>/,
   );
 });
 

@@ -124,7 +124,10 @@ export function appSignIn(app: AskingApp, { heading }: { heading?: string } = {}
  *  whose first method is the mailed code opens on that page instead (./http.ts). A sign-in that
  *  names no app, or an app for members (such as Onboarding or Dash), also has an owner's link to
  *  Cloudflare Access, the one proof of an address that the mind takes for an owner with no passkey
- *  yet (./access-sign-in.ts); an app for anyone has not: Access is for owners alone. */
+ *  yet (./access-sign-in.ts); an app for anyone has not: Access is for owners alone.
+ *  `noPasskeyYet`: nobody in the mind ever had a passkey, so no browser holds one to ask for. The
+ *  page with the owner's way then has it as its main button, asks for nothing as it opens, and
+ *  keeps the passkey's button below. */
 export function signInPage(input: {
   mind: string;
   next: string;
@@ -135,9 +138,15 @@ export function signInPage(input: {
   /** For an app's own sign-in whose app names "mind": a button to its field (./mind-sign-in.ts). */
   offersMind?: boolean;
   asksAtOpen: boolean;
+  noPasskeyYet: boolean;
 }) {
   const { mind, next } = input;
-  const passkey = passkeySignIn(next, { alone: true, asksAtOpen: input.asksAtOpen });
+  const forOwners = !input.app || input.app.members;
+  const first = input.noPasskeyYet && forOwners;
+  const passkey = passkeySignIn(next, {
+    alone: !first,
+    asksAtOpen: input.asksAtOpen && !first,
+  });
   const asking = input.app ? appSignIn(input.app) : null;
   const way = (
     action: string,
@@ -150,17 +159,24 @@ export function signInPage(input: {
     (input.offersEmail ? way("/sign-in/email", "Sign in with your email address") : "") +
     (input.offersGuest ? way("/sign-in/guest", "Come in as a guest") : "") +
     (input.offersMind ? way("/sign-in/mind", "Sign in with your mind") : "");
+  const firstPasskey = first
+    ? `<p class="muted">Nobody has a passkey here yet. An owner proves their email address with Cloudflare, and then adds the first one.</p>
+      <form method="get" action="/sign-in/access" class="stack">
+        <input type="hidden" name="next" value="${text(next)}">
+        <button type="submit">Set up your first passkey</button>
+      </form>`
+    : "";
   const ownerProof =
-    input.app && !input.app.members
-      ? ""
-      : `<p class="muted">An owner with no passkey yet: <a href="${text(`/sign-in/access?${new URLSearchParams({ next })}`)}">prove your email address with Cloudflare</a>, and then add one.</p>`;
+    forOwners && !first
+      ? `<p class="muted">An owner with no passkey yet: <a href="${text(`/sign-in/access?${new URLSearchParams({ next })}`)}">prove your email address with Cloudflare</a>, and then add one.</p>`
+      : "";
   return page({
     title: asking?.title || `Sign in to ${mind}`,
     mark: asking?.mark,
     centered: true,
     imageOrigin: asking?.imageOrigin,
     body: `${asking?.heading || `<h1>Sign in to ${text(mind)}</h1>`}
-      ${passkey.body}
+      ${firstPasskey}${passkey.body}
       ${email}${ownerProof}${asking?.about || ""}`,
     script: passkey.script,
   });

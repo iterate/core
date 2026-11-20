@@ -130,6 +130,9 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
       offersGuest: methods.includes("guest"),
       offersMind: methods.includes("mind"),
       asksAtOpen: !url.searchParams.has(AFTER_SIGN_OUT),
+      noPasskeyYet: !(await env.DB.prepare(
+        `select 1 from keys where format = 'webauthn' and outsider = 0 limit 1`,
+      ).first()),
     });
   }
   const members = await membersResponse(env, request, (token, resource) =>

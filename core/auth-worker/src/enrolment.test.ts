@@ -963,6 +963,12 @@ test.for([
   },
 ])("an app's sign-in page, $name", async ({ says, opensOn, below }) => {
   const stack = stackOf();
+  // a mind where somebody has a passkey: with none yet, an app for members opens on the first one
+  stack.db.exec("insert into users (id, email) values ('user_owner', 'owner@example.net')");
+  stack.db.exec(
+    `insert into keys (id, user_id, public_key, format, label, added_via, added_by, added_at)
+     values ('a-passkey', 'user_owner', 'a-public-key', 'webauthn', 'A phone', 'keys-page', 'user_owner', 0)`,
+  );
   const host = "https://guestbook.second.example";
   stack.described.set("guestbook.second.example", says);
   const { location } = await authorized(stack.env, "", host);
