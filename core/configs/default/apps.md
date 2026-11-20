@@ -269,8 +269,9 @@ Meet (below) is the template's page for it.
   panel). `mac.banner.show` shows a title, text and one to three buttons, and answers the label
   pressed (`{ pressed }`, or `{ pressed: null, why }`); a button's `open` page, on the mind's own
   domain, opens in the browser after the press. `mac.call.ring` is a banner that looks like a call:
-  Accept opens the agent's page in the Dash with `call=join`, which turns the call on if it is off
-  and joins it as the page loads, muted (`{ accepted }`, or `{ accepted: false, why }`). Show one only
+  Accept opens the agent's page in the Dash with `call=join`, which opens the call's lobby: the
+  person checks their camera and sound, then presses Join now (or Start the call, when it is off)
+  (`{ accepted }`, or `{ accepted: false, why }`). Show one only
   when the person asked for it or said it may interrupt them, and read first whether they are at
   the Mac: `(await mac.state()).presence` is `{ idleSeconds, screenLocked, displayAsleep }`; idle
   under a few minutes, not locked and a display awake is the sign.
@@ -297,14 +298,16 @@ Meet (below) is the template's page for it.
   ```
 
 - **The page's parts** (the UI kit): `useCall(context, page, liveValue)` holds the call in the tab;
-  `CallBar` is its controls, small enough for an agent's header; `CallTiles` is the cameras, the
+  `CallLobby` comes before a join: the person's camera picture, their microphone's level, the
+  devices, a test sound, who is in the call, then Join now or Join muted; the tracks it opened go
+  to the call as they are. `CallBar` is its controls, small enough for an agent's header; `CallTiles` is the cameras, the
   screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,
   pickers for the microphone, camera and speaker, repair of a failed connection, three simulcast
   layers for a camera. Capture starts only by the person's own press: a page that joins again by
   itself keeps the mute, and its camera and screen stay off. A Dash link with `call=join`
-  (`/agents<agent>?call=join`) joins the call as the page loads, but anyone can send
-  a member such a link, so that join only listens: no microphone opens and nothing is sent until
-  the person presses Unmute, and the page says so. `useCallPip`, `CallPipButton` and
+  (`/agents<agent>?call=join`) opens the lobby as the page loads, but anyone can send a member
+  such a link, so that lobby opens no microphone and no camera by itself, and nothing joins until
+  the person presses Join now. `useCallPip`, `CallPipButton` and
   `CallPipPlace` put the tiles in a floating window where the browser has Document
   Picture-in-Picture.
 
