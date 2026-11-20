@@ -38,8 +38,10 @@ type StackKey = { key: string; publicKey: string; privateKey: CryptoKey };
 
 /** Each key that a row of this isolate held, imported, by its id. A row that changes (a new
  *  database under the same binding) is read at the next use, and its key is imported then: the
- *  key that signs is always the current row's. */
-const importedById = new Map<string, Promise<CryptoKey>>();
+ *  key that signs is always the current row's. The key is kept, never its import under way: a
+ *  promise belongs to the request that made it, and a request that ended leaves one that no
+ *  later request can await (iterate/mind-identity-log `published`). */
+const importedById = new Map<string, CryptoKey>();
 
 /** THE ONE WAY TO THE STACK'S KEY, and so the one place that knows where it is kept: a row of
  *  D1, made on first use, and read at every use. A binding that holds a key the Worker can use
@@ -49,14 +51,17 @@ export async function stackKeyOf(env: Env): Promise<StackKey> {
   const row = (await keptRow(env)) || (await madeRow(env));
   let privateKey = importedById.get(row.key);
   if (!privateKey) {
-    privateKey = crypto.subtle.importKey(RAW_SEED, fromBase64url(row.seed), ML_DSA_65, false, [
-      "sign",
-    ]);
-    // a failure is not kept: the next use tries again
-    privateKey.catch(() => importedById.delete(row.key));
+    // a failure throws here and keeps nothing: the next use tries again
+    privateKey = await crypto.subtle.importKey(
+      RAW_SEED,
+      fromBase64url(row.seed),
+      ML_DSA_65,
+      false,
+      ["sign"],
+    );
     importedById.set(row.key, privateKey);
   }
-  return { key: row.key, publicKey: row.public_key, privateKey: await privateKey };
+  return { key: row.key, publicKey: row.public_key, privateKey };
 }
 
 type StackKeyRow = { key: string; public_key: string; seed: string };

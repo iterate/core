@@ -487,6 +487,37 @@ test("an answer is kept for one hostname, expected id and head; a failure of the
   expect(host.asked).toHaveLength(5);
 });
 
+test("a read that never settles is no answer for the next call: each call reads for itself until an answer is kept, and the first answer stays", async () => {
+  vi.useFakeTimers();
+  try {
+    const hostname = "iterate.peer-nineteen.example";
+    const log = await newIdentityLog([hostname]);
+    const host = hostOf(log.mind, [log.genesis]);
+    // THE REQUEST THAT ENDED: its caller went away while the host was asked, and workerd settles
+    // nothing of a request that ended. Its promise is one that nobody can await.
+    let asked = 0;
+    const ended = publishedMindOf(hostname, () => {
+      asked += 1;
+      return new Promise<Response>(() => {});
+    });
+    // the next request reads for itself, and its answer is the one kept
+    const read = await publishedMindOf(hostname, host.fetcher);
+    expect(read).toMatchObject({ expected: log.mind, position: 1 });
+    expect(asked).toBe(1);
+    expect(host.asked).toHaveLength(1);
+    // where the first read does end (here, at its deadline), it does not replace the answer
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await ended).toEqual({
+      why: `https://${hostname}/.well-known/iterate was not read in five seconds`,
+    });
+    expect(await publishedMindOf(hostname, host.fetcher)).toBe(read);
+    expect(host.asked).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("a body is read to its limit and to its deadline and no further, and a body that its sender cut off is no body", async () => {
   const never = new Promise<undefined>(() => {});
   const body = (size: number) => new Response("x".repeat(size));

@@ -102,11 +102,13 @@ function applySdkCompatibilityFlags(declared: string[] | undefined, where: strin
 // Bump when a change here, in module-resolution.ts, or to sucrase or es-module-lexer, changes what a
 // source produces or which files a resolution reads: memos are kept under this format.
 const LOADED_CODE_FORMAT = 3;
-let platformIdentity: Promise<string> | undefined;
+// The hash is kept, never the hashing under way: a promise belongs to the request that made it
+// (iterate/mind-identity-log `published`).
+let platformIdentity: string | undefined;
 // Never the deploy: a deploy that changes none of these keeps every loaded identity, so no facet
 // restarts for it.
-const platformCodeIdentity = () =>
-  (platformIdentity ||= sha256Hex(
+const platformCodeIdentity = async () =>
+  (platformIdentity ||= await sha256Hex(
     JSON.stringify([
       LOADED_CODE_FORMAT,
       COMPATIBILITY_DATE,

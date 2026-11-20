@@ -182,10 +182,11 @@ export type PublishedMind = Extract<IdentityState, { head: string }>;
 /** A reader asks for at most this many pages of one log. */
 const LOG_MAX_PAGES = 64;
 
-const published = new Map<
-  string,
-  { until: number; answer: Promise<PublishedMind | { why: string }> }
->();
+/** THE ANSWERS KEPT, NEVER A READ THAT IS UNDER WAY. A promise belongs to the request that made
+ *  it: when that request ends before its read settles (its caller went away), workerd settles
+ *  nothing of it, and a later request that awaits the promise throws. So each call that finds no
+ *  answer reads for itself, and the first read to settle is the answer kept. */
+const published = new Map<string, { until: number; answer: PublishedMind | { why: string } }>();
 
 /** THE IDENTITY THAT THE MIND AT `hostname` PUBLISHES, or why there is none. It reads the log
  *  at that hostname, checks every record with `nextIdentity`, from the genesis or from `from` (a
@@ -200,9 +201,10 @@ const published = new Map<
  *  on a host, or work for one after it stopped waiting.
  *
  *  One answer is kept a minute for each hostname, expected id and head, and it cannot be
- *  changed: a stranger must not make the reader ask a host often. An answer after `fetcher`
- *  itself failed is not kept: that is the reader's own way out, which may work at the next
- *  call. A host with no log is another host's fault and is kept. */
+ *  changed: a stranger must not make the reader ask a host often. Calls that come before any
+ *  answer is kept each read (`published`). An answer after `fetcher` itself failed is not kept:
+ *  that is the reader's own way out, which may work at the next call. A host with no log is
+ *  another host's fault and is kept. */
 export function publishedMindOf(
   hostname: string,
   fetcher: (request: Request) => Promise<Response>,
@@ -215,11 +217,11 @@ export function publishedMindOf(
     return Promise.resolve({ why: "the state to read on from is no state of a log with a record" });
   const name = `${hostname} ${start?.expected || ""} ${start?.head || ""}`;
   const kept = published.get(name);
-  if (kept && kept.until > Date.now()) return kept.answer;
+  if (kept && kept.until > Date.now()) return Promise.resolve(kept.answer);
   const url = `https://${hostname}${MIND_IDENTITY_PATH}`;
   const deadline = deadlineIn(5_000);
   let fetcherFailed = false;
-  const answer = readLog({
+  return readLog({
     url,
     hostname,
     from: start?.head ? start : undefined,
@@ -231,15 +233,18 @@ export function publishedMindOf(
       }),
   })
     .then(frozen, (error: unknown) => ({ why: `${url}: ${String(error).slice(0, 200)}` }))
-    .finally(() => {
-      deadline.clear();
-      if (fetcherFailed && published.get(name)?.answer === answer) published.delete(name);
-    });
-  // the oldest answer goes: a full cache never drops them all at once
-  const oldest = published.size >= 1_000 ? published.keys().next().value : undefined;
-  if (oldest) published.delete(oldest);
-  published.set(name, { until: Date.now() + 60_000, answer });
-  return answer;
+    .then((answer) => {
+      const now = Date.now();
+      const first = published.get(name);
+      // another read of the same log settled first: its answer stays for its minute
+      if (fetcherFailed || (first && first.until > now)) return answer;
+      // the oldest answer goes: a full cache never drops them all at once
+      const oldest = published.size >= 1_000 ? published.keys().next().value : undefined;
+      if (oldest) published.delete(oldest);
+      published.set(name, { until: now + 60_000, answer });
+      return answer;
+    })
+    .finally(deadline.clear);
 }
 
 async function readLog({

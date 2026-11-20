@@ -20,7 +20,7 @@ import { expect, test, vi } from "vitest";
 import { newIdentityLog } from "../../lib/src/test-support/identity-log.ts";
 import { identityIntakeResponse, identityLogResponse } from "./identity.ts";
 import { mindOfSignedRequest } from "./mind-fetch.ts";
-import { signedByStack, stackKeyResponse } from "./stack-key.ts";
+import { signedByStack, stackKeyOf, stackKeyResponse } from "./stack-key.ts";
 import { statementsResponse } from "./statements.ts";
 import { sqliteStack, stackKeyPair } from "./test-support.ts";
 
@@ -51,6 +51,22 @@ test("a stack makes one ML-DSA-65 key, shows it as a candidate, and signs with i
   const signed = await signedByStack(mind.env, { path: "/x", type: "t" });
   expect(signed.signature).toMatchObject({ format: "ML-DSA-65", key: first.key });
   expect(await verifySignature(signed, first.publicKey, { origin: "", rpId: "" })).toEqual({});
+});
+
+test("an import of the stack's key that never settles is no key for the next use: each use imports for itself until a key is kept", async () => {
+  const { env } = sqliteStack();
+  // THE REQUEST THAT ENDED while its import was under way: workerd settles nothing of it
+  const imports = vi
+    .spyOn(crypto.subtle, "importKey")
+    .mockImplementationOnce(() => new Promise<CryptoKey>(() => {}));
+  void stackKeyOf(env);
+  await vi.waitFor(() => expect(imports).toHaveBeenCalledTimes(1));
+  // the next use imports the key itself, and that key is the one kept
+  const stack = await stackKeyOf(env);
+  expect(stack.privateKey.algorithm).toMatchObject({ name: "ML-DSA-65" });
+  expect(imports).toHaveBeenCalledTimes(2);
+  expect(await stackKeyOf(env)).toMatchObject({ key: stack.key, publicKey: stack.publicKey });
+  expect(imports).toHaveBeenCalledTimes(2);
 });
 
 test("two minds, up to B's intake's answer: A's stack signs a statement for B, and B's auth Worker takes it through the mind meld and A's published log (the answer's facts; their store on B's log is the boundary's, not here)", async () => {
