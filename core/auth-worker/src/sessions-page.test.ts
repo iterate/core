@@ -152,7 +152,7 @@ test("the page lists a member's and a non-member's own browsers, this one marked
   expect(ownersPage).toContain("Safari on iPhone");
   expect(ownersPage).toContain(`data-session="${owner.session}" data-current`);
   expect(ownersPage).toContain("End all other browsers");
-  expect(ownersPage).toContain("Apps and tools signed in as you");
+  expect(ownersPage).toContain("<h2>Apps and tools</h2>");
   expect(ownersPage).not.toContain(ada.session);
 
   // a person who is no member any more sees their own one browser, and no key and no member

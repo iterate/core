@@ -530,7 +530,7 @@ async function membersPage(
     wide: true,
     status: error ? 400 : 200,
     body: `<h1>Members of ${text(mind)}</h1>
-      <p>A member may use the mind's API, its MCP server and its apps, and add or remove other members.</p>
+      <p>A member can use everything in this mind, and add or remove members.</p>
       ${error || notice ? `<p><strong>${text(error || notice || "")}</strong></p>` : ""}
       <ul>${ownerRows}${addedRows}</ul>
       <form id="add" class="stack">
@@ -538,18 +538,18 @@ async function membersPage(
         <button type="submit">Add a member</button>
         <p id="status" class="muted" role="status"></p>
       </form>
-      <p class="muted">Your passkey signs the add: a session or a token alone adds no one. ${
+      <p class="muted">Adding asks for your passkey. ${
         owner
-          ? `A new member gets in by a sign-in link that you make <a href="#link">below</a>`
-          : "A new member gets in by a sign-in link that an owner makes on this page"
-      }: it signs the member in once, to add a passkey. After that, only a passkey signs the member in.</p>
+          ? `Then make the new member a <a href="#link">sign-in link</a>`
+          : "Then an owner makes the new member a sign-in link on this page"
+      }, to set up a passkey of their own.</p>
       ${
         owner
           ? `<h2 id="access">Apps and devices with access</h2>
-      <p>Each app, CLI, device or agent that a member let in, and what it reaches as that member. Revoke one, and it and every token it holds stop working at once. The member can let it in again. A member sees and revokes their own on the keys page.</p>
+      <p>What each member let in, and what it reaches. Revoke one and it stops working at once. The member can let it in again.</p>
       ${accessRows ? `<ul class="access-list">${accessRows}</ul>` : `<p class="muted">No app or device has access.</p>`}
       <h2>A member lost a passkey</h2>
-      <p>Remove the member's keys. This signs the member out of every app and device. Then make the member a sign-in link, below: nothing else signs in a member with no passkey.</p>
+      <p>Remove the member's keys, which signs them out everywhere. Then make them a sign-in link below.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_KEYS_REMOVED}">
         <input type="hidden" name="action" value="remove-keys">
         <input type="hidden" name="signed">
@@ -558,7 +558,7 @@ async function membersPage(
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2 id="link">A sign-in link for a member</h2>
-      <p>For a new member, and for a member whose keys you removed. The link signs the member in once, within 24 hours, to add a passkey. Whoever holds the link is that member, so pass it on yourself.</p>
+      <p>For a new member, or one whose keys you removed. It works once, within 24 hours, to add a passkey. Whoever holds the link is that member, so send it yourself.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_LINK_MADE}">
         <input type="hidden" name="action" value="link">
         <input type="hidden" name="signed">
@@ -567,7 +567,7 @@ async function membersPage(
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2>Block a person who is not a member</h2>
-      <p>Anyone can sign in to this mind's apps with a code by email, so that the apps have users of their own. A blocked address gets no sign-in code, and is signed out of every app at once.</p>
+      <p>Anyone can sign in to this mind's apps with a code by email. A blocked address gets no code, and is signed out of every app at once.</p>
       <ul>${blockedRows}</ul>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="block">

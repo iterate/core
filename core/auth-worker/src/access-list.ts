@@ -50,9 +50,8 @@ const otherTile = (client: ClientWithAccess) =>
 
 /** What a client is and where its access goes, in words. */
 function clientInWords(client: ClientWithAccess): string {
-  if (client.host)
-    return "one of this mind's own pages: a browser that opened it holds the sign-in";
-  if (client.device) return "a device or a CLI, signed in by a code";
+  if (client.host) return "one of this mind's own pages, open in a browser";
+  if (client.device) return "a device or CLI, signed in by a code";
   return client.goesTo ? `access went to ${client.goesTo}` : "an app";
 }
 
@@ -79,12 +78,12 @@ const SCOPES: Record<string, string> = {
 function timesOf(signIn: SignIn): string {
   const since = `since ${day(signIn.createdAt * 1000)}`;
   if (signIn.until)
-    return `${since}, let in until ${new Date(signIn.until).toISOString().slice(0, 16).replace("T", " ")} UTC: it cannot renew this`;
+    return `${since}, until ${new Date(signIn.until).toISOString().slice(0, 16).replace("T", " ")} UTC, with no renewal`;
   if (!signIn.endsAt) return since;
   const ends = day(signIn.endsAt * 1000);
   if (!signIn.renews) return `${since}, ends ${ends}`;
   const used = signIn.renewedAt ? `last used ${day(signIn.renewedAt * 1000)}, ` : "";
-  return `${since}, ${used}renews by use: it ends ${ends} if it is not used`;
+  return `${since}, ${used}ends ${ends} unless used`;
 }
 
 /** A form's hidden fields that name what its button ends: one sign-in, or all of one client. */

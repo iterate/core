@@ -12,8 +12,8 @@ import { type DeviceRequest, deviceStore } from "./store.ts";
 test("the page asks for the passkey and says what it will sign", async () => {
   const stack = await stackOf();
   const page = await stack.get();
-  expect(page.text).toContain("Continue with your passkey");
-  expect(page.text).toContain("a session alone signs in no device");
+  expect(page.text).toContain('<button type="submit" data-continue>Continue with passkey</button>');
+  expect(page.text).toContain("Your passkey signs this request.");
   // the request as the page shows it, for the page's script to sign
   expect(page.text).toContain(`"userCode":"${CODE}"`);
   expect(page.text).toContain('"clientId":"client-1"');

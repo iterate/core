@@ -115,23 +115,25 @@ test("a key's scope reads as what its service can do", () => {
     "lend its functions to this mind as itx.whatsapp",
   );
   expect(scopeInWords({ paths: ["/integrations/x/"], provide: "x" })).toBe(
-    "lend its functions to this mind as itx.x, and add events under /integrations/x/",
+    "lend its functions to this mind as itx.x, and add events at /integrations/x/ and below",
   );
-  expect(scopeInWords({ paths: ["/integrations/"] })).toBe("add events under /integrations/");
+  expect(scopeInWords({ paths: ["/integrations/"] })).toBe(
+    "add events at /integrations/ and below",
+  );
 });
 
 test("the consent page's first words say what the key's holder can and cannot do, and name nobody", () => {
-  expect(scopePlainly({ paths: ["/integrations/minds/iterate.com/"] }, "example.com")).toBe(
-    "This lets whoever holds this key send messages to one place in example.com. It cannot read anything, approve requests or reach an agent.",
+  expect(scopePlainly({ paths: ["/integrations/minds/iterate.com/"] })).toBe(
+    "Whoever holds this key can send messages to one place in this mind. It cannot read anything, approve requests or reach an agent.",
   );
-  expect(scopePlainly({ paths: ["/integrations/a/", "/integrations/b/"] }, "example.com")).toBe(
-    "This lets whoever holds this key send messages to 2 places in example.com. It cannot read anything, approve requests or reach an agent.",
+  expect(scopePlainly({ paths: ["/integrations/a/", "/integrations/b/"] })).toBe(
+    "Whoever holds this key can send messages to 2 places in this mind. It cannot read anything, approve requests or reach an agent.",
   );
-  expect(scopePlainly({ paths: [], provide: "whatsapp" }, "example.com")).toBe(
-    "This lets whoever holds this key offer its functions to the agents of example.com. It cannot approve requests, and it reads nothing but what the agents send it.",
+  expect(scopePlainly({ paths: [], provide: "whatsapp" })).toBe(
+    "Whoever holds this key can offer its functions to this mind's agents. It cannot approve requests, and it reads only what the agents send it.",
   );
-  expect(scopePlainly({ paths: ["/integrations/x/"], provide: "x" }, "example.com")).toBe(
-    "This lets whoever holds this key offer its functions to the agents of example.com, and send messages to one place in example.com. It cannot approve requests, and it reads nothing but what the agents send it.",
+  expect(scopePlainly({ paths: ["/integrations/x/"], provide: "x" })).toBe(
+    "Whoever holds this key can offer its functions to this mind's agents, and send messages to one place in this mind. It cannot approve requests, and it reads only what the agents send it.",
   );
 });
 
@@ -266,8 +268,8 @@ const ASK = { actor: "bridge-github", label: "GitHub", publicKey: "MFkw", paths:
 
 test("the statement for a key that adds events names its one context, and where the link speaks", () => {
   expect(marked(statementInParts({ ...ASK, paths: ["/integrations/github/"] }, FACTS))).toEqual([
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events to the context {checked:/integrations/github/} and the contexts under it, in {checked:example.com}, until a member removes it.",
-    "Each event that it adds shows the name {link:bridge-github} and this key.",
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events at {checked:/integrations/github/} and below in {checked:example.com}, until a member removes it.",
+    "Its events show the name {link:bridge-github} and this key.",
     "The link says that the key belongs to {link:“GitHub”}.",
   ]);
 });
@@ -275,19 +277,19 @@ test("the statement for a key that adds events names its one context, and where 
 test("the statement for a key that adds events to two contexts names both", () => {
   const ask = { ...ASK, paths: ["/integrations/github/", "/integrations/linear/"] };
   expect(marked(statementInParts(ask, FACTS))[0]).toBe(
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events to the contexts {checked:/integrations/github/} and {checked:/integrations/linear/} and the contexts under them, in {checked:example.com}, until a member removes it.",
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} add events at {checked:/integrations/github/} and {checked:/integrations/linear/} and below in {checked:example.com}, until a member removes it.",
   );
   const three = { ...ask, paths: [...ask.paths, "/integrations/slack/"] };
   expect(marked(statementInParts(three, FACTS))[0]).toContain(
-    "{checked:/integrations/github/}, {checked:/integrations/linear/} and {checked:/integrations/slack/} and the contexts under them",
+    "add events at {checked:/integrations/github/}, {checked:/integrations/linear/} and {checked:/integrations/slack/} and below in",
   );
 });
 
 test("the statement for a key that lends says that its holder sees what the agents send, and takes the name when its lend ends", () => {
   expect(marked(statementInParts({ ...ASK, provide: "github" }, FACTS))).toEqual([
     "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, until a member removes it.",
-    "The agents of {checked:example.com} call them, so the key's holder sees what they send.",
-    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it when that lend ends.",
+    "This mind's agents call them, so the key's holder sees what they send.",
+    "If {checked:itx.github} is lent now, the key's holder takes it when that lend ends.",
     "The link says that the key belongs to {link:“GitHub”}.",
   ]);
 });
@@ -295,10 +297,10 @@ test("the statement for a key that lends says that its holder sees what the agen
 test("the statement for a key that lends and adds events says both in its first sentence", () => {
   const ask = { ...ASK, paths: ["/integrations/github/"], provide: "github" };
   expect(marked(statementInParts(ask, FACTS))).toEqual([
-    "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, and add events to the context {checked:/integrations/github/} and the contexts under it, until a member removes it.",
-    "The agents of {checked:example.com} call them, so the key's holder sees what they send.",
-    "If {checked:itx.github} is lent to {checked:example.com} now, the key's holder takes it when that lend ends.",
-    "Each event that it adds shows the name {link:bridge-github} and this key.",
+    "I, {you:member@example.net}, let key {checked:keyaaaaa} lend its functions to {checked:example.com} as {checked:itx.github}, and add events at {checked:/integrations/github/} and below, until a member removes it.",
+    "This mind's agents call them, so the key's holder sees what they send.",
+    "If {checked:itx.github} is lent now, the key's holder takes it when that lend ends.",
+    "Its events show the name {link:bridge-github} and this key.",
     "The link says that the key belongs to {link:“GitHub”}.",
   ]);
 });

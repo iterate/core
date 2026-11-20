@@ -24,9 +24,7 @@ test("a proposed draft is shown on its page, every value as text", async () => {
   expect(page!).toMatchObject({ status: 200 });
   expect(html).toContain("/minds/example.com");
   expect(html).toContain(TYPE);
-  expect(html).toContain(
-    "It was proposed through the agent at <code>/agents/&#60;onboarding&#62;</code>.",
-  );
+  expect(html).toContain("Asked through the agent <code>/agents/&#60;onboarding&#62;</code>.");
   expect(html).toContain("&#60;b&#62;bold&#60;/b&#62;");
   expect(html).not.toContain("<b>bold");
 });
@@ -228,7 +226,7 @@ test("a draft that names its signer shows them, and takes their passkey alone", 
     signerEmail: ` ${STRANGER.toUpperCase()}`,
   });
   const html = await (await statementDraftsResponse(env, new Request(signAt)))!.text();
-  expect(html).toContain(`Only <code>${STRANGER}</code> can sign it.`);
+  expect(html).toContain(`Signer: <strong>${STRANGER}</strong>.`);
   // no page lets a person who is no member add a first passkey (./enrolment.ts is for members), so the draft links to none
   expect(html).not.toContain("add one");
   const byMember = await pressed(env, draft, passkeys[MEMBER], { path });
@@ -236,7 +234,7 @@ test("a draft that names its signer shows them, and takes their passkey alone", 
     status: 403,
     body: {
       refused: `only ${STRANGER} signs this statement`,
-      say: `That passkey is ${MEMBER}'s. Only ${STRANGER} can sign this. Press again and choose the passkey of ${STRANGER}.`,
+      say: `That passkey is ${MEMBER}'s. This statement is for ${STRANGER}: sign again with that passkey.`,
     },
   });
   expect(await pressed(env, draft, passkeys[STRANGER], { path })).toMatchObject({ status: 200 });
@@ -251,7 +249,7 @@ test("a press that names a passkey it cannot prove it holds is told no address b
   const answer = await pressed(env, draft, forged, { path });
   expect(await answer.json()).toEqual({
     refused: `only ${STRANGER} signs this statement`,
-    say: `That passkey cannot sign this. Only ${STRANGER} can sign this. Press again and choose the passkey of ${STRANGER}.`,
+    say: `That passkey cannot sign this. This statement is for ${STRANGER}: sign again with that passkey.`,
   });
 });
 
@@ -262,7 +260,7 @@ test("a press on a link that is closed says so, and what to do next", async () =
     status: 404,
     body: {
       refused: "this link has ended",
-      say: "Not signed: this link is closed. It was used, or its day is over. To sign, ask for a new link.",
+      say: "Not signed: this link was used, or its 24 hours are over. Ask for a new link.",
     },
   });
 });
@@ -277,7 +275,7 @@ test("a meld rule of this mind with itself is not explained as a grant, and its 
   const html = await pageOf(env, changed);
   expect(html).not.toContain("Let the mind");
   expect(html).toContain(
-    `<p>${MIND} refuses such a rule, so it would refuse your signature too: a mind does not meld with itself.</p>`,
+    "<p><strong>Your signature would be refused:</strong> a mind does not meld with itself.</p>",
   );
   expect(html).toContain("<details open>");
   const { draft } = await proposed(env, changed);
@@ -298,7 +296,7 @@ test("an expired draft has ended", async () => {
   );
   expect(page!).toMatchObject({ status: 404 });
   expect(await page!.text()).toContain(
-    "This link was used, or its day is over. A statement that you signed with it is in. To sign another, ask for a new link.",
+    "It was used, or its 24 hours are over. If you signed with it, your signature counted. To sign again, ask for a new link.",
   );
   expect(await pressed(env, draft, passkeys[MEMBER])).toMatchObject({ status: 404 });
 });
@@ -326,12 +324,12 @@ test("a meld rule is said in words, each context on its own line, and the exact 
     payload: { append: [`/minds/${PEER}/`, "/"], name: "peer.example.org" },
   });
   expect(html).toContain(
-    `<p>Let the mind <strong>peer.example.org</strong> (id <code>${PEER.slice(0, 12)}…</code>) add events to iterate.example.com, under these contexts and the contexts beneath them:</p>`,
+    `<p>Let the mind <strong>peer.example.org</strong> (id <code>${PEER.slice(0, 12)}…</code>) add events to iterate.example.com, in these contexts and below:</p>`,
   );
   expect(html).toContain(
-    `<ul><li><code>/minds/${PEER}/</code></li><li><code>/</code> (the root: every context of the mind)</li></ul>`,
+    `<ul><li><code>/minds/${PEER}/</code></li><li><code>/</code> (everything in the mind)</li></ul>`,
   );
-  expect(html).toContain("It signs each event with any key that it publishes for statements.");
+  expect(html).toContain("It signs each event with any key that it publishes.");
   expect(html).toContain("<details>\n        <summary>The exact event</summary>");
 });
 
@@ -343,7 +341,7 @@ test("an empty meld rule is said as the end of the meld", async () => {
     payload: { append: [], name: "peer.example.org" },
   });
   expect(html).toContain(
-    `<p>End the rule that lets the mind <strong>peer.example.org</strong> (id <code>${PEER.slice(0, 12)}…</code>) add events to iterate.example.com. It adds none from then on.</p>`,
+    `<p>Stop the mind <strong>peer.example.org</strong> (id <code>${PEER.slice(0, 12)}…</code>) from adding events to iterate.example.com.</p>`,
   );
 });
 
@@ -351,7 +349,7 @@ test("a type that the page does not know is said as an event of that type, and t
   const { env } = await stack();
   const html = await pageOf(env, { path: "/", type: TYPE });
   expect(html).toContain(
-    "<p>This adds one event of the type <code>demo/statement-asked</code> to the root context (<code>/</code>) of iterate.example.com. This page cannot say what the event means: read it below before you sign.</p>",
+    "<p>Adds one <code>demo/statement-asked</code> event to the root (<code>/</code>) of iterate.example.com. This page does not know what it means: read it below.</p>",
   );
   expect(html).toContain("<details open>");
 });
@@ -360,26 +358,26 @@ test.for([
   [
     "the mind's own code at its root",
     { from: "/", by: { kind: "code" } },
-    "Proposed by this mind's own code at the mind's root context (<code>/</code>). The platform cannot tell whether a person asked for it: sign it only if you expected it.",
+    "Asked by this mind's code at the root (<code>/</code>), maybe with no person behind it. Sign only if you expected it.",
   ],
   [
     "a member through an agent",
     { from: "/agents/onboarding", by: { kind: "member", email: MEMBER } },
-    `Proposed by <strong>${MEMBER}</strong>, a member signed in to this mind, through the agent at <code>/agents/onboarding</code>.`,
+    `Asked by <strong>${MEMBER}</strong>, a member, through the agent <code>/agents/onboarding</code>.`,
   ],
   [
     "a member at the root",
     { from: "/", by: { kind: "member", email: MEMBER } },
-    `Proposed by <strong>${MEMBER}</strong>, a member signed in to this mind, at the mind's root context (<code>/</code>).`,
+    `Asked by <strong>${MEMBER}</strong>, a member, at the root (<code>/</code>).`,
   ],
   [
     "a guest, by the name they typed",
     { from: "/", by: { kind: "guest", name: "<Cy>" } },
-    "Proposed by a guest of this mind, who says their name is &ldquo;&#60;Cy&#62;&rdquo;, at the mind's root context (<code>/</code>).",
+    "Asked by a guest who gave the name &ldquo;&#60;Cy&#62;&rdquo;, at the root (<code>/</code>).",
   ],
 ] as const)("a draft that %s proposed names who asked", async ([, input, words]) => {
   const { env } = await stack();
-  expect(await pageOf(env, input)).toContain(`<p>${words}</p>`);
+  expect(await pageOf(env, input)).toContain(`<p class="muted">${words}</p>`);
 });
 
 async function pageOf(env: Env, input: Partial<Parameters<typeof proposeStatement>[1]>) {

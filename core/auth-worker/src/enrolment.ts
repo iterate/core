@@ -197,8 +197,7 @@ async function formPage(env: Env, session: { userId: string; email: string }, ne
   return page({
     title: `Add your passkey to ${mind}`,
     body: `<h1>Add your passkey to ${text(mind)}</h1>
-      <p>${text(mind)} needs a passkey at your first sign-in. From then on it is how you sign in here, and how you approve what your agents ask for.</p>
-      <p>Press the button, and your browser asks for your fingerprint, your face or a security key.</p>
+      <p>A passkey is how you sign in here and approve what your agents ask for. Your browser asks for your fingerprint, your face, a PIN or a security key.</p>
       <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(mind)}" data-next="${text(next || "")}">
         <button type="submit">Add a passkey</button>
         <details><summary>Name it (optional)</summary><input name="label" maxlength="100" size="28" aria-label="Name" placeholder="such as YubiKey"></details>
@@ -416,8 +415,8 @@ function linkPage(env: Env, next: string | null) {
     body: `<h1>Add your passkey to ${text(mind)}</h1>
       <p id="status" class="muted" role="status">Signing you in…</p>
       <div id="over" hidden>
-        <p>This link was used before, or its 24 hours are over.</p>
-        <p>Ask whoever gave you the link for a new one. With a passkey for ${text(mind)}, <a href="${text(signIn)}">sign in</a>.</p>
+        <p>This link was used, or its 24 hours are over.</p>
+        <p>Ask for a new one. If you have a passkey here, <a href="${text(signIn)}">sign in</a>.</p>
       </div>`,
     script: LINK_SCRIPT,
   });

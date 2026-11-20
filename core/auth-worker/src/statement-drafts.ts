@@ -141,7 +141,7 @@ function draftPage(env: Env, draft: Draft | null): Response {
     return page({
       title: "This link is closed",
       status: 404,
-      body: `<h1>This link is closed</h1><p>This link was used, or its day is over. A statement that you signed with it is in. To sign another, ask for a new link.</p>`,
+      body: `<h1>This link is closed</h1><p>It was used, or its 24 hours are over. If you signed with it, your signature counted. To sign again, ask for a new link.</p>`,
     });
   const mind = configOf(env).controlPlaneHostname;
   const payload: unknown = JSON.parse(draft.payload);
@@ -154,26 +154,24 @@ function draftPage(env: Env, draft: Draft | null): Response {
     payload: draft.payload,
   });
   const meaning = meaningOf(draft.path, draft.type, payload, configOf(env));
-  const unknown = `<p>This adds one event of the type <code>${text(draft.type)}</code> to ${contextWords(draft.path)} of ${text(mind)}. This page cannot say what the event means: read it below before you sign.</p>`;
-  const signer = draft.signer_email
-    ? `<p>Only <code>${text(draft.signer_email)}</code> can sign it.</p>`
-    : "";
+  const unknown = `<p>Adds one <code>${text(draft.type)}</code> event to ${contextWords(draft.path)} of ${text(mind)}. This page does not know what it means: read it below.</p>`;
+  // who may sign is shown, not explained: another person's passkey gets the refusal's own words
+  const signer = draft.signer_email ? ` Signer: <strong>${text(draft.signer_email)}</strong>.` : "";
   return page({
-    title: "Sign this statement?",
+    title: "Sign this statement",
     wide: true,
-    body: `<h1>Sign this statement?</h1>
-      ${"refused" in meaning ? `${unknown}<p>${text(mind)} refuses such a rule, so it would refuse your signature too: ${text(meaning.refused)}.</p>` : meaning.words || unknown}
-      <p>${proposerWords(draft)}</p>
-      ${signer}
+    body: `<h1>Sign this statement</h1>
+      ${"refused" in meaning ? `${unknown}<p><strong>Your signature would be refused:</strong> ${text(meaning.refused)}.</p>` : meaning.words || unknown}
+      <p class="muted">${proposerWords(draft)}${signer}</p>
       <details${"words" in meaning && meaning.words ? "" : " open"}>
         <summary>The exact event</summary>
-        <p>Your passkey signs this text. Context <code>${text(draft.path)}</code>, event type <code>${text(draft.type)}</code>:</p>
+        <p class="muted">Context <code>${text(draft.path)}</code>, type <code>${text(draft.type)}</code>. Your passkey signs exactly this.</p>
         <pre>${text(shown)}</pre>
       </details>
       <form class="actions" data-draft="${text(values)}">
-        <button type="submit">Sign with your passkey</button>
+        <button type="submit">Sign with passkey</button>
       </form>
-      <p id="status" class="muted" role="status">Your passkey's signature adds this event to ${text(mind)}, with you as its signer.</p>`,
+      <p id="status" class="muted" role="status"></p>`,
     script: `${SIGN_HELPERS}${PRESS_SCRIPT}`,
   });
 }
@@ -194,28 +192,28 @@ function meaningOf(
   const name = `<strong>${text(rule.name)}</strong> (id <code>${text(rule.mind.slice(0, 12))}…</code>)`;
   if (!rule.append.length)
     return {
-      words: `<p>End the rule that lets the mind ${name} add events to ${text(mind)}. It adds none from then on.</p>`,
+      words: `<p>Stop the mind ${name} from adding events to ${text(mind)}.</p>`,
     };
   const paths = rule.append
     .map(
       (prefix) =>
-        `<li><code>${text(prefix)}</code>${prefix === "/" ? " (the root: every context of the mind)" : ""}</li>`,
+        `<li><code>${text(prefix)}</code>${prefix === "/" ? " (everything in the mind)" : ""}</li>`,
     )
     .join("");
   const key = rule.key
-    ? `the one key <code>${text(rule.key.slice(0, 8))}</code>`
-    : "any key that it publishes for statements";
+    ? `the key <code>${text(rule.key.slice(0, 8))}</code>`
+    : "any key that it publishes";
   return {
-    words: `<p>Let the mind ${name} add events to ${text(mind)}, under these contexts and the contexts beneath them:</p>
+    words: `<p>Let the mind ${name} add events to ${text(mind)}, in these contexts and below:</p>
       <ul>${paths}</ul>
-      <p>It signs each event with ${key}. This takes the place of any rule for ${name} that a member signed before.</p>`,
+      <p>It signs each event with ${key}. This replaces any earlier rule for that mind.</p>`,
   };
 }
 
 /** A context of this mind in words: the root is never a bare "/". */
 function contextWords(path: string) {
-  if (path === "/") return "the root context (<code>/</code>)";
-  if (path.startsWith("/agents/")) return `the agent at <code>${text(path)}</code>`;
+  if (path === "/") return "the root (<code>/</code>)";
+  if (path.startsWith("/agents/")) return `the agent <code>${text(path)}</code>`;
   return `the context <code>${text(path)}</code>`;
 }
 
@@ -224,26 +222,28 @@ function contextWords(path: string) {
 function proposerWords(draft: Draft) {
   const by = AskedBy.safeParse(JSON.parse(draft.asked_by || "null"));
   const where = draft.asked_from ? placeWords(draft.asked_from) : "";
-  if (!by.success) return where ? `It was proposed ${where}.` : "It was proposed by this mind.";
+  if (!by.success) return where ? `Asked ${where}.` : "Asked by this mind.";
   const asker = by.data;
   if (asker.kind === "code")
     // code that runs in a member's own request stamps "code" too: the platform knows no more
-    return `Proposed by this mind's own code${where ? ` ${where}` : ""}. The platform cannot tell whether a person asked for it: sign it only if you expected it.`;
+    return `Asked by this mind's code${where ? ` ${where}` : ""}, maybe with no person behind it. Sign only if you expected it.`;
   const who =
     asker.kind === "member"
-      ? `${asker.email ? `<strong>${text(asker.email)}</strong>, a member` : "a member"} signed in to this mind`
+      ? asker.email
+        ? `<strong>${text(asker.email)}</strong>, a member`
+        : "a member"
       : asker.kind === "person"
-        ? `<strong>${text(asker.email)}</strong>, who is signed in to this mind and is no member`
+        ? `<strong>${text(asker.email)}</strong>, who is not a member`
         : asker.kind === "guest"
-          ? `a guest of this mind, who says their name is &ldquo;${text(asker.name)}&rdquo;`
+          ? `a guest who gave the name &ldquo;${text(asker.name)}&rdquo;`
           : `the mind <strong>${text(asker.hostname)}</strong>`;
-  return `Proposed by ${who}${where ? `, ${where}` : ""}.`;
+  return `Asked by ${who}${where ? `, ${where}` : ""}.`;
 }
 
 function placeWords(path: string) {
-  if (path === "/") return "at the mind's root context (<code>/</code>)";
-  if (path.startsWith("/agents/")) return `through the agent at <code>${text(path)}</code>`;
-  return `at the context <code>${text(path)}</code>`;
+  if (path === "/") return "at the root (<code>/</code>)";
+  if (path.startsWith("/agents/")) return `through the agent <code>${text(path)}</code>`;
+  return `in the context <code>${text(path)}</code>`;
 }
 
 // The press: the statement is made of the draft's own values, and a discoverable passkey signs it.
@@ -272,7 +272,7 @@ form.addEventListener("submit", async (event) => {
     if (!answer.ok) throw new Error(body.say || "Not signed: " + (body.refused || "the mind did not take it") + ".");
     form.hidden = true;
     document.querySelector("h1").textContent = "Signed";
-    statusSay(status, "You signed it. The event is in " + draft.mind + ", at " + body.path + "." + (body.next ? " Taking you on…" : ""));
+    statusSay(status, "The event is at " + body.path + "." + (body.next ? " Taking you back…" : ""));
     status.classList.remove("muted");
     if (body.next) location.assign(body.next);
   } catch (error) {
@@ -327,7 +327,7 @@ async function pressed(env: Env, request: Request): Promise<Response> {
       403,
       `only ${draft.signer_email} signs this statement`,
       mark,
-      `${whose} Only ${draft.signer_email} can sign this. Press again and choose the passkey of ${draft.signer_email}.`,
+      `${whose} This statement is for ${draft.signer_email}: sign again with that passkey.`,
     );
   }
   const admitted = await admittedStatement(env, {
@@ -353,8 +353,7 @@ const markOf = async (id: string) => (await statementHashOf(id)).slice(0, 8);
 
 const NO_STORE = { "cache-control": "no-store" };
 
-const LINK_CLOSED =
-  "Not signed: this link is closed. It was used, or its day is over. To sign, ask for a new link.";
+const LINK_CLOSED = "Not signed: this link was used, or its 24 hours are over. Ask for a new link.";
 
 /** `reason` for a program; `say`, when there is one, is the sentence for the person who pressed:
  *  what happened and what to do next. */

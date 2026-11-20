@@ -163,10 +163,10 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
       <form method="post" class="actions" data-press="${text(JSON.stringify(pressPayloadOf(userCode, device)))}">
         <input type="hidden" name="user_code" value="${text(userCode)}">
         <button type="submit" name="action" value="decline" class="secondary">Decline</button>
-        <button type="submit" data-continue>Continue with your passkey</button>
+        <button type="submit" data-continue>Continue with passkey</button>
         <input type="hidden" name="action" value="" data-action><input type="hidden" name="signed" value="">
       </form>
-      <p id="status" class="muted" role="status">Your passkey signs this: a session alone signs in no device.</p>
+      <p id="status" class="muted" role="status">Your passkey signs this request.</p>
       <div class="muted">Signed in as ${text(email)}. Not you? ${otherAccountForm(`${VERIFICATION_PATH}?${new URLSearchParams({ user_code: userCode })}`)}</div>`;
   const shown = { status: error ? 403 : 200, script: `${signScript(mind)}${PRESS_SCRIPT}` };
   if (device.letIn) {
@@ -180,9 +180,9 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
       title: `Let ${name} in?`,
       asker: deviceTile(name),
       body: `<h1>Let ${text(name)} in?</h1>
-      <p><strong>${text(name)}</strong> asks to be let in to ${text(mind)}. ${proof}</p>
+      <p><strong>${text(name)}</strong> asks for access to ${text(mind)}. ${proof}</p>
       <blockquote>${text(device.letIn.reason)}</blockquote>
-      <p>If you continue, it can read and change everything in this mind as <strong>${text(email)}</strong> for ${text(durationInWords(device.letIn.seconds))}, counted from your approval. It cannot renew this. When the time is over, it must ask again.</p>
+      <p>If you continue, it can read and change everything in this mind as <strong>${text(email)}</strong> for ${text(durationInWords(device.letIn.seconds))} from your approval. It cannot renew this.</p>
       <p>Continue only if you expected this request. Its code is <strong>${text(userCode)}</strong>.</p>
       ${form}`,
     });

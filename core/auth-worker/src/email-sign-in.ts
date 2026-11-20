@@ -143,7 +143,7 @@ const toSignIn = (next: string) =>
 function ruleAbove(env: Env, asking: object | null) {
   if (asking) return "";
   const mind = text(configOf(env).controlPlaneHostname);
-  return `<p class="muted">A code gives an account for the apps of ${mind}, with no access to the mind itself. A member signs in with a passkey.</p>`;
+  return `<p class="muted">A code signs you in to the apps of ${mind}, never to the mind itself. Members sign in with a passkey.</p>`;
 }
 
 /** What the pages need of the sign-in that a code is for (./asking-app.ts `signInOf`). */

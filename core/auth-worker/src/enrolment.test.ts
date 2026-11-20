@@ -633,14 +633,14 @@ test("the members page says how a new member gets in: by the sign-in link that a
     ).replaceAll(/\s+/g, " ");
   const [owners, members] = [await pageOf(OWNER), await pageOf(MEMBER)];
   expect(owners).toContain(
-    `A new member gets in by a sign-in link that you make <a href="#link">below</a>: it signs the member in once, to add a passkey. After that, only a passkey signs the member in.`,
+    `Then make the new member a <a href="#link">sign-in link</a>, to set up a passkey of their own.`,
   );
   expect(owners).toContain(
-    `<h2 id="link">A sign-in link for a member</h2> <p>For a new member, and for a member whose keys you removed.`,
+    `<h2 id="link">A sign-in link for a member</h2> <p>For a new member, or one whose keys you removed. It works once, within 24 hours, to add a passkey.`,
   );
   // a member who is no owner makes no link, and reads who does
   expect(members).toContain(
-    "A new member gets in by a sign-in link that an owner makes on this page: it signs the member in once, to add a passkey.",
+    "Then an owner makes the new member a sign-in link on this page, to set up a passkey of their own.",
   );
   expect(members).not.toContain(`id="link"`);
   for (const page of [owners, members])
@@ -650,9 +650,9 @@ test("the members page says how a new member gets in: by the sign-in link that a
 test("the page of a link that is over says to ask for a new one, and offers no email address", async () => {
   const stack = stackOf();
   const html = await (await ask(stack.env, "/keys/first")).text();
-  expect(html).toContain("<p>This link was used before, or its 24 hours are over.</p>");
+  expect(html).toContain("<p>This link was used, or its 24 hours are over.</p>");
   expect(html).toContain(
-    `<p>Ask whoever gave you the link for a new one. With a passkey for ${MIND}, <a href="/sign-in?next=https%3A%2F%2Fonboarding.example.com%2F">sign in</a>.</p>`,
+    `<p>Ask for a new one. If you have a passkey here, <a href="/sign-in?next=https%3A%2F%2Fonboarding.example.com%2F">sign in</a>.</p>`,
   );
   expect(html).not.toMatch(/email/i);
 });

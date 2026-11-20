@@ -56,7 +56,7 @@ test("/keys is the whole page for a member: the keys, a name that is optional, a
     heading: "Your keys for iterate.example.com",
     listed: true,
     nameField:
-      '<label>Name, optional <input name="label" maxlength="100" size="28" placeholder="such as YubiKey">',
+      '<label>Name (optional) <input name="label" maxlength="100" size="28" placeholder="such as YubiKey">',
     asksForASecond: true,
     saysWhoLetsThemBackIn: true,
   });
@@ -75,13 +75,13 @@ test("a browser with no passkey's session gets no key's id and no page: it is se
 test("nobody removes their own last passkey: the page has no button for it, the server refuses it, and with a second passkey one of the two goes", async () => {
   const stack = await stackOf();
   // the only passkey has no form to remove it
-  expect(await pageOf(stack)).toContain(
-    "your only passkey: add another before you remove this one",
-  );
+  expect(await pageOf(stack)).toContain("your only passkey: add another to remove it");
   expect(await pageOf(stack)).not.toContain(`name="key" value="passkey-phone"`);
   const refused = await stack.remove("passkey-phone");
   expect(refused).toMatchObject({ status: 409 });
-  expect(await refused.text()).toContain("Add another passkey first, then remove this one.");
+  expect(await refused.text()).toContain(
+    "This is your only passkey, so it was not removed. Add another first.",
+  );
   expect(stack.livePasskeys()).toEqual(["passkey-phone"]);
 
   stack.addPasskey("passkey-laptop", "A laptop");
@@ -99,9 +99,7 @@ test("a passkey from before the address was a member's is no second passkey: the
   const stack = await stackOf();
   stack.addPasskey("passkey-old", "An old one");
   stack.db.prepare("update keys set outsider = 1 where id = 'passkey-old'").run();
-  expect(await pageOf(stack)).toContain(
-    "your only passkey: add another before you remove this one",
-  );
+  expect(await pageOf(stack)).toContain("your only passkey: add another to remove it");
   expect(await stack.remove("passkey-phone")).toMatchObject({ status: 409 });
   expect(stack.livePasskeys()).toEqual(["passkey-phone", "passkey-old"]);
 });
@@ -134,7 +132,7 @@ test("iterate Cloud's key: the page names the Cloud's host, the passkey signs th
     status: page.status,
     heading: html.match(/<h1>([^<]*)<\/h1>/)?.[1],
     saysWhatFollows: html.includes(
-      "With this key it can add events under /integrations/, and iterate.example.com reads them as GitHub&#39;s, Slack&#39;s, Google&#39;s and X&#39;s own. It can read nothing and change nothing else.",
+      "Its key can add events under /integrations/, and this mind reads them as coming from GitHub, Slack, Google and X. It can read nothing and change nothing else.",
     ),
     // the label is the link's claim: the passkey signs it, and no word of the page shows it
     namesTheLabel: html.replace(/<[^>]*>/g, "").includes("Your bank"),
@@ -164,7 +162,7 @@ test("iterate Cloud's key: the page names the Cloud's host, the passkey signs th
     `${CLOUD}/.well-known/iterate-cloud manual`,
   ]);
   expect(await pageOf(stack)).toContain(
-    "a key for iterate-cloud, published by cloud.example.com: it can add events under /integrations/",
+    "service key for iterate-cloud, published by cloud.example.com: can add events at /integrations/ and below",
   );
 });
 

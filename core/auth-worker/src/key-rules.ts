@@ -193,17 +193,7 @@ export function statementInParts(
   const mind = checked(facts.mind);
   const lent = ask.provide && checked(`itx.${ask.provide}`);
   const adds: StatementPart[] = ask.paths.length
-    ? [
-        {
-          text:
-            ask.paths.length === 1 ? "add events to the context " : "add events to the contexts ",
-        },
-        ...listOf(ask.paths.map(checked)),
-        {
-          text:
-            ask.paths.length === 1 ? " and the contexts under it" : " and the contexts under them",
-        },
-      ]
+    ? [{ text: "add events at " }, ...listOf(ask.paths.map(checked)), { text: " and below" }]
     : [];
   const may: StatementPart[] = lent
     ? [
@@ -213,7 +203,7 @@ export function statementInParts(
         lent,
         ...(adds.length ? [{ text: ", and " }, ...adds] : []),
       ]
-    : [...adds, { text: ", in " }, mind];
+    : [...adds, { text: " in " }, mind];
   const sentences: StatementPart[][] = [
     [
       { text: "I, " },
@@ -227,27 +217,17 @@ export function statementInParts(
   ];
   if (lent)
     sentences.push(
-      [
-        { text: "The agents of " },
-        mind,
-        { text: " call them, so the key's holder sees what they send." },
-      ],
+      [{ text: "This mind's agents call them, so the key's holder sees what they send." }],
       [
         { text: "If " },
         lent,
-        { text: " is lent to " },
-        mind,
-        { text: " now, the key's holder takes it when that lend ends." },
+        { text: " is lent now, the key's holder takes it when that lend ends." },
       ],
     );
   // the Cloud's name and origin are checked: the origin published this very key under that name
   const named = ask.cloud ? checked(ask.actor) : link(ask.actor);
   if (adds.length)
-    sentences.push([
-      { text: "Each event that it adds shows the name " },
-      named,
-      { text: " and this key." },
-    ]);
+    sentences.push([{ text: "Its events show the name " }, named, { text: " and this key." }]);
   if (ask.cloud)
     sentences.push([
       { text: "The key is the one that " },
@@ -287,23 +267,20 @@ export function otherKeyLending(
 }
 
 /** THE CONSENT PAGE'S FIRST WORDS, for a person who has never met a key: what its holder can do
- *  in the mind `mind`, and what it cannot. They name nobody: whose key it is, is the link's word,
+ *  in this mind, and what it cannot. They name nobody: whose key it is, is the link's word,
  *  and the statement under them marks it so. */
-export function scopePlainly(
-  { paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">,
-  mind: string,
-) {
+export function scopePlainly({ paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">) {
   const places = paths.length === 1 ? "one place" : `${paths.length} places`;
   const can = [
-    provide && `offer its functions to the agents of ${mind}`,
-    paths.length > 0 && `send messages to ${places} in ${mind}`,
+    provide && "offer its functions to this mind's agents",
+    paths.length > 0 && `send messages to ${places} in this mind`,
   ]
     .filter(Boolean)
     .join(", and ");
   const cannot = provide
-    ? "It cannot approve requests, and it reads nothing but what the agents send it."
+    ? "It cannot approve requests, and it reads only what the agents send it."
     : "It cannot read anything, approve requests or reach an agent.";
-  return `This lets whoever holds this key ${can}. ${cannot}`;
+  return `Whoever holds this key can ${can}. ${cannot}`;
 }
 
 /** THE CONSENT PAGE'S FIRST WORDS FOR iterate Cloud's KEY. The Cloud's host is what the member
@@ -314,8 +291,8 @@ export function cloudPlainly(cloud: string, mind: string) {
   const host = new URL(cloud).host;
   return {
     heading: `iterate Cloud at ${host} asks to add events to ${mind}`,
-    can: `With this key it can add events under ${SERVICE_PATHS_ROOT}, and ${mind} reads them as GitHub's, Slack's, Google's and X's own. It can read nothing and change nothing else.`,
-    recognise: `The key is the one that ${host} publishes. Sign only if ${host} is the iterate Cloud that you use.`,
+    can: `Its key can add events under ${SERVICE_PATHS_ROOT}, and this mind reads them as coming from GitHub, Slack, Google and X. It can read nothing and change nothing else.`,
+    recognise: `Sign only if ${host} is the iterate Cloud that you use.`,
   };
 }
 
@@ -323,7 +300,7 @@ export function cloudPlainly(cloud: string, mind: string) {
 export function scopeInWords({ paths, provide }: Pick<ServiceKeyRequest, "paths" | "provide">) {
   return [
     provide && `lend its functions to this mind as itx.${provide}`,
-    paths.length > 0 && `add events under ${paths.join(", ")}`,
+    paths.length > 0 && `add events at ${paths.join(", ")} and below`,
   ]
     .filter(Boolean)
     .join(", and ");

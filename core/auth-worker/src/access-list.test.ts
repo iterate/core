@@ -9,9 +9,9 @@ test("a client is drawn once, with each sign-in it holds under it: what it reach
   expect(drawn.match(/Codex/g)).toHaveLength(1);
   expect(drawn).toContain("access went to 127.0.0.1:53013.");
   expect(drawn).toContain(
-    "Reaches the mind's MCP server: everything in this mind, as the member, since 2026-11-01, last used 2026-11-10, renews by use: it ends 2026-11-17 if it is not used. [Revoke signIn=grant-1]",
+    "Reaches the mind's MCP server: everything in this mind, as the member, since 2026-11-01, last used 2026-11-10, ends 2026-11-17 unless used. [Revoke signIn=grant-1]",
   );
-  expect(drawn).toContain("since 2026-10-20, last used 2026-11-10, renews by use");
+  expect(drawn).toContain("since 2026-10-20, last used 2026-11-10, ends 2026-11-17 unless used");
   expect(drawn).toContain("[Revoke signIn=grant-0]");
   // one button ends all that the client holds
   expect(drawn).toContain("[Revoke all 2 client=client-1]");
@@ -27,7 +27,7 @@ test("a device's sign-in, a let-in and one of the mind's own pages each say what
   const device = words(
     clientsWithAccess(env, [{ ...clientOf([codex]), name: "iterate CLI", device: true }], end),
   );
-  expect(device).toContain("a device or a CLI, signed in by a code.");
+  expect(device).toContain("a device or CLI, signed in by a code.");
   // where a device's code went is this stack's own page, which says nothing
   expect(device).not.toContain("access went to");
 
@@ -38,7 +38,7 @@ test("a device's sign-in, a let-in and one of the mind's own pages each say what
     until: Date.UTC(2026, 10, 1, 14, 30),
   };
   expect(words(clientsWithAccess(env, [clientOf([letIn])], end))).toContain(
-    "let in until 2026-11-01 14:30 UTC: it cannot renew this.",
+    "until 2026-11-01 14:30 UTC, with no renewal.",
   );
 
   const browser: SignIn = {

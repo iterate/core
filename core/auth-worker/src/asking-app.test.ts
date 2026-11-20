@@ -398,7 +398,7 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
     cookie: "__Host-iterate-auth-code=abc",
   }))!.text();
   expect(own).toContain(
-    `<p class="muted">A code gives an account for the apps of ${MIND}, with no access to the mind itself. A member signs in with a passkey.</p>`,
+    `<p class="muted">A code signs you in to the apps of ${MIND}, never to the mind itself. Members sign in with a passkey.</p>`,
   );
   expect(own).toContain("may sign in here, a code is on its way.");
   expect(own).not.toContain(`class="about"`);

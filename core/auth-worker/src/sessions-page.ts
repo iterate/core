@@ -84,9 +84,8 @@ async function sessionsPage(env: Env, session: PersonSession): Promise<Response>
     wide: true,
     imageOrigin: logoOriginsOf(access),
     body: `<h1>Where you are signed in</h1>
-      <p>You are signed in to ${text(mind)} as <strong>${text(session.email)}</strong>. End anything here that you do not know: it must sign in again.</p>
-      <h2>This browser and your other browsers</h2>
-      <p class="muted">Each browser that signed in here, at ${text(new URL(issuerOf(env)).host)}, holds a session. It signs you in to the mind's apps without a new sign-in.</p>
+      <p>You are signed in to ${text(mind)} as <strong>${text(session.email)}</strong>. End anything that you do not recognise.</p>
+      <h2>Browsers</h2>
       <ul class="browser-sessions">${browsers.map((browser) => browserItem(browser, session.id)).join("")}</ul>
       ${
         others
@@ -96,9 +95,9 @@ async function sessionsPage(env: Env, session: PersonSession): Promise<Response>
         </form>`
           : ""
       }
-      <h2>Apps and tools signed in as you</h2>
-      <p class="muted">Each app, CLI, device or agent that you let in, and each of the mind's own pages that you opened, holds a sign-in as you. Under its name is each sign-in it holds, and what that reaches. End one here, and it stops working with every token it holds.</p>
-      ${apps ? `<ul class="access-list">${apps}</ul>` : `<p class="muted">No app or tool holds a sign-in as you.</p>`}`,
+      <h2>Apps and tools</h2>
+      <p class="muted">Everything that acts as you: apps, CLIs, devices, agents, and this mind's own pages. End one and it stops working at once.</p>
+      ${apps ? `<ul class="access-list">${apps}</ul>` : `<p class="muted">Nothing acts as you.</p>`}`,
   });
 }
 

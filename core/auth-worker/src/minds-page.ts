@@ -84,8 +84,8 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
     const refused = row.refused ? Refused.safeParse(JSON.parse(row.refused)).data : undefined;
     return `<li><strong>${text(row.domain)}</strong> ${idWords(row)}
         <span>may add events under ${append.map((path) => `<code>${text(path)}</code>`).join(", ")}</span>
-        <span class="muted">signed with ${row.key ? `the key ${text(row.key.slice(0, 8))}` : "its published keys"}. ${text(row.email || "A member")} let it in at ${minute(row.configured_at)}.</span>
-        ${refused?.mind ? `<span><strong>At ${minute(refused.at)} ${text(row.domain)} served another mind</strong>, the id <code>${text(refused.mind)}</code>, which is refused here. If that mind is the one you mean, End this and let it in again.</span>` : ""}
+        <span class="muted">signed with ${row.key ? `the key ${text(row.key.slice(0, 8))}` : "its published keys"}. Let in by ${text(row.email || "a member")}, ${minute(row.configured_at)}.</span>
+        ${refused?.mind ? `<span><strong>At ${minute(refused.at)} this domain served another mind</strong>, id <code>${text(refused.mind)}</code>, which was refused. If you mean that mind, press End and let it in again.</span>` : ""}
         <button type="button" class="link" data-end="${text(row.domain)}" data-mind="${text(row.mind || "")}">End</button>
       </li>`;
   };
@@ -96,25 +96,25 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
       ${
         melds.length
           ? `<ul>${melds.map(meldItem).join("")}</ul>`
-          : `<p class="muted">No mind is let in. A meld lets another mind add events to this one, under the contexts that a member's passkey names, and an agent of this mind can ask you for one.</p>`
+          : `<p class="muted">None yet. A mind that you let in can add events to this one, only where you sign for.</p>`
       }
       ${
         ended.length
-          ? `<h2>Melds that ended</h2>
-      <ul>${ended.map((row) => `<li>${text(row.domain)} <span class="muted">ended at ${minute(row.configured_at)}.</span></li>`).join("")}</ul>`
+          ? `<h2>Ended</h2>
+      <ul>${ended.map((row) => `<li>${text(row.domain)} <span class="muted">ended ${minute(row.configured_at)}.</span></li>`).join("")}</ul>`
           : ""
       }
       <h2>Let a mind in</h2>
       <form id="let-in" class="stack">
         <label>The other mind's domain <input name="domain" autocomplete="off" required placeholder="example.com"></label>
-        <button type="submit">Read its keys</button>
+        <button type="submit">Look it up</button>
       </form>
       <div id="found" hidden>
-        <p><strong data-domain></strong> is the mind <code data-mind></code> and publishes the keys <span data-keys></span>.</p>
+        <p><strong data-domain></strong> is the mind <code data-mind></code>. Its keys: <span data-keys></span>.</p>
         <p data-rule></p>
         <button type="button">Let it in</button>
       </div>
-      <p id="status" class="muted" role="status">Your passkey signs each change.</p>`,
+      <p id="status" class="muted" role="status">Each change asks for your passkey.</p>`,
     script: `${signScript(mind)}${MINDS_SCRIPT}`,
   });
 }
@@ -123,12 +123,11 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
  *  that named a hostname alone, the id that the hostname served at its first use (trust on first
  *  use, so the owner can see it and end it), or that none is pinned yet. */
 function idWords(row: MeldRow) {
-  if (!row.mind)
-    return `<span class="muted">No id yet: the first statement it signs pins it to the id that ${text(row.domain)} serves then.</span>`;
+  if (!row.mind) return `<span class="muted">No id yet: its first signed event fixes it.</span>`;
   const id = `<code>${text(row.mind)}</code>`;
   return row.pinned_at
-    ? `<span>the id ${id}, pinned to the id that this hostname served on ${minute(row.pinned_at)}.</span>`
-    : `<span>the id ${id}</span>`;
+    ? `<span>id ${id}, fixed when it first signed, ${minute(row.pinned_at)}.</span>`
+    : `<span>id ${id}</span>`;
 }
 
 const Refused = z.object({ mind: z.string().nullable(), at: z.number() });
@@ -173,9 +172,9 @@ form.addEventListener("submit", async (event) => {
     found.querySelector("[data-domain]").textContent = domain;
     found.querySelector("[data-mind]").textContent = mind;
     found.querySelector("[data-keys]").textContent = answer.keys.length ? answer.keys.map((key) => key.key.slice(0, 8)).join(", ") : "none that sign statements yet";
-    found.querySelector("[data-rule]").textContent = domain + " may add events under /minds/" + mind + "/ of this mind, and nothing else.";
+    found.querySelector("[data-rule]").textContent = "It may add events under /minds/" + mind + "/ of this mind, and nothing else.";
     found.hidden = false;
-    statusSay(status, "Your passkey signs this.");
+    statusSay(status, "Letting it in asks for your passkey.");
   } catch (error) {
     if (domain === typed) said(error, "The keys could not be read.");
   }

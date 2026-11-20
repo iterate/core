@@ -136,7 +136,7 @@ async function keysPage(env: Env, session: Session, next: string | null): Promis
     });
     const published = key.origin ? `, published by ${text(new URL(key.origin).host)}` : "";
     const what = key.actor
-      ? `a key for ${text(key.actor)}${published}: it can ${text(scope)}`
+      ? `service key for ${text(key.actor)}${published}: can ${text(scope)}`
       : key.format === "webauthn"
         ? "passkey"
         : text(key.format);
@@ -154,7 +154,7 @@ async function keysPage(env: Env, session: Session, next: string | null): Promis
     const remove = key.revoked_at
       ? `<span class="muted">removed</span>`
       : last
-        ? `<span class="muted">your only passkey: add another before you remove this one</span>`
+        ? `<span class="muted">your only passkey: add another to remove it</span>`
         : `<form method="post" action="${REMOVE_PATH}" class="inline" data-remove>
           <input type="hidden" name="key" value="${text(key.id)}">${nextField}
           <input type="hidden" name="signed">
@@ -166,25 +166,25 @@ async function keysPage(env: Env, session: Session, next: string | null): Promis
   // what the loss of the only passkey means, and who then lets the person in again
   const locked = isOwner(configOf(env), session.email)
     ? "until whoever holds this mind's Cloudflare account runs the recovery command"
-    : "until an owner of the mind gives you a sign-in link";
+    : "until an owner gives you a sign-in link";
   const second =
     passkeys === 1
-      ? `<p><strong>Add a second passkey</strong>, on another device or a security key. If you lose your only passkey you are locked out, ${locked}.</p>`
+      ? `<p><strong>Add a second passkey</strong> on another device or a security key. Lose your only one and you are locked out ${locked}.</p>`
       : "";
   return page({
     title: `Your keys for ${mind}`,
     wide: true,
     body: `<h1>Your keys for ${text(mind)}</h1>
-      <p>A key lets you sign in to ${text(mind)} and approve things in it: a passkey in your password manager, or a security key such as a YubiKey. The list also shows the keys that members allowed for services, and any member can remove one of those.</p>
-      ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">You have no keys here yet.</p>`}
+      <p>Your passkeys sign you in and approve changes. Service keys let a service act in this mind, and any member can remove one.</p>
+      ${results.length ? `<ul>${results.map(item).join("")}</ul>` : `<p class="muted">No keys yet.</p>`}
+      <p id="removal" class="muted" role="status"></p>
       <form ${formAttributes}>
-        <label>Name, optional <input name="label" maxlength="100" size="28" placeholder="such as YubiKey"></label>
+        <label>Name (optional) <input name="label" maxlength="100" size="28" placeholder="such as YubiKey"></label>
         <button type="submit">Add a passkey</button>
         <p id="status" class="muted" role="status"></p>
       </form>
-      ${second}<p class="muted">A passkey you already have here signs each new one, so you use both: first the new one, then the one you have.</p>
-      <p id="removal" class="muted" role="status">Removing a key takes a press of a passkey you have here.</p>
-      <p class="muted">Where you are signed in, and the apps and tools that hold a sign-in as you: <a href="${SESSIONS_PATH}">Sessions</a>. The minds that this mind lets in: <a href="${MINDS_PATH}">Other minds</a>.</p>
+      ${second}<p class="muted">Adding asks for two passkeys: the new one, then one you already have. Removing asks for one.</p>
+      <p class="muted"><a href="${SESSIONS_PATH}">Where you are signed in</a> &middot; <a href="${MINDS_PATH}">Minds let in</a></p>
       ${next ? `<p><a href="${text(next)}">Done</a></p>` : ""}`,
     script: `${signScript(mind)}${PASSKEY_SCRIPT}`,
   });
@@ -226,7 +226,7 @@ form.addEventListener("submit", async (event) => {
         body: { label: typed || device + ", " + day, publicKey: b64u(publicKey), credentialId: credential.id, clientDataJSON: b64u(credential.response.clientDataJSON) },
       };
       form.querySelector("button").textContent = "Confirm with a passkey you have";
-      statusSay(status, "The new passkey is made. Now confirm it with a passkey you already have here.");
+      statusSay(status, "New passkey made. Now confirm with one you already have.");
       return;
     }
     statusSay(status, "Waiting for a passkey you already have…");
@@ -235,7 +235,7 @@ form.addEventListener("submit", async (event) => {
     if (!response.ok) throw new Error((await response.json()).error);
     location.reload();
   } catch (error) {
-    if (error.name === "InvalidStateError") statusRefused(status, "This device holds a passkey of yours for this site already. Make the new one on another device or a security key.");
+    if (error.name === "InvalidStateError") statusRefused(status, "This device already has a passkey of yours for this site. Use another device or a security key.");
     else statusFailed(status, error, "The passkey was not added.");
   }
 });
@@ -304,7 +304,7 @@ async function passkeyAdded(env: Env, request: Request, session: Session): Promi
   if ("refused" in change)
     return json(
       {
-        error: `The passkey was not added: ${change.refused}. A passkey you already have here signs each new one.`,
+        error: `The passkey was not added: ${change.refused}. Confirm with a passkey you already have.`,
       },
       403,
     );
@@ -377,7 +377,7 @@ async function removed(env: Env, request: Request, session: Session): Promise<Re
   const change = await signedChangeBy(env, form.get("signed"), KEY_REMOVED, session.email);
   if ("refused" in change)
     return errorPage(
-      `The key was not removed: ${change.refused}. Removing a key takes a press of a passkey you have here.`,
+      `The key was not removed: ${change.refused}. Confirm with one of your passkeys.`,
       403,
     );
   if (change.payload.key !== id)
@@ -407,7 +407,7 @@ async function removed(env: Env, request: Request, session: Session): Promise<Re
       .first();
     if (own)
       return errorPage(
-        "This is your only passkey, so it was not removed. Add another passkey first, then remove this one.",
+        "This is your only passkey, so it was not removed. Add another first.",
         409,
         undefined,
         [{ href: KEYS_PATH, label: "Your keys" }],
@@ -476,14 +476,14 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
     ? `<h1>${text(cloud.heading)}</h1>
       <p>${text(cloud.can)}</p>
       <p><strong>${text(cloud.recognise)}</strong></p>`
-    : `<h1>Sign this statement?</h1>
-      <p>${text(scopePlainly(ask, mind))}</p>`;
+    : `<h1>Add a service key</h1>
+      <p>${text(scopePlainly(ask))}</p>`;
   // every part of the Cloud's statement is checked or plain
   const fromLink = cloud
     ? ""
-    : `<span class="${PART_CLASS.link}">from the link</span> The link says this, and nobody checked it. `;
+    : ` &middot; <span class="${PART_CLASS.link}">from the link</span> not checked by anyone`;
   return page({
-    title: cloud ? cloud.heading : "Sign this statement?",
+    title: cloud ? cloud.heading : "Add a service key",
     // The consent page's own look, over the plain page's stylesheet. A part may break across lines,
     // so a long path still fits a phone, and each line of it keeps its tint.
     style: `
@@ -496,16 +496,15 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
 summary { cursor: pointer; }`,
     body: `${opening}
       <p class="statement">${statement}</p>
-      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> ${text(mind)} checked this. ${fromLink}Plain words are the same on every key page.</p>
-      <p>Any member can remove the key on <a href="${KEYS_PATH}">Your keys</a>.</p>
+      <p class="muted legend"><span class="${PART_CLASS.checked}">checked</span> checked by this mind${fromLink}</p>
       <details>
         <summary>What is a key?</summary>
-        <p class="muted">A key has two halves. Its holder keeps the private half and signs with it; that half never comes to ${text(mind)}. ${text(mind)} keeps the public half and checks each signature with it. ${start} is the start of the public half's fingerprint.</p>
+        <p class="muted">Its holder keeps the private half and signs with it. This mind keeps the public half, whose fingerprint starts ${start}, and checks each signature with it. Any member can remove the key on <a href="${KEYS_PATH}">Your keys</a>.</p>
       </details>
       <form method="post" action="${ENROL_PATH}" class="actions" data-enrol="${text(JSON.stringify(enrolPayloadOf(key, ask)))}">
         ${hidden("actor", ask.actor)}${hidden("label", ask.label)}${hidden("publicKey", ask.publicKey)}${hidden("paths", ask.paths.join(","))}${ask.provide ? hidden("provide", ask.provide) : ""}${ask.cloud ? hidden("cloud", ask.cloud) : ""}${next ? hidden("next", next) : ""}
         ${hidden("decision", "cancel")}${hidden("signed", "")}
-        <button type="submit" data-allow>Sign with your passkey</button>
+        <button type="submit" data-allow>Sign with passkey</button>
         <button type="submit" class="link">Cancel</button>
       </form>
       <p id="status" class="muted" role="status"></p>`,
@@ -532,7 +531,7 @@ export function statementHtml(sentences: StatementPart[][]): string {
     .join(" ");
 }
 
-// The press of "Sign with your passkey" is a statement one of the person's passkeys signs: the key,
+// The press of "Sign with passkey" is a statement one of the person's passkeys signs: the key,
 // all it may do and its label, as the page says it. Cancel posts the form as it is.
 const ENROL_SCRIPT = `
 const form = document.querySelector("form[data-enrol]");
@@ -556,12 +555,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
   const form = await request.formData();
   const next = honouredNext(String(form.get("next") || ""), config);
   if (form.get("decision") !== "allow")
-    return onward(
-      next,
-      new AccountFacts(),
-      "Nothing was added",
-      `<p>No key was added to ${text(config.controlPlaneHostname)}.</p>`,
-    );
+    return onward(next, new AccountFacts(), "Nothing was added", "<p>No key was added.</p>");
   const ask = serviceKeyRequestOf(form);
   if ("refused" in ask) return errorPage(ask.refused, 400);
   const key = await p256KeyIdOf(env, ask.publicKey);
@@ -572,10 +566,7 @@ async function serviceKeyAnswered(env: Env, request: Request, session: Session):
   // a page that posts this form for the member, allows nothing.
   const change = await signedChangeBy(env, form.get("signed"), KEY_ADDED, session.email);
   if ("refused" in change)
-    return errorPage(
-      `No key was added: ${change.refused}. Allowing a key takes a press of your passkey.`,
-      403,
-    );
+    return errorPage(`No key was added: ${change.refused}. Sign with one of your passkeys.`, 403);
   if (!allowsExactly(change.payload, key, ask))
     return errorPage(
       "No key was added: the signed statement is for another key, or for another reach.",

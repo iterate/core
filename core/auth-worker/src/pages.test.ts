@@ -26,7 +26,7 @@ test("the mailed code's address page is the narrow card: the mark, a named email
   expect(html).toContain(`<h1>Sign in to ${MIND}</h1>`);
   // the mind's own line says what a code gives, and that it signs in no member
   expect(html).toContain(
-    `<p class="muted">A code gives an account for the apps of ${MIND}, with no access to the mind itself. A member signs in with a passkey.</p>`,
+    `<p class="muted">A code signs you in to the apps of ${MIND}, never to the mind itself. Members sign in with a passkey.</p>`,
   );
   expect(html).toMatch(/<label>Email <input type="email" name="email"/);
   expect(html).toContain(`<button type="submit">Send a code</button>`);

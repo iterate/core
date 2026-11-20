@@ -26,12 +26,14 @@ test("signed out leads to the sign-in and back, and a person who is no member is
   expect(await mindsPageResponse(env, new Request(`${ISSUER}/keys`))).toBeNull();
 });
 
-test("an empty list says what a meld is", async () => {
+test("an empty list says what a mind that is let in can do", async () => {
   const { env } = stackOf([]);
   const owner = await signedIn(env, OWNER);
   const body = await (await mindsPageResponse(env, get("/minds", owner)))!.text();
-  expect(body).toContain("No mind is let in. A meld lets another mind add events to this one");
-  expect(body).not.toContain("Melds that ended");
+  expect(body).toContain(
+    "None yet. A mind that you let in can add events to this one, only where you sign for.",
+  );
+  expect(body).not.toContain("<h2>Ended</h2>");
   expect(body).toContain("Let a mind in");
 });
 
@@ -58,9 +60,9 @@ test("a meld is listed with its paths, its key and who let it in; an ended meld 
   expect(body).toContain("<code>/minds/peer-one.net/</code>, <code>/notes/&#60;b&#62;/</code>");
   expect(body).toContain("signed with its published keys");
   expect(body).toContain("signed with the key pinnedke.");
-  expect(body).toContain(`${OWNER.email} let it in at 2026-11-17 09:30 UTC`);
+  expect(body).toContain(`Let in by ${OWNER.email}, 2026-11-17 09:30 UTC`);
   expect(body).toContain(`data-end="peer-one.net"`);
-  expect(body).toContain("Melds that ended");
+  expect(body).toContain("<h2>Ended</h2>");
   expect(body).toContain("peer-old.net <span");
   expect(body).not.toContain(`data-end="peer-old.net"`);
 });

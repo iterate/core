@@ -317,7 +317,7 @@ export function notMemberPage(input: { mind: string; email: string; here?: strin
     title: "You can't continue",
     status: 403,
     body: `<h1>You can't continue</h1>
-      <p>You are signed in as <strong>${text(input.email)}</strong>, and that address is not a member of ${text(input.mind)}. Ask the mind's owner to add it.</p>
+      <p><strong>${text(input.email)}</strong> is not a member of ${text(input.mind)}. Ask an owner to add you.</p>
       <div>${otherAccountForm(input.here || "/")}</div>`,
   });
 }
@@ -355,9 +355,9 @@ export function consentPage(input: {
       body: `${
         input.host
           ? `<h1>${name} wants to use ${text(input.host)} as you</h1>
-        <p>${name} will learn that you are <strong>${text(input.email)}</strong>, and can use ${text(input.host)} as you. It gets nothing else in ${mind}.</p>`
+        <p>It learns that you are <strong>${text(input.email)}</strong>, and gets nothing else in ${mind}.</p>`
           : `<h1>${name} wants to access ${mind}</h1>
-        <p>${name} will use ${mind} through ${text(input.resource)}, as <strong>${text(input.email)}</strong>. It can read and change everything in this mind.</p>`
+        <p>It will act as <strong>${text(input.email)}</strong> through ${text(input.resource)}, and can read and change everything in this mind.</p>`
       }
         ${origin}
         ${loopback}
