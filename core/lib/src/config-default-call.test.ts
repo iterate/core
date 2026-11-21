@@ -344,6 +344,36 @@ test("a voice agent session that OpenAI made is hung up when its host left meanw
   });
 });
 
+test("the voice agent never stays in a call with nobody: it leaves with the last person at once, by a Leave, an un-set, or the next look when no un-set came", async () => {
+  for (const how of ["leave", "un-set", "look"] as const) {
+    const room = fakeCall();
+    room.held.set("page-owner", "user_owner");
+    await room.call.join(owner, "page-owner");
+    room.openai = {
+      status: 201,
+      body: { transport: { sdp: "answer" }, session: { id: "sess_c" } },
+    };
+    await room.call.voiceAgent(owner, "page-owner", { start: "offer" });
+    // while it is in, the next look is within a minute
+    expect(room.schedules.at(-1)).toBeLessThanOrEqual(room.clock.now + 60_000);
+    room.held.delete("page-owner");
+    if (how === "leave") await room.call.leave(owner, "page-owner");
+    if (how === "un-set") await room.call.pageGone("page-owner");
+    if (how === "look") {
+      room.clock.now += 60_000;
+      await room.call.sweep();
+    }
+    expect(room.call.live()).toMatchObject({ since: null, inCall: {}, voiceAgent: null });
+    expect(room.notes.at(-1)).toEqual([
+      "[call] The voice agent left the call: its host left.",
+      { kind: "voice-agent-left", why: "its host left" },
+    ]);
+    expect(room.sent.at(-1)).toMatchObject({
+      url: "https://api.openai.com/v1/live/sessions/sess_c/hangup",
+    });
+  }
+});
+
 test("a late answer of an earlier claim on the same page leaves the new voice agent alone, and its own session is hung up", async () => {
   const room = fakeCall();
   room.held.set("page-owner", "user_owner");
