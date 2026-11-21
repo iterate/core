@@ -68,7 +68,16 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
     // the API itself is a session that the boundary ends: `Mind.api` (./rpc.ts) is the mind's part
     return new Response("Not found\n", { status: 404 });
   }
-  if (route === "mcp") return serveMcp(request);
+  if (route === "mcp")
+    return serveMcp(request, (signedUrl) =>
+      serveMindFileRequest({
+        bucket: env.FILES,
+        secret: config.signingKey.exposeSecret(),
+        // a read: nothing is uploaded
+        recordUpload: () => Promise.resolve(),
+        request: new Request(signedUrl),
+      }),
+    );
   return new Response("Not found\n", { status: 404 });
 }
 
