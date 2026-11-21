@@ -9,15 +9,7 @@ import { expect, test } from "vitest";
 import { emailAddressPage } from "./email-sign-in.ts";
 import type { Env } from "./env.ts";
 import { deviceTile } from "./device/page.ts";
-import {
-  chooserPage,
-  consentPage,
-  errorPage,
-  factsTable,
-  page,
-  signInPage,
-  STATUS_SCRIPT,
-} from "./pages.ts";
+import { chooserPage, consentPage, errorPage, page, signInPage, STATUS_SCRIPT } from "./pages.ts";
 import { configVars } from "./test-support.ts";
 
 const MIND = "iterate.example.com";
@@ -430,25 +422,6 @@ test("every scripted page has one line for its press: a refusal reads as an erro
   expect(refused).toMatchObject({ state: { muted: true, role: "status" } });
   const html = await page({ title: "A press", body: "", script: "statusSay;" }).text();
   expect(html).toContain("function statusRefused(line, words)");
-});
-
-test("a facts table escapes each label and help, puts the help behind a ? named for its row, and draws no help for a row without it", () => {
-  expect(
-    factsTable([
-      {
-        label: 'Who <b>asks</b> "now"',
-        value: "<strong>the laptop</strong>",
-        help: "It's <i>its</i> own claim.",
-      },
-      { label: "Code", value: "<strong>WDJB-MJHT</strong>" },
-    ]),
-  ).toBe(
-    '<dl class="facts">' +
-      // the value is the caller's HTML, as it was given
-      '<div><dt>Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;</dt><dd><strong>the laptop</strong> <details class="help"><summary aria-label="About Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;">?</summary><p>It&#39;s &#60;i&#62;its&#60;/i&#62; own claim.</p></details></dd></div>' +
-      "<div><dt>Code</dt><dd><strong>WDJB-MJHT</strong></dd></div>" +
-      "</dl>",
-  );
 });
 
 async function kept(name: string, answer: Response) {

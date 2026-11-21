@@ -61,8 +61,8 @@ await itx.fetch(
 );
 ```
 
-The owner presses "Approve the chosen requests" on the same page. With no answer in five minutes
-the call answers 403; once approved, the same request sent again goes. Then ask whether to keep
+The owner presses "Approve with passkey" on the same page. With no answer in five minutes the
+call answers 403; once approved, the same request sent again goes. Then ask whether to keep
 the rule: every `POST` to `api.github.com` with that secret would wait.
 
 ## Say

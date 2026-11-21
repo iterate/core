@@ -11,7 +11,7 @@ test("the form names its mind, renders the description's Markdown safely, hides 
   expect(html).toContain(`<script nonce="${nonce}">`);
   expect(html).toContain('<span class="mind">iterate.ada.example</span>');
   // the page's own line first, in the body's type; the description after it, as the code's words
-  const own = html.indexOf("<p>The mind iterate.ada.example keeps what you type here");
+  const own = html.indexOf("<dt>Sent only to</dt><dd>");
   const quoted = html.indexOf(
     `<p class="muted">The mind's code says:</p><blockquote class="prose"><p>Make one at`,
   );
@@ -22,10 +22,11 @@ test("the form names its mind, renders the description's Markdown safely, hides 
     '<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">the keys page</a> <span class="muted">(platform.openai.com)</span>',
   );
   expect(html).toContain("&#60;b&#62;bold?&#60;/b&#62;");
-  // the lines that name the mind are the page's own: no link of the agent's is in them
+  // the head that names the mind and the table of where the value goes are the page's own: no
+  // link of the agent's is in them
   const lines = [
     /<div class="masthead">.*?<\/div>/.exec(html)?.[0],
-    /<p>The mind .*?<\/p>/.exec(html)?.[0],
+    /<dl class="facts">.*?<\/dl>/.exec(html)?.[0],
   ];
   expect(lines.map((line) => !!line && !line.includes("<a "))).toEqual([true, true]);
   // the eye is hidden until the script runs: with scripts off it would do nothing

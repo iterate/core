@@ -12,7 +12,7 @@ import { z } from "zod";
 import { configOf, type Env, issuerOf } from "./env.ts";
 import { canonicalPath, honouredNext } from "./key-rules.ts";
 import { meldRuleOf } from "./minds.ts";
-import { type Fact, FACTS_STYLE, factsTable, page, text } from "./pages.ts";
+import { type Fact, factsTable, page, text } from "./pages.ts";
 import { SIGN_HELPERS } from "./signed-change.ts";
 import { verifiedStatement } from "./keys.ts";
 import { admittedStatement, MOST_PAYLOAD_BYTES } from "./statements.ts";
@@ -196,7 +196,6 @@ function draftPage(env: Env, draft: Draft | null): Response {
   return page({
     title: "Sign this statement",
     wide: true,
-    style: FACTS_STYLE,
     body: `<h1>Sign this statement</h1>
       ${lead}
       ${factsTable(rows)}

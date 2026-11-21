@@ -3,6 +3,8 @@ import { PLAIN_PAGE_ICON_SRC, plainPageCssHash, standalonePage } from "iterate/s
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, knownMarkOf, shownLogoOf } from "./client-mark.ts";
 
+export { type Fact, factsTable } from "iterate/standalone-page";
+
 export const text = (value: string) =>
   value.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
 
@@ -29,41 +31,6 @@ function statusFailed(line, error, fallback, unused = "No passkey was used. Pres
   else statusRefused(line, error.message || fallback);
 }
 `;
-
-/** ONE ROW OF WHAT A PRESS SIGNS OR ALLOWS (`factsTable`): a name, its value and a quieter line
- *  under it (`note`), both HTML that the caller escaped, and `help`, plain text behind the row's
- *  "?". A fact that changes what a person decides goes in `value` or `note`, where it is read
- *  with no press; `help` only explains. */
-export type Fact = { label: string; value: string; note?: string; help?: string };
-
-/** THE TABLE AT THE HEAD OF A PAGE WHERE A PASSKEY SIGNS: the actual fields and their values, one
- *  row each. A row's help is the browser's own `details`, so a key press or a touch opens it as a
- *  click does, with no script. A page that draws one passes `FACTS_STYLE` as its `style`. */
-export function factsTable(rows: Fact[]): string {
-  const row = ({ label, value, note, help }: Fact) =>
-    `<div><dt>${text(label)}</dt><dd>${value}${
-      help
-        ? ` <details class="help"><summary aria-label="About ${text(label)}">?</summary><p>${text(help)}</p></details>`
-        : ""
-    }${note ? `<span class="note">${note}</span>` : ""}</dd></div>`;
-  return `<dl class="facts">${rows.map(row).join("")}</dl>`;
-}
-
-export const FACTS_STYLE = `
-.facts { margin: 0; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.875rem; }
-.facts > div { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 0.25rem 1rem; padding: 0.5rem 0.875rem; }
-.facts > div + div { border-top: 1px solid var(--border); }
-.facts dt { color: var(--muted-foreground); }
-.facts dd { margin: 0; overflow-wrap: anywhere; }
-.facts dd > pre { margin-top: 0.25rem; }
-.facts dd > ul { margin: 0; padding-left: 1.125rem; }
-.facts .note { display: block; margin-top: 0.125rem; color: var(--muted-foreground); }
-.help { display: inline; }
-.help > summary { display: inline-flex; align-items: center; justify-content: center; width: 1.125rem; height: 1.125rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted-foreground); font-size: 0.6875rem; line-height: 1; cursor: pointer; list-style: none; vertical-align: text-top; }
-.help > summary::-webkit-details-marker { display: none; }
-.help[open] > summary { background: var(--muted); }
-.help > p { margin: 0.25rem 0 0; color: var(--muted-foreground); }
-@media (max-width: 30rem) { .facts > div { grid-template-columns: minmax(0, 1fr); } }`;
 
 export function page(
   input: {

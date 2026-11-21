@@ -139,8 +139,8 @@ test("a proposed rule waits as a held act does: a row to tick with what it holds
   });
   // a row as a held act's is: a box to tick, and the two buttons of what waits
   expect(listed.match(/<input type="checkbox" data-pick="p[12]">/g)).toHaveLength(2);
-  expect(listed).toContain('<button type="button" data-approve>Approve the chosen</button>');
-  expect(listed).toContain("data-reject>Reject them</button>");
+  expect(listed).toContain('<button type="button" data-approve>Approve with passkey</button>');
+  expect(listed).toContain("data-reject>Reject</button>");
   expect(listed).toContain("A proposed rule, asked for from /agents/a at 1970-01-01 00:00 UTC.");
   expect(listed).toContain("/secrets/fastmail has no rule now.");
   // the exact rule under its words, written as text
@@ -311,10 +311,94 @@ test("a held request says what an approval releases, from the fields that it was
   expect(SCRIPT).toContain(
     'request.fills ? "what will be sent, with the value in its body as said above" : "exactly what will be sent"',
   );
+  // a held request's parts are a table that the script fills, over the text that the key signs for
+  expect(row("fills")).toContain('<dl class="facts" data-parts></dl>');
+  expect(row("fills")).toContain(
+    "<details><summary>The exact text you sign for</summary><pre data-text></pre></details>",
+  );
+  expect(SCRIPT).toContain('factRow("Method", request.method)');
+  expect(SCRIPT).toContain('row.querySelector("[data-text]").textContent = held.text;');
   // the block of a secret that names no body field says nothing of bodies
   expect(
     ruleForm("/secrets/sink", { methods: ["DELETE"], hosts: ["api.example.com"] }),
   ).not.toContain("inside its body");
+});
+
+test("a rule's block has one Save, and for a rule that is there the two presses that take a passkey, with when each is for", () => {
+  const block = ruleForm("/secrets/sink", { methods: ["DELETE"], hosts: ["api.example.com"] });
+  expect(block).toContain('<button type="submit">Save</button>');
+  expect(block).toContain("data-sign-rule>Save with passkey</button>");
+  expect(block).toContain("data-remove-rule>Remove with passkey</button>");
+  expect(block).toContain(
+    "Save takes a change after which more waits. Any other change, and Remove, take your passkey.",
+  );
+  // the examples for the two optional fields are closed until a member opens them
+  expect(block).toContain("<details><summary>When to use the two optional fields</summary>");
+  expect(ruleForm("", null)).not.toContain("take your passkey");
+});
+
+test("the page's script, run: a row keeps a value's markup and spaces as text, no body is the page's own note, and a press with nothing ticked says so and signs nothing", () => {
+  // what the script touches of an element
+  class Element {
+    textContent = "";
+    className = "";
+    hidden = true;
+    dataset: Record<string, string> = {};
+    children: unknown[] = [];
+    listeners: Record<string, () => void> = {};
+    scrolled = 0;
+    append = (...items: unknown[]) => void this.children.push(...items);
+    addEventListener = (type: string, listener: () => void) => (this.listeners[type] = listener);
+    scrollIntoView = () => void (this.scrolled += 1);
+    querySelectorAll = () => [];
+    querySelector = (selector: string): Element => this.parts[selector]!;
+    parts: Record<string, Element>;
+    constructor(parts: Record<string, Element> = {}) {
+      this.parts = parts;
+    }
+  }
+  const failure = new Element();
+  const [approve, reject] = [new Element(), new Element()];
+  const section = new Element({ "[data-approve]": approve, "[data-reject]": reject });
+  section.dataset.secret = "/secrets/sink";
+  const data = new Element();
+  data.textContent = JSON.stringify({ mind: "example.com", held: [], types: {} });
+  const fetched: string[] = [];
+  const context = {
+    document: {
+      getElementById: () => data,
+      createElement: () => new Element(),
+      querySelector: () => failure,
+      querySelectorAll: (selector: string) => (selector === "[data-secret]" ? [section] : []),
+    },
+    location: { search: "" },
+    fetch: (url: string) => {
+      fetched.push(url);
+      return Promise.resolve({ ok: false });
+    },
+    prompt: () => "a reason",
+    URLSearchParams,
+    TextEncoder,
+    out: {} as { factRow: (label: string, value: string, more?: object) => Element },
+  };
+  new Script(`${SCRIPT}; out.factRow = factRow;`).runInNewContext(context);
+  const cellOf = (row: Element) => row.children[1] as Element;
+  const header = cellOf(context.out.factRow("Header x-note", "a  <b>\tb"));
+  expect({ exact: header.className, shown: header.children }).toEqual({
+    exact: "exact",
+    shown: ["a  <b>\tb"],
+  });
+  const none = cellOf(context.out.factRow("Body", "", { note: "No body." }));
+  expect(none.children).toMatchObject([{ className: "note", textContent: "No body." }]);
+  approve.listeners.click!();
+  reject.listeners.click!();
+  expect(failure).toMatchObject({
+    textContent: "Tick what you mean first.",
+    hidden: false,
+    scrolled: 2,
+  });
+  // only the page's own read of the member's keys: no statement was posted
+  expect(fetched).toEqual(["/keys.json"]);
 });
 
 /** The headers of a member's request, as the boundary stamps them. */

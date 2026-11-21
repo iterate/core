@@ -78,13 +78,13 @@ export function heldActs(gate: Gate): string {
             : " Whoever asked stopped waiting. If you approve, it is done then, and they get the result.";
       return `<fieldset id="act-${escaped(row.digest)}">
 <legend><label><input type="checkbox" data-pick="${escaped(row.digest)}" disabled> ${escaped(act ? summaryOf(act) : "An act this page cannot read")}</label></legend>
-<div data-parts></div>
+<dl class="facts" data-parts></dl>
 <p class="muted">Waiting since ${new Date(row.at).toISOString().slice(0, 16).replace("T", " ")} UTC.${caller}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>
 <details><summary>The exact text you sign for</summary><pre data-text></pre></details>
 <p class="muted" data-check>Checking…</p></fieldset>`;
     })
     .join("");
-  return `<section data-acts><h2>Mail and calls</h2>${groups}<p class="actions"><button type="button" data-approve>Approve the chosen</button> <button type="button" class="link" data-reject>Reject them</button></p></section>`;
+  return `<section data-acts><h2>Mail and calls</h2>${groups}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="link" data-reject>Reject with passkey</button></p></section>`;
 }
 
 /** THE RULES THAT WAIT FOR A MEMBER'S YES: what an agent or the mind's code proposed. Each is a
@@ -112,7 +112,7 @@ ${holdsLess ? `<p data-holds-less><strong>After this, less waits than now.</stro
 <details open><summary>The exact rule you sign for</summary><pre>${escaped(JSON.stringify(rule, null, 1))}</pre></details></fieldset>`;
     })
     .join("");
-  return `<section data-proposals id="proposed"><h2>Proposed rules</h2>${rows}<p class="actions"><button type="button" data-approve>Approve the chosen</button> <button type="button" class="link" data-reject>Reject them</button></p></section>`;
+  return `<section data-proposals id="proposed"><h2>Proposed rules</h2>${rows}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="link" data-reject>Reject</button></p></section>`;
 }
 
 /** WHAT AN APPROVED PROPOSAL TAKES AWAY. A proposed rule comes in the place of the rule that is
@@ -217,39 +217,26 @@ export const mailBodiesOf = (act: { text: string | null; html: string | null }) 
 ];
 
 // Runs after the page's own script (./approvals-page.ts): `data`, `enc`, `sha256`, `hex`, `sign`,
-// `fail`, `wanted` and `tickedAtOpen` are its.
+// `fail`, `wanted`, `tickedAtOpen`, `factRow` and `noneChosen` are its.
 export const ACTS_SCRIPT = `
 const mailBodiesOf = ${mailBodiesOf.toString()};
-const line = (label, value, strong) => {
-  const p = document.createElement("p");
-  const name = document.createElement(strong ? "strong" : "span");
-  name.textContent = label + " ";
-  p.append(name, value);
-  return p;
-};
 for (const held of data.acts) {
   const row = document.getElementById("act-" + held.digest);
   const act = JSON.parse(held.text);
   const parts = row.querySelector("[data-parts]");
   if (act.act === "email.send") {
     // who it is from and where an answer goes come first: they are what a forged mail changes
-    parts.append(line("From", act.from, true), line("Replies go to", act.replyTo || act.from, true), line("To", act.to.join(", ")));
-    if (act.cc.length) parts.append(line("Copy to", act.cc.join(", ")));
-    parts.append(line("Subject", act.subject));
-    for (const part of mailBodiesOf(act)) {
-      if (part.label) parts.append(line(part.label, "", true));
-      const body = document.createElement("pre");
-      body.textContent = part.body;
-      parts.append(body);
-    }
-    for (const file of act.attachments) parts.append(line("Attached", file.filename + " (" + file.contentType + ", " + file.size + " bytes)"));
+    parts.append(factRow("From", act.from), factRow("Replies go to", act.replyTo || act.from), factRow("To", act.to.join(", ")));
+    if (act.cc.length) parts.append(factRow("Copy to", act.cc.join(", ")));
+    parts.append(factRow("Subject", act.subject));
+    // a part's own words (which part it is, and what a mail program shows) stay over its text
+    for (const part of mailBodiesOf(act)) parts.append(factRow("Body", part.body, { block: true, note: part.label }));
+    for (const file of act.attachments) parts.append(factRow("Attached", file.filename + " (" + file.contentType + ", " + file.size + " bytes)"));
   } else {
-    parts.append(line("Call", act.act, true));
+    parts.append(factRow("Call", act.act));
     // the context whose table says what that name is: one name may be two functions in two contexts
-    if (act.at) parts.append(line("In context", act.at));
-    const args = document.createElement("pre");
-    args.textContent = JSON.stringify(act.args, null, 2);
-    parts.append(args);
+    if (act.at) parts.append(factRow("In context", act.at));
+    parts.append(factRow("Arguments", JSON.stringify(act.args, null, 2), { block: true }));
   }
   row.querySelector("[data-text]").textContent = held.text;
   sha256(enc.encode(held.text)).then((digest) => {
@@ -266,11 +253,13 @@ if (acts) {
   const chosen = () => [...acts.querySelectorAll("[data-pick]:checked")].map((box) => box.dataset.pick);
   acts.querySelector("[data-approve]").addEventListener("click", () => {
     const about = chosen();
-    if (about.length) sign({ path: data.actsPath, type: data.actTypes.approved, about }).catch(fail);
+    if (!about.length) return noneChosen();
+    sign({ path: data.actsPath, type: data.actTypes.approved, about }).catch(fail);
   });
   acts.querySelector("[data-reject]").addEventListener("click", () => {
     const about = chosen();
-    const reason = about.length && prompt("Why do you reject it?");
+    if (!about.length) return noneChosen();
+    const reason = prompt("Why do you reject it?");
     if (reason) sign({ path: data.actsPath, type: data.actTypes.rejected, about, payload: { reason } }).catch(fail);
   });
 }
@@ -302,6 +291,7 @@ const proposals = document.querySelector("[data-proposals]");
 if (proposals) {
   const chosen = () => [...proposals.querySelectorAll("[data-pick]:checked")].map((box) => data.gate.proposed.find((proposal) => proposal.id === box.dataset.pick));
   proposals.querySelector("[data-approve]").addEventListener("click", async () => {
+    if (!chosen().length) return noneChosen();
     let rules = data.gate.rules;
     let approved = 0;
     try {
@@ -324,11 +314,12 @@ if (proposals) {
   proposals.querySelector("[data-reject]").addEventListener("click", async () => {
     try {
       const ids = chosen().map((proposal) => proposal.id);
+      if (!ids.length) return noneChosen();
       for (const id of ids) {
         const answer = await fetch("${PROPOSALS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reject: id }) });
         if (!answer.ok) throw new Error((await answer.json()).error);
       }
-      if (ids.length) location.reload();
+      location.reload();
     } catch (error) {
       fail(error);
     }

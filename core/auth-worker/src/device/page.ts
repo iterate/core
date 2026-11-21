@@ -5,15 +5,7 @@ import { sessionOf } from "../cookies.ts";
 import { configOf, type Env, issuerOf } from "../env.ts";
 import { isMember } from "../members.ts";
 import { clientTile } from "../client-mark.ts";
-import {
-  errorPage,
-  FACTS_STYLE,
-  factsTable,
-  notMemberPage,
-  otherAccountForm,
-  page,
-  text,
-} from "../pages.ts";
+import { errorPage, factsTable, notMemberPage, otherAccountForm, page, text } from "../pages.ts";
 import { signedChangeBy, signerOf, signScript } from "../signed-change.ts";
 import { signInHref } from "../sign-in.ts";
 import { CALLBACK_PATH, normalizeUserCode, VERIFICATION_PATH } from "./protocol.ts";
@@ -178,7 +170,6 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
   const shown = {
     status: error ? 403 : 200,
     script: `${signScript(mind)}${PRESS_SCRIPT}`,
-    style: FACTS_STYLE,
   };
   const note = (words: string) => `<span class="note">${text(words)}</span>`;
   const reach = {

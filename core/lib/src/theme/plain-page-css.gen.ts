@@ -406,6 +406,79 @@ flex-wrap: wrap;
 align-items: center;
 gap: 0.75rem 1.25rem;
 }
+.facts {
+margin: 0;
+border: 1px solid var(--border);
+border-radius: var(--radius);
+font-size: 0.875rem;
+}
+fieldset > .facts {
+margin: 0.5rem 0;
+}
+.facts > div {
+display: grid;
+grid-template-columns: 9rem minmax(0, 1fr);
+gap: 0.25rem 1rem;
+padding: 0.5rem 0.875rem;
+}
+.facts > div + div {
+border-top: 1px solid var(--border);
+}
+.facts dt {
+color: var(--muted-foreground);
+}
+.facts dd {
+margin: 0;
+overflow-wrap: anywhere;
+}
+.facts dd.exact {
+white-space: pre-wrap;
+}
+.facts dd > pre {
+margin-top: 0.25rem;
+}
+.facts dd > ul {
+margin: 0;
+padding-left: 1.125rem;
+}
+.facts .note {
+display: block;
+margin-top: 0.125rem;
+color: var(--muted-foreground);
+}
+.help {
+display: inline;
+}
+.help > summary {
+display: inline-flex;
+align-items: center;
+justify-content: center;
+width: 1.125rem;
+height: 1.125rem;
+border: 1px solid var(--border);
+border-radius: 999px;
+color: var(--muted-foreground);
+font-size: 0.6875rem;
+line-height: 1;
+cursor: pointer;
+list-style: none;
+vertical-align: text-top;
+}
+.help > summary::-webkit-details-marker {
+display: none;
+}
+.help[open] > summary {
+background: var(--muted);
+}
+.help > p {
+margin: 0.25rem 0 0;
+color: var(--muted-foreground);
+}
+@media (max-width: 30rem) {
+.facts > div {
+grid-template-columns: minmax(0, 1fr);
+}
+}
 .state {
 display: flex;
 flex-wrap: wrap;
@@ -565,4 +638,4 @@ background: color-mix(in oklab, var(--primary) 90%, transparent);
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-bFVjvjtap6ZIxq9IXdI1R2Oek+MAIbJbqFg0SCPd7fc='";
+export const plainPageCssHash = "'sha256-FQclMF0DzaaoGl8WjiBPvpHEY97wdqBAVjTWqSexkN0='";

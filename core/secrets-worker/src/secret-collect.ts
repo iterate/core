@@ -1,4 +1,5 @@
 import { withFacts } from "iterate/facts";
+import { factsTable } from "iterate/standalone-page";
 import { SECRET_PATH } from "iterate/secret-placeholder";
 import type { SecretAnswer } from "iterate/workers";
 import {
@@ -127,16 +128,25 @@ function formPage(request: Request, path: string, form: CollectionForm): Respons
       return `<div class="stack">${label}${control}${note}</div>`;
     })
     .join("");
-  const mind = new URL(request.url).hostname;
   const body = [
-    `<h1>${escaped(path)}</h1>`,
-    `<p>The mind ${escaped(mind)} keeps what you type here, and only ever sends it to ${form.urls.map(escaped).join(", ")}.</p>`,
+    "<h1>Give a secret</h1>",
+    factsTable([
+      { label: "Secret", value: `<code>${escaped(path)}</code>` },
+      {
+        label: "Kept by",
+        value: "this mind's vault",
+        help: "The mind keeps what you type here, and puts it into requests to the addresses in the next row.",
+      },
+      { label: "Sent only to", value: form.urls.map(escaped).join(", ") },
+      ...(form.redirectOrigin
+        ? [{ label: "After Save", value: `opens ${escaped(new URL(form.redirectOrigin).host)}` }]
+        : []),
+    ]),
     // after the page's own line, and marked as the words of the mind's code, which may say anything
     form.description
       ? `<div class="stack"><p class="muted">The mind's code says:</p><blockquote class="prose">${markdownHtml(form.description)}</blockquote></div>`
       : "",
     useLines(form.use, form.anyoneWithLink),
-    form.redirectOrigin ? `<p>Then opens ${escaped(new URL(form.redirectOrigin).host)}.</p>` : "",
     `<form method="post" id="collect" class="stack">${inputs}<button type="submit">Save</button></form>`,
   ].join("");
   const nonce = crypto.randomUUID();

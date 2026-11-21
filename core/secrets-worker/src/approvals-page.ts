@@ -219,16 +219,18 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
   const requests = waiting
     .map(
       ({ path, held }) =>
-        `<section data-secret="${escaped(path)}"><h2>${escaped(path)}</h2>${held
+        `<section data-secret="${escaped(path)}"><h2>Requests with ${escaped(path)}</h2>${held
           .map(
             (row) => `<fieldset id="request-${escaped(row.digest)}">
 <legend><label><input type="checkbox" data-pick="${escaped(row.digest)}" disabled> ${escaped(summaryOf(row.text))}</label></legend>
-<p class="muted">Waiting since ${new Date(row.at).toISOString()}.${row.state === "approved" ? " Approved: it goes when the same request is sent again." : ""}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>${filledInWords(path, row.text)}
-<pre data-text></pre><p class="muted" data-check>Checking…</p></fieldset>`,
+<p class="muted">Waiting since ${new Date(row.at).toISOString().slice(0, 16).replace("T", " ")} UTC.${row.state === "approved" ? " Approved: it goes when the same request is sent again." : ""}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>${filledInWords(path, row.text)}
+<dl class="facts" data-parts></dl>
+<details><summary>The exact text you sign for</summary><pre data-text></pre></details>
+<p class="muted" data-check>Checking…</p></fieldset>`,
           )
           .join(
             "",
-          )}<p class="actions"><button type="button" data-approve>Approve the chosen requests</button> <button type="button" class="link" data-reject>Reject them</button></p></section>`,
+          )}<p class="actions"><button type="button" data-approve>Approve with passkey</button> <button type="button" class="link" data-reject>Reject with passkey</button></p></section>`,
     )
     .join("");
   const rules = secrets
@@ -241,11 +243,10 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
     `<p role="alert" data-type="error" data-failure hidden></p>`,
     heldActs(gate),
     proposedRules(gate, (path) => secrets.find((secret) => secret.path === path)?.rule),
-    requests ||
-      (gate.held.length || gate.proposed.length ? "" : "<p>Nothing waits for approval.</p>"),
+    requests || (gate.held.length || gate.proposed.length ? "" : "<p>Nothing is waiting.</p>"),
     actRules(gate),
     "<h2>Rules for requests with a secret</h2>",
-    "<p>A request with a secret whose method and host its rule names waits here for a signed yes. Adding a method or a host saves at once; anything else is signed with your key.</p>",
+    "<p>A request that uses a secret and matches that secret's rule waits on this page until a member approves it with a passkey.</p>",
     rules,
     ruleForm("", null),
   ].join("");
@@ -309,11 +310,18 @@ ${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escape
 <p data-words${words ? "" : " hidden"}>${escaped(words)}</p>${bodyFields?.length ? `\n<p>A request that sends ${escaped(path)} inside its body waits too, whatever its method and host: ${bodyFields.map(({ method, url, field }) => `a ${escaped(method)} to ${escaped(url)}, in the field ${escaped(field)}`).join("; ")}.</p>` : ""}
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
-${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
-<p class="muted">For an API that reads and acts through one address: EmailSubmission/set holds a mail sent through JMAP and lets a read go. With this, a body that is not JSON waits too.</p>
-${field("freePaths", "Paths that never wait, or leave empty", rule?.freePaths?.join(", ") ?? "", "")}
-<p class="muted">For an address that takes files, whose body is no JSON: /jmap/upload/ lets an attachment go to Fastmail. A path with a % or a query still waits.</p>
-<p class="actions"><button type="submit">Save</button>${path ? ` <button type="button" class="link" data-sign-rule>Sign and save</button> <button type="button" class="link" data-remove-rule>Remove, signed</button>` : ""}</p></form>`;
+${field("jsonStrings", "Only when the JSON body holds one of these (empty: every request)", rule?.jsonStrings?.join(", ") ?? "", "")}
+${field("freePaths", "Paths that never wait (optional)", rule?.freePaths?.join(", ") ?? "", "")}
+<details><summary>When to use the two optional fields</summary>
+<p class="muted">The JSON body: for an API that reads and acts through one address. EmailSubmission/set holds a mail sent through JMAP and lets a read go. With this, a body that is not JSON waits too.</p>
+<p class="muted">The paths: for an address that takes files, whose body is no JSON. /jmap/upload/ lets an attachment go to Fastmail. A path with a % or a query still waits.</p>
+</details>
+<p class="actions"><button type="submit">Save</button>${path ? ` <button type="button" class="link" data-sign-rule>Save with passkey</button> <button type="button" class="link" data-remove-rule>Remove with passkey</button>` : ""}</p>${
+    path
+      ? `
+<p class="muted">Save takes a change after which more waits. Any other change, and Remove, take your passkey.</p>`
+      : ""
+  }</form>`;
 }
 
 /** The id of the block of a secret's own rule, which "A new rule" leads to. */
@@ -355,7 +363,37 @@ const unb64u = (text) => Uint8Array.from(atob(text.replaceAll("-", "+").replaceA
 const sha256 = async (bytes) => new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 const failure = document.querySelector("[data-failure]");
-const fail = (error) => { failure.textContent = String(error && error.message || error); failure.hidden = false; };
+// The line is at the page's head, so it is brought into view: a member at the buttons of a long
+// page must see why a press did nothing.
+const fail = (error) => { failure.textContent = String(error && error.message || error); failure.hidden = false; failure.scrollIntoView({ block: "center" }); };
+
+// One row of a held thing's table (plain-page.css .facts): its name and its value as text, with
+// every space and tab of the value as it is in the text that was hashed (.exact). A value of
+// several lines goes in a pre; \`note\` is a quieter line over it, the page's own words.
+const factRow = (label, value, { block = false, note = "" } = {}) => {
+  const row = document.createElement("div");
+  const name = document.createElement("dt");
+  name.textContent = label;
+  const cell = document.createElement("dd");
+  if (note) {
+    const said = document.createElement("span");
+    said.className = "note";
+    said.textContent = note;
+    cell.append(said);
+  }
+  if (block) {
+    const body = document.createElement("pre");
+    body.textContent = value;
+    cell.append(body);
+  } else if (value) {
+    cell.className = "exact";
+    cell.append(value);
+  }
+  row.append(name, cell);
+  return row;
+};
+// A press with nothing ticked says so: it must not look like a press that did nothing.
+const noneChosen = () => fail("Tick what you mean first.");
 
 let keys = [];
 const keysLoaded = fetch("/keys.json", { credentials: "same-origin" })
@@ -389,7 +427,14 @@ async function sign(fields, stay) {
 for (const held of data.held) {
   const row = document.getElementById("request-" + held.digest);
   const request = JSON.parse(held.text);
-  row.querySelector("[data-text]").textContent = [request.method + " " + request.url, ...request.headers.map(([name, value]) => name + ": " + value), "", request.body].join("\\n");
+  row.querySelector("[data-parts]").append(
+    factRow("Method", request.method),
+    factRow("To", request.url),
+    ...request.headers.map(([name, value]) => factRow("Header " + name, value)),
+    // no body is said in the page's own quiet words, which no body's text can look like
+    request.body ? factRow("Body", request.body, { block: true }) : factRow("Body", "", { note: "No body." }),
+  );
+  row.querySelector("[data-text]").textContent = held.text;
   sha256(enc.encode(held.text)).then((digest) => {
     const good = hex(digest) === held.digest;
     const sent = request.fills ? "what will be sent, with the value in its body as said above" : "exactly what will be sent";
@@ -405,11 +450,13 @@ for (const section of document.querySelectorAll("[data-secret]")) {
   const chosen = () => [...section.querySelectorAll("[data-pick]:checked")].map((box) => box.dataset.pick);
   section.querySelector("[data-approve]").addEventListener("click", () => {
     const about = chosen();
-    if (about.length) sign({ path, type: data.types.approved, about }).catch(fail);
+    if (!about.length) return noneChosen();
+    sign({ path, type: data.types.approved, about }).catch(fail);
   });
   section.querySelector("[data-reject]").addEventListener("click", () => {
     const about = chosen();
-    const reason = about.length && prompt("Why do you reject it?");
+    if (!about.length) return noneChosen();
+    const reason = prompt("Why do you reject it?");
     if (reason) sign({ path, type: data.types.rejected, about, payload: { reason } }).catch(fail);
   });
 }

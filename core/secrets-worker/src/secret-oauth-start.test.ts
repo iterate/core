@@ -18,7 +18,8 @@ test("a client of the mind's own shows the page to confirm on, and goes to the p
   const page = await secretOAuthStart(navigation(link), async () => target);
   const html = await page.text();
   expect(page).toMatchObject({ status: 200 });
-  expect(html).toContain("You are connecting an account for this secret");
+  expect(html).toContain("<h1>Connect an account</h1>");
+  expect(html).toContain("<dt>Tokens sent only to</dt><dd>");
   const [cookie] = page.headers.get("set-cookie")!.split(";");
   const proceed = new URL(
     /<a class="button" href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),

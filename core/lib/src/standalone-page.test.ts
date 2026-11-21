@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { plainPageCssModule, plainPageCssModulePath } from "../scripts/plain-page-css.ts";
-import { standalonePage } from "./standalone-page.ts";
+import { factsTable, standalonePage } from "./standalone-page.ts";
 
 test("theme/plain-page-css.gen.ts is up to date with tokens.css and plain-page.css", () => {
   expect(
@@ -15,5 +15,24 @@ test("theme/plain-page-css.gen.ts is up to date with tokens.css and plain-page.c
 test("the title is text: markup in it is escaped", () => {
   expect(standalonePage({ title: `Backup · <b>"a&b"</b>`, head: "", body: "" })).toContain(
     "<title>Backup · &#60;b&#62;&#34;a&#38;b&#34;&#60;/b&#62;</title>",
+  );
+});
+
+test("a facts table escapes each label and help, puts the help behind a ? named for its row, and draws no help for a row without it", () => {
+  expect(
+    factsTable([
+      {
+        label: 'Who <b>asks</b> "now"',
+        value: "<strong>the laptop</strong>",
+        help: "It is <i>its</i> own claim.",
+      },
+      { label: "Code", value: "<strong>WDJB-MJHT</strong>" },
+    ]),
+  ).toBe(
+    '<dl class="facts">' +
+      // the value is the caller's HTML, as it was given
+      '<div><dt>Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;</dt><dd><strong>the laptop</strong> <details class="help"><summary aria-label="About Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;">?</summary><p>It is &#60;i&#62;its&#60;/i&#62; own claim.</p></details></dd></div>' +
+      "<div><dt>Code</dt><dd><strong>WDJB-MJHT</strong></dd></div>" +
+      "</dl>",
   );
 });

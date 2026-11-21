@@ -20,7 +20,7 @@ import {
   statementRows,
 } from "./key-rules.ts";
 import { isMember } from "./members.ts";
-import { errorPage, FACTS_STYLE, factsTable, notMemberPage, page, text } from "./pages.ts";
+import { errorPage, factsTable, notMemberPage, page, text } from "./pages.ts";
 import { MINDS_PATH } from "./minds-page.ts";
 import { SESSIONS_PATH } from "./sessions-page.ts";
 import { signInHref } from "./sign-in.ts";
@@ -491,7 +491,7 @@ async function enrolPage(env: Env, url: URL, session: Session): Promise<Response
     wide: true,
     // The consent page's own look, over the plain page's stylesheet. A part may break across lines,
     // so a long path still fits a phone, and each line of it keeps its tint.
-    style: `${FACTS_STYLE}
+    style: `
 .part-checked, .part-link, .part-you { padding: 0.0625rem 0.3125rem; border-radius: calc(var(--radius) - 4px); overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .part-checked { background: color-mix(in oklab, var(--success) 14%, transparent); }
 .part-link { border: 1px dashed color-mix(in oklab, var(--warning) 75%, transparent); background: color-mix(in oklab, var(--warning) 8%, transparent); }

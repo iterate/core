@@ -2,6 +2,7 @@
 // link the mind writes skips the page and a start learned from one attempt completes no other.
 import { cookieValueOf } from "iterate/lib";
 import { base64url } from "iterate/signed";
+import { factsTable } from "iterate/standalone-page";
 import { admitted, callbackPage, escaped, plainPage, useLines } from "./callback-page.ts";
 import { parseSecretOAuthState, stateOf } from "./secret-oauth.ts";
 import { secretsEqual, sha256Hex } from "./secrets.ts";
@@ -76,7 +77,14 @@ export async function secretOAuthStart(
     const page = plainPage(
       request,
       200,
-      `<h1>${escaped(path)}</h1><p>You are connecting an account for this secret. Its tokens are only ever sent to ${target.urls.map(escaped).join(", ")}.</p>${target.returnTo ? "<p>The app you approve is iterate's own. iterate Cloud adds the app's secret when the tokens are fetched, and keeps none of them.</p>" : ""}${useLines(target.use, target.anyoneWithLink)}<a class="button" href="${escaped(url.href)}">Continue</a>`,
+      `<h1>Connect an account</h1>${factsTable([
+        { label: "Secret", value: `<code>${escaped(path)}</code>` },
+        {
+          label: "Tokens sent only to",
+          value: target.urls.map(escaped).join(", "),
+          help: "You sign in to the account on the next page. The mind keeps the tokens that come back in its vault, as this secret.",
+        },
+      ])}${target.returnTo ? "<p>The app you approve is iterate's own. iterate Cloud adds the app's secret when the tokens are fetched, and keeps none of them.</p>" : ""}${useLines(target.use, target.anyoneWithLink)}<a class="button" href="${escaped(url.href)}">Continue</a>`,
     );
     page.headers.append("set-cookie", bound);
     return page;

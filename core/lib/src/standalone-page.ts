@@ -35,6 +35,27 @@ const ICON = `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${e
 const escapedText = (text: string) =>
   text.replace(/[&<>"]/g, (character) => `&#${character.charCodeAt(0)};`);
 
+/** ONE ROW OF WHAT A PRESS SIGNS OR ALLOWS (`factsTable`): a name, its value and a quieter line
+ *  under it (`note`), both HTML that the caller escaped, and `help`, plain text behind the row's
+ *  "?". A fact that changes what a person decides goes in `value` or `note`, where it is read
+ *  with no press; `help` only explains. */
+export type Fact = { label: string; value: string; note?: string; help?: string };
+
+/** A row's "?": plain text behind the browser's own `details`, so a key press or a touch opens it
+ *  as a click does, with no script. `about` names what it explains, for a screen reader. */
+const helpMark = (about: string, help: string) =>
+  `<details class="help"><summary aria-label="About ${escapedText(about)}">?</summary><p>${escapedText(help)}</p></details>`;
+
+/** THE TABLE AT THE HEAD OF A PAGE WHERE A PERSON SIGNS, APPROVES OR GIVES A SECRET: the actual
+ *  fields and their values, one row each (plain-page.css `.facts`). */
+export function factsTable(rows: Fact[]): string {
+  const row = ({ label, value, note, help }: Fact) =>
+    `<div><dt>${escapedText(label)}</dt><dd>${value}${help ? ` ${helpMark(label, help)}` : ""}${
+      note ? `<span class="note">${note}</span>` : ""
+    }</dd></div>`;
+  return `<dl class="facts">${rows.map(row).join("")}</dl>`;
+}
+
 export function standalonePage(input: {
   title: string;
   head: string;
