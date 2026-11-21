@@ -13,7 +13,7 @@ the mind gets one with git, Claude Code and Codex in it, and how you start yours
   as a copy of that snapshot, in about a second.
 - **The mind's coding snapshot is the sandbox `/agents/onboarding/sandbox/coding`.** It holds git,
   gh, curl, jq, ripgrep, Python 3, pnpm, Claude Code and Codex, and git's sign-in for this mind's
-  repos. The onboarding helper `/agents/onboarding/sandbox` builds it (`onboarding/sandbox.md`).
+  repos. The onboarding subagent `/agents/onboarding/sandbox` builds it (`onboarding/sandbox.md`).
   Never run anything in that sandbox yourself: its next idle save would replace the snapshot.
 
 ## Start a sandbox from the snapshot
@@ -151,7 +151,7 @@ return await box.exposePort(8080, { name: "hello", command: ["node", "/root/serv
 
 Rebuild when a start from the snapshot fails ("cannot restore snapshot"): a snapshot lasts 30
 days after its last restore, and it works only on the image it was taken from. To add a tool, add
-it to `APT` or `NPM` below and rebuild. Only the helper `/agents/onboarding/sandbox` runs this: it
+it to `APT` or `NPM` below and rebuild. Only the subagent `/agents/onboarding/sandbox` runs this: it
 creates the sandbox beneath its own path. About two minutes, in one script:
 
 ```ts

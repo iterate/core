@@ -7,7 +7,7 @@ The owner should come away with: their mind has its own computer for code, with 
 - A sandbox is a Linux computer of the mind, a Cloudflare container. A new one has Debian, Node
   and npm alone. `sandboxes.md` says how the mind gets one with git, Claude Code and Codex: one
   sandbox installs them, a snapshot keeps its disk, and every later sandbox starts as a copy.
-- A helper does it, `/agents/onboarding/sandbox` (`onboarding/helpers.md`), so the onboarding
+- A subagent does it, `/agents/onboarding/sandbox` (`onboarding/subagents.md`), so the onboarding
   agent keeps talking. The build takes about two minutes.
 - **A server in a sandbox gets a host of the mind**, `https://<name>.<domain>/`, with its pages
   and WebSockets. A request that finds it stopped starts it (`sandboxes.md`, "Serve a port at a
@@ -23,7 +23,7 @@ The owner should come away with: their mind has its own computer for code, with 
 
 ## How
 
-You are the helper `/agents/onboarding/sandbox`, and this is your job. Do it yourself and start
+You are the subagent `/agents/onboarding/sandbox`, and this is your job. Do it yourself and start
 no other agent.
 
 1. Read `sandboxes.md` in the mind's code: `await itx.repos.get("/repos/config").readFile("sandboxes.md")`.
@@ -32,7 +32,7 @@ no other agent.
 3. Run its script "Check it", as it stands. `tools` and `git` must be `ok: true`. `codex` and
    `claude` are `ok: true`, or say that their key is not set.
 4. When an error says `NO_SANDBOXES_YET`, stop: the account has no Workers Paid.
-5. Report with the rule of `onboarding/helpers.md`. Later, a message that asks for another tool
+5. Report with the rule of `onboarding/subagents.md`. Later, a message that asks for another tool
    or a rebuild is yours too: add the tool to `APT` or `NPM` in the build script, and run both
    scripts again.
 

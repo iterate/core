@@ -15,6 +15,8 @@
 // also looks when its tab comes to the front. Nothing asks on a timer, so an open tab costs nothing.
 
 const HELD = "live-reload:held";
+/** The window's event six seconds after each publication of the mind that this page heard of. */
+const PUBLISHED = "live-reload:published";
 const app = () => document.getElementById("root") || document.body;
 /** Every element of the app that has been scrolled, by where it is in the app, with how far. */
 const scrolled = (within) =>
@@ -228,7 +230,12 @@ function listen() {
     listening.itx = newWebSocketRpcSession(socket);
     listening.subscription = await listening.itx.subscribe({
       consumes: ["events.iterate.com/mind/worker-updated"],
-      target: () => void look(true),
+      target: () => {
+        void look(true);
+        // for what a page shows that is no file of its own (the Dash: the mind's name and icon),
+        // told when every Worker of the mind serves the new commit
+        setTimeout(() => window.dispatchEvent(new Event(PUBLISHED)), 6000);
+      },
     });
     // what was published while no socket was open
     void look(false);

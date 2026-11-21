@@ -1,6 +1,6 @@
-# The look: colour, corners, a name
+# The look: a logo, colour, corners, a name
 
-The owner should come away with: they said a colour, and the page around them changed while they watched.
+The owner should come away with: they picked a logo, and the page around them changed while they watched.
 
 ## Ready today
 
@@ -20,19 +20,29 @@ The owner should come away with: they said a colour, and the page around them ch
   profile (`profile.ts`, `AGENTS.md` "The mind's public profile"). The Dash's header and the
   homepage show the name; with none, they show the zone. The owner's own file: it holds no app
   back. It is PUBLIC: the name and the description are for the world to read.
-- The icon: `profile/icon.svg`, one square SVG, the logo of the Dash and of every app.
+- The icon: `profile/icon.svg`, one square SVG, the logo of the Dash and of every app, and each
+  tab's icon.
+- The open Dash reads the name and the icon again six seconds after it hears of a publish
+  (`apps/dash/public/app.js`): both change at its top with no reload, and its tab's icon too.
 
 ## Not ready
 
-- The name shows on a page's next load: the open Dash takes it when it loads, not live. Say
-  "reload the page" with it.
+- Any page but the open Dash (Docs, the homepage, a second tab that heard of no publish) shows a
+  new name or icon at its next load, and a browser may keep the old icon for five minutes.
 - The tab's title stays "Dash" (`apps/dash/index.html`): changing that file holds the Dash back
   from iterate's updates (`template-updates.md`). Leave it.
 
 ## How
 
-Give it to the helper `/agents/onboarding/look` (`onboarding/helpers.md`). Tell it that the
-Dash needs a sign-in it does not have, so it checks the publish's outcome and not the page:
+The logo, the colour, the corners and the name are the onboarding agent's own scripts, in
+`onboarding.md` ("THE LOOK", "THE NAME"): it commits and says so, and starts no subagent. The
+logo of that script is one character on a square, a rounded square or a circle, in the owner's
+colour. The owner watches the
+page, so nobody waits for the publish.
+
+A look that takes design (a drawn icon, a font, a whole palette) goes to the subagent
+`/agents/onboarding/look` (`onboarding/subagents.md`). The Dash needs a sign-in the subagent does
+not have, so it checks the publish's outcome and not the page:
 
 ```ts
 const repo = itx.repos.get("/repos/config");
@@ -55,16 +65,15 @@ return await itx.cd("/").waitForEvent({
 });
 ```
 
-The name, by the same helper, the same way: read `profile/profile.json`, set `name`, keep
-`description`, commit `{ path: "profile/profile.json", content: JSON.stringify(profile, null, 2) + "\n" }`
-with the message "Look: the name <name>", and wait for the outcome. Check it with
-`(await itx.config.profile()).name`.
+The icon, by the subagent, the same way: commit one square SVG as `profile/icon.svg` with the
+message "Look: the icon", and wait for the outcome. Check it with `(await itx.config.profile()).icon`.
 
-Putting it back is one commit by the same helper: the file as read at the earlier commit.
+Putting it back is one commit: the file as read at the earlier commit.
 
 ## Say
 
-- "So that your mind does not look like everyone else's: which colour is yours?"
-- "What shall we call your mind? Reload the page and the name is at the top."
+- "Your mind needs a logo. Pick one: your G in a green circle, a black square with a white
+  star, or an orange moon."
+- "What shall we call your mind? It is at the top of the page in a moment."
 - "I changed the file that holds your colours. It is yours, and here it is: <link>. Edit it
   yourself and save, and the same thing happens."

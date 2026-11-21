@@ -6,6 +6,8 @@
 import { expect, test } from "vitest";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import dashFiles from "../../configs/default/apps/dash/public/";
+// oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
+import liveReloadFiles from "../../configs/default/apps/live-reload/";
 import {
   PROFILE_PATH,
   profileHtml,
@@ -254,10 +256,15 @@ test("the profile is not the mind's identity: the mind's code never answers the 
   expect(await ask(MIND_IDENTITY_PATH)).toMatchObject({ status: 404 });
 });
 
-test("the Dash asks the zone's website for the profile, and draws without it", () => {
+test("the Dash asks the zone's website for the profile, draws without it, and asks again after a publication", () => {
   const page = String(dashFiles["app.js"]);
-  expect(page).toContain(`fetch(\`https://\${zone}${PROFILE_PATH}\`)`);
+  expect(page).toContain(`fetch(\`https://\${zone}${PROFILE_PATH}\${at ? \`?at=\${at}\` : ""}\`)`);
   expect(page).toContain("name: name || zone");
+  // live-reload.js tells the window six seconds after a publication, and the Dash listens
+  expect(page).toContain('window.addEventListener("live-reload:published", readAgain)');
+  expect(String(liveReloadFiles["live-reload.js"])).toContain(
+    'const PUBLISHED = "live-reload:published"',
+  );
 });
 
 /** The default worker as a bare instance, with a mind at example.com. */

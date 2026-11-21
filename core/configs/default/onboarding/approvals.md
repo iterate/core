@@ -29,7 +29,7 @@ The demo, with a domain that reaches nobody:
 return await itx.approvals.propose({ verb: "email.send", to: ["*@example.com"] });
 ```
 
-Give the owner `signAt`; once signed, `(await itx.approvals.rules()).rules` shows it. A helper sends:
+Give the owner `signAt`; once signed, `(await itx.approvals.rules()).rules` shows it. A subagent sends:
 
 ```ts
 await itx.agents.create("/agents/onboarding/held");
@@ -45,7 +45,7 @@ reject it (example.com is nobody), and offer to take the rule away. Your turn ne
 
 The GitHub demo, once `/secrets/github` is set (`onboarding/github.md`). Propose
 `{ secret: "/secrets/github", methods: ["POST"], hosts: ["api.github.com"] }`. When it is signed,
-a helper sends one harmless request that the rule holds and that changes nothing at GitHub:
+a subagent sends one harmless request that the rule holds and that changes nothing at GitHub:
 
 ```ts
 await itx.fetch(

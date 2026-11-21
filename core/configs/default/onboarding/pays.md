@@ -19,7 +19,7 @@ You answer, so something pays now. An agent uses the first of these that is set 
 
 ## How
 
-Bring it up only when a request fails for lack of credit (a helper reports it, or your own
+Bring it up only when a request fails for lack of credit (a subagent reports it, or your own
 script's answer says 402 or "insufficient"), or when the owner asks. Then say so plainly, and
 give the three ways at once:
 

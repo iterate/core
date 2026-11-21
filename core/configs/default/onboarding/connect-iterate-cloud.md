@@ -1,6 +1,6 @@
 # Connecting to iterate Cloud
 
-The onboarding agent's part 5 (`onboarding.md`) holds the short form of this file; a helper asked
+The onboarding agent's part 5 (`onboarding.md`) holds the short form of this file; a subagent asked
 about the step reads this one.
 
 The owner should come away knowing what iterate gives (credit for AI), what iterate then sees,

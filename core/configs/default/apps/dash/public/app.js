@@ -229,13 +229,33 @@ const sidebarDefaultOpen = document.documentElement.dataset.sidebar !== "collaps
 // with the zone at once, and takes the name and the icon when they are here.
 // A zone that answers no profile (a worker.ts of your own without the routes) keeps the zone
 // as its name.
-const profile = fetch(`https://${zone}/.well-known/iterate-profile`)
-  .then((answer) => answer.json())
-  .catch(() => ({}));
+//
+// AFTER EACH PUBLICATION the open Dash reads them again (live-reload.js tells the window), so a
+// new name or icon shows with no reload. `at` makes the addresses new ones: a browser keeps the
+// profile and the icon for five minutes.
+const readProfile = (at) =>
+  fetch(`https://${zone}/.well-known/iterate-profile${at ? `?at=${at}` : ""}`)
+    .then((answer) => answer.json())
+    .then((said) => (at && said.icon ? { ...said, icon: `${said.icon}?at=${at}` } : said))
+    .catch(() => null);
+const profile = readProfile();
 
 function MindDash() {
   const [{ name, icon }, setProfile] = useState({});
-  useEffect(() => void profile.then(setProfile), []);
+  useEffect(() => {
+    void profile.then((said) => said && setProfile(said));
+    const readAgain = async () => {
+      const at = Date.now();
+      const said = await readProfile(at);
+      if (!said) return;
+      setProfile(said);
+      // the tab's icon is the same file, on this host
+      const tab = document.querySelector('link[rel="icon"]');
+      if (tab) tab.href = `/icon.svg?at=${at}`;
+    };
+    window.addEventListener("live-reload:published", readAgain);
+    return () => window.removeEventListener("live-reload:published", readAgain);
+  }, []);
   // with no icon, the kit draws its own mark
   const logo = icon && html`<img src=${icon} alt="" className="size-8 rounded-md" />`;
   const shown = {

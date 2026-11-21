@@ -43,7 +43,7 @@ test("the Cloud's handover reaches the onboarding agent once, quoted, and a repl
   ]);
 });
 
-test("the handover writes the first message and starts the first helpers, once", async () => {
+test("the handover writes the first message and starts the first subagents, once", async () => {
   const root = rootOf("https://example.com/");
   const summary = "About the person:\n- Name: Ada Lovelace\n- Email: ada@example.com";
   const event = { ...HANDOVER, payload: { ...HANDOVER.payload, summary } };
@@ -79,7 +79,7 @@ test("the handover writes the first message and starts the first helpers, once",
     ["/agents/onboarding/sandbox", "onboarding:helper:sandbox", "user"],
     ["/agents/onboarding", "onboarding:helpers-started", "developer"],
   ]);
-  // a helper's brief starts its turn, and names its file and the way to report
+  // a subagent's brief starts its turn, and names its file and the way to report
   expect(rows[3]!.payload).not.toHaveProperty("llmRequestPolicy");
   expect(rows[3]!.payload).toMatchObject({
     content: expect.stringMatching(
@@ -121,7 +121,7 @@ test("an owner who reached the chat before the handover is greeted once: the ope
     event: {
       payload: {
         content:
-          "The mind's code has started the helpers research, website and sandbox under your path. Do not start them again.",
+          "The mind's code has started the subagents research, website and sandbox under your path. Do not start them again.",
       },
     },
   });
@@ -140,7 +140,7 @@ const OPENER = {
   payload: { role: "developer", content: "The owner has just opened this chat." },
 };
 
-test("with no handover, the owner's first opening of the chat starts the first helpers in the background, once", async () => {
+test("with no handover, the owner's first opening of the chat starts the first subagents in the background, once", async () => {
   const root = rootOf("https://example.com/");
   await run(root, OPENER);
   await run(root, OPENER);
@@ -164,14 +164,14 @@ test("with no handover, the owner's first opening of the chat starts the first h
     event: {
       payload: {
         content:
-          "The mind's code has started the helpers research, website and sandbox under your path. Do not start them again.",
+          "The mind's code has started the subagents research, website and sandbox under your path. Do not start them again.",
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
 });
 
-test("a handover after the opener starts no helper twice", async () => {
+test("a handover after the opener starts no subagent twice", async () => {
   const root = rootOf("https://example.com/");
   await run(root, OPENER);
   await root.cd("/agents/onboarding").append({ idempotencyKey: "opener:/agents/onboarding" });
@@ -199,7 +199,7 @@ test.for([
     event: { ...OPENER, idempotencyKey: "something-else" },
   },
   { name: "an item with no key", event: { ...OPENER, idempotencyKey: undefined } },
-])("$name starts no helper", async ({ event }) => {
+])("$name starts no subagent", async ({ event }) => {
   const root = rootOf("https://example.com/");
   await run(root, event);
   expect([root.appended, root.created]).toEqual([[], []]);

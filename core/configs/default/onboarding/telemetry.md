@@ -8,7 +8,7 @@ The owner should come away with: the mind sees every request, error and event of
   (or `metrics` alone), cut to this mind's rows of the last `hours` (24 by default, 720 at most),
   1,000 rows at most. It answers `{ rows, sql, notice?, send? }`. After the turn-on below, the
   mind's own code answers it (`telemetry.ts`), with the same spelling and answer.
-- When the tables are off, the query answers `{ rows: [], sql, notice, send }`. A helper of the
+- When the tables are off, the query answers `{ rows: [], sql, notice, send }`. A subagent of the
   first sitting reports that the tables are off and stops there. The mind's agent turns them on
   when the owner asks, in this order: `await itx.config.telemetryToken()` answers
   `{ makeTheTokenAt, pasteItAt, account, bucket }`; `{ needed: false }` on a stack that holds its
@@ -51,7 +51,7 @@ rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
 
 ## Not ready
 
-- Telling the owner's visit apart is NOT PROVEN. The helper's check, the screenshot, a crawler
+- Telling the owner's visit apart is NOT PROVEN. The subagent's check, the screenshot, a crawler
   and the Dash's own page load are requests to `/` too, and one request can show as two spans
   (the boundary's and the mind's) with one `trace_id`. Name a visit only when its minute matches
   when they opened the page.

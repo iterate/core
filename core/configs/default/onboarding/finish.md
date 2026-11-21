@@ -27,7 +27,7 @@ In one turn, three things.
    });
    ```
 
-2. Add one line to `mind.md`, through `/agents/onboarding/mind-md` (`onboarding/helpers.md`):
+2. Add one line to `mind.md`, through `/agents/onboarding/mind-md` (`onboarding/subagents.md`):
    "Onboarding finished on 17 Nov 2026, on the owner's word. Not seen yet: telemetry."
 3. Cancel the reminder:
 

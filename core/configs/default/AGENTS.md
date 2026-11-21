@@ -123,9 +123,9 @@ an OpenAI API key, else the deployment's AI Gateway credit ([agent-kinds.md](age
 
 An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`:
 `onboarding.md` is what `/agents/onboarding` is told, the agent where a new owner starts, and
-`onboarding/` holds one file for each job its helpers do. The init case creates it. On a mind
+`onboarding/` holds one file for each job its subagents do. The init case creates it. On a mind
 that came through iterate Cloud the handover writes its first message and starts its first
-helpers (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
+subagents (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
 first opens its chat (`openers` in `apps/dash/public/app.js`).
 
 Every agent also reads `mind.md`, after `AGENTS.md`, when the repo has one (`agents.ts` names it):
@@ -144,13 +144,13 @@ A person who wrote to you looks at an empty space until you answer. Make that sh
 - **Say each piece of news when it arrives**, as a short message of its own (`sendMessage`
   between the steps of a script, or your next answer). Three short messages over a minute are
   better than one long message at the end.
-- **Give anything that is not small to a helper agent**, under your own path, and keep talking:
+- **Give anything that is not small to a subagent**, under your own path, and keep talking:
   `await itx.agents.create("<your path>/<job>")`, then
-  `await itx.agents.get("<your path>/<job>").message(brief)`. The helper cannot see your
+  `await itx.agents.get("<your path>/<job>").message(brief)`. The subagent cannot see your
   conversation, so the brief holds everything, and it says how to report:
   `await itx.agents.get("<your path>").message("<one or two plain sentences>")`. Use the same
-  helper for a later change of the same job. Your own context stays small: do not read the
-  mind's code into it for a job that a helper can do.
+  subagent for a later change of the same job. Your own context stays small: do not read the
+  mind's code into it for a job that a subagent can do.
 
 ## Tone and format
 

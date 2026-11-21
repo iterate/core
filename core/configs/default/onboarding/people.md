@@ -33,7 +33,7 @@ no, go on. On a yes: the link, one sentence on what a member can reach, and whet
 do it now or later.
 
 Who uses the mind goes into `mind.md` through `/agents/onboarding/mind-md`
-(`onboarding/helpers.md`): who each person is, and how each is reached. Not a commit of yours.
+(`onboarding/subagents.md`): who each person is, and how each is reached. Not a commit of yours.
 
 ## Say
 

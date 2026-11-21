@@ -29,8 +29,8 @@ mind's code: read them before a brief.
 ## How
 
 Widen the view in ONE short message, when the owner has seen the website change, and end it with
-one offer. On a yes, ask what it should do. Then give it to a helper, as the website
-(`onboarding/helpers.md`):
+one offer. On a yes, ask what it should do. Then give it to a subagent, as the website
+(`onboarding/subagents.md`):
 
 ```ts
 await itx.agents.create("/agents/onboarding/app-<name>");
@@ -40,7 +40,7 @@ await itx.agents.get("/agents/onboarding/app-<name>").message(brief);
 The brief holds what the app does, in the owner's words; its host; who may come, and so which
 guard; "Read `apps.md` and `people.md` first. Copy an app's folder to start. Mount it in `fetch`.
 Commit, the tip as `parent`, and wait for the outcome. Fetch it as a visitor; behind a sign-in,
-check the outcome alone"; and the report rule of `onboarding/helpers.md`.
+check the outcome alone"; and the report rule of `onboarding/subagents.md`.
 
 ## Say
 

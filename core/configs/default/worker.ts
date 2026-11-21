@@ -118,7 +118,7 @@ export default class extends IterateConfigEntrypoint {
         // The onboarding agent, where a new owner starts. It reads onboarding.md. Its first
         // message is written by the Cloud's handover (cloud-handover.ts), or, on a mind with no
         // Cloud, by its first turn, which the Dash starts when the owner opens its chat
-        // (apps/dash/public/app.js, `openers`). Its first helpers start at that same moment
+        // (apps/dash/public/app.js, `openers`). Its first subagents start at that same moment
         // (the `agent/context-added` case, below). Creating it starts no
         // model turn. An owner who deleted it has no onboarding agent, for good: the platform
         // refuses to make a deleted agent again, and that is no fault of the publish.
@@ -290,7 +290,7 @@ export default class extends IterateConfigEntrypoint {
         await cloudHandoverEvent(itx, event);
         break;
       case "events.iterate.com/agent/context-added":
-        // The owner first opened the onboarding chat: the first helpers (research, website,
+        // The owner first opened the onboarding chat: the first subagents (research, website,
         // sandbox) start in the background, once, on a mind that had no handover
         // (cloud-handover.ts `onboardingOpenedEvent`)
         await onboardingOpenedEvent(itx, event);

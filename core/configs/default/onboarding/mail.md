@@ -28,9 +28,9 @@ The owner should come away with: every address at their domain is the mind's, in
 
 ## How
 
-The onboarding agent sends these mails itself, never a helper: an answer to a mail goes back to
+The onboarding agent sends these mails itself, never a subagent: an answer to a mail goes back to
 the agent that sent it (`mail-replies.md`), and the owner's answer must reach the conversation.
-A helper reads this file only to explain mail or to build something on it.
+A subagent reads this file only to explain mail or to build something on it.
 
 ```ts
 await itx.email.send({

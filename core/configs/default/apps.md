@@ -64,7 +64,9 @@ apps/<name>/
   When a commit is published, a stylesheet that changed is swapped in place. A page whose
   script changed reloads once nobody types in it, and what the person saw stays over the app
   until the app has drawn itself again. A member's page hears of a publication at once; any
-  page looks when its tab comes to the front. To turn it off for an app, take the line out of
+  page looks when its tab comes to the front. Six seconds after a publication it heard of, the
+  window gets the event `live-reload:published`: the Dash then reads the mind's name and icon
+  again. To turn it off for an app, take the line out of
   its `index.html`.
 - **The member's `itx` in the page.** `host.auth.itx(request)`, answered from a path of the app's
   choosing, makes that path a WebSocket to the mind's `itx` for the member who is signed in on

@@ -38,7 +38,7 @@ return url;
 ```
 
 When a way is proven, write it into `mind.md` through `/agents/onboarding/mind-md`
-(`onboarding/helpers.md`), with the fallback: "Reach Ana by Telegram (@ana_mind_bot); mail as
+(`onboarding/subagents.md`), with the fallback: "Reach Ana by Telegram (@ana_mind_bot); mail as
 the fallback." A way that failed goes there too, so nobody tries it blind.
 
 ## Say

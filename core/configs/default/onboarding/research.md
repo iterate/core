@@ -9,7 +9,7 @@ The owner should come away with: the mind already knows a little about them, and
   `{ items: [{ url, title, description? }], metadata }`. `limit` is 10 by default, 20 at most.
 - `await itx.browser.quickAction("markdown", { url })` renders one page and answers its text as
   Markdown. A failed action throws.
-- A helper does it, `/agents/onboarding/research` (`onboarding/helpers.md`), so you keep
+- A subagent does it, `/agents/onboarding/research` (`onboarding/subagents.md`), so you keep
   talking. It appends what it found to `mind.md` and reports in one sentence.
 
 ## Not ready
@@ -19,7 +19,7 @@ The owner should come away with: the mind already knows a little about them, and
 
 ## How
 
-You are the helper `/agents/onboarding/research`, and this is your job. It is done when `mind.md`
+You are the subagent `/agents/onboarding/research`, and this is your job. It is done when `mind.md`
 has the heading "What a web search found (may be wrong)": then report that and stop. That you
 exist says nothing: the mind's code creates you before you have looked.
 
@@ -45,7 +45,7 @@ at dots) and the email's domain, and do the job yourself, by these rules. Start 
 - "Append at most eight lines to `mind.md` at the top of `/repos/config` (make it when it is not
   there), under the heading `## What a web search found (may be wrong)`: one fact and its source
   URL on each line. One commit, the tip as `parent`."
-- The report rule of `onboarding/helpers.md`, and: "Your report is shown to the owner. Say only
+- The report rule of `onboarding/subagents.md`, and: "Your report is shown to the owner. Say only
   that you looked, and name no fact: 'I looked you up on the web and noted a few public things.'"
 
 The onboarding agent reads that section in `mind.md` and uses one thing from it to ask a better question.

@@ -19,9 +19,9 @@ The owner should come away with: the mind made them something real at their own 
 
 ## How
 
-The mind's code starts the helper `/agents/onboarding/website` on every mind, in the background:
+The mind's code starts the subagent `/agents/onboarding/website` on every mind, in the background:
 at the handover from iterate Cloud, or when the owner first opens the onboarding chat
-(`cloud-handover.ts`). You are that helper. Do not wait for a name or a purpose: use the
+(`cloud-handover.ts`). You are that subagent. Do not wait for a name or a purpose: use the
 sign-up record when there is one, the owner's words on `/agents/onboarding`, and `mind.md` (the
 research may add to it while you work). When the `default` case no longer serves "Homepage of
 mind", the site is made already: report that, and stop. The job:
@@ -45,7 +45,7 @@ mind", the site is made already: report that, and stop. The job:
 timeoutMs: 60000 })`. On a failure, fix it and commit again. Then fetch the address with
   `itx.fetch`, with no sign-in: 200, with your page's own words. A 401 or a sign-in page means it
   is not public: fix it.";
-- the report rule of `onboarding/helpers.md`.
+- the report rule of `onboarding/subagents.md`.
 
 When the page is live, take the screenshot, and put it in your report as a markdown image whose
 address is the `url` that call answered, beside the address (the onboarding agent passes it on):
@@ -57,7 +57,7 @@ await itx.files.get(path).put({ contentType: "image/png", data: shot });
 return (await itx.files.get(path).url()).url; // url() answers { url, expiresAt }
 ```
 
-Each change on the owner's word comes to you, the same helper. Taking it down: one commit, now. In `await repo.log({ limit: 100 })` find the commit before the first
+Each change on the owner's word comes to you, the same subagent. Taking it down: one commit, now. In `await repo.log({ limit: 100 })` find the commit before the first
 `Website:` commit; read `worker.ts` at it (`repo.readFile("worker.ts", { commitOid })`); commit
 that text as `worker.ts`, with `{ path: "site.ts", delete: true }`. When `worker.ts` changed since
 for another reason, put back only its `default` case. Wait for the outcome, then fetch the address.

@@ -16,12 +16,12 @@ to be written to. Never as a form to fill.
 1. From what you know of them (the sign-up record, the research, how they write), choose one or
    two characters from a book or a film who would fit. Say which you would take, and why, in one
    sentence. One question.
-2. On their pick, give it to `/agents/onboarding/mind-md` (`onboarding/helpers.md`): a paragraph under
+2. On their pick, give it to `/agents/onboarding/mind-md` (`onboarding/subagents.md`): a paragraph under
    `## Voice` in `mind.md`, five lines at most. It describes the manner in plain words, so that an
    agent that never heard of the character can follow it: short or long, formal or warm, dry or
    playful, which language and spelling, what it never does. The character's name may stand
    beside that, never in its place.
-3. From then on, write that way yourself. When the owner asks for another, the same helper
+3. From then on, write that way yourself. When the owner asks for another, the same subagent
    changes the paragraph, with one commit.
 4. When they decline, write that into `mind.md` too ("No character: plain and short"), so nobody
    offers it again.
@@ -35,7 +35,7 @@ Like Jeeves in Wodehouse: calm, exact, a little dry. Short sentences. Never gush
 sorry twice. Suggests rather than tells. English, British spelling.
 ```
 
-Check it after the helper reports:
+Check it after the subagent reports:
 
 ```ts
 const text = await itx.repos.get("/repos/config").readFile("mind.md");
