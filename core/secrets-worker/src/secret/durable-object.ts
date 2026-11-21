@@ -110,6 +110,7 @@ import {
   type HeldFills,
   heldOfText,
   isTightening,
+  METHOD_HEADERS,
   methodsOf,
   requestOfText,
   requestText,
@@ -1887,7 +1888,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     let held: { digest: string; release?: () => void; fills?: HeldFills } | undefined;
     // read below, and only for a rule that names strings of the body
     let body: string | null = null;
-    const upgrades = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+    const upgrades = upgradesOf(request);
     let proxied: string | undefined;
     // cancelled on a refusal: workerd reports a body a Durable Object left unread
     let unread: Request | undefined;
@@ -1976,10 +1977,22 @@ export class SecretDurableObject extends DurableObject<Env> {
           `itx.fetch: ${path} was set again while this request was being signed for its proxy; send it again`,
         );
       const ruleNow = this.#rule();
+      // WITH A RULE, WHAT SAYS WHAT A REQUEST IS LEAVES AS THE RULE READ IT. A rule reads a
+      // request as it is written, and a placeholder in a header is a field of the secret by now.
+      // So two things are read once more, of the request that leaves: whether it opens a
+      // WebSocket, where no rule reads what the socket then carries, and the methods that a
+      // host may take it for (`methodsOf`). A request that arrives under a rule with a
+      // placeholder in such a header is refused there, before a member is asked; here the same
+      // holds for a rule that was set since, and for a request that waited. The rest of what a
+      // rule reads cannot change: no placeholder moves a host, a path with one is never a free
+      // path, and a body that is filled always waits.
+      if (ruleNow && upgradesOf(outbound)) throw new SecretRefused(noWebSocket(path));
+      if (ruleNow && JSON.stringify(methodsOf(outbound)) !== JSON.stringify(methodsOf(request)))
+        throw new SecretRefused(noPlaceholder(path, "a header that names another method"));
       if (
         !held &&
         ruleNow &&
-        (upgrades || bodyFilled || ruleMatches(ruleNow, methodsOf(request), request.url, body))
+        (bodyFilled || ruleMatches(ruleNow, methodsOf(request), request.url, body))
       )
         throw new HeldAnswer(
           409,
@@ -2037,10 +2050,16 @@ export class SecretDurableObject extends DurableObject<Env> {
       const rule = this.#rule();
       if (stored && "proxy" in stored && (rule || waitFor))
         throw new SecretRefused(`itx.fetch: ${proxyHoldsNoRule(path)}`);
-      if (rule && upgrades)
-        throw new SecretRefused(
-          `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`,
+      // As it is written, before a member is asked: a WebSocket, and a placeholder in a header
+      // that says what the request is. No rule can read what such a header will say, and an
+      // approval of the request could never send it. `send` reads both again as it leaves.
+      if (rule && upgrades) throw new SecretRefused(noWebSocket(path));
+      const filled =
+        rule &&
+        ["upgrade", ...METHOD_HEADERS].find((name) =>
+          headerNamesASecret(request.headers.get(name) || ""),
         );
+      if (filled) throw new SecretRefused(noPlaceholder(path, `its ${filled} header`));
       // (a request that fills waits whatever its body holds: nothing to read for)
       if (
         (stored || ask) &&
@@ -2462,6 +2481,19 @@ const unopened = (path: string) =>
 
 const tooLarge = (path: string) =>
   `itx.fetch: a request with ${path} waits for approval, and its body may be at most ${HELD_BODY_LIMIT / 1024 / 1024} MiB`;
+
+/** Whether a request asks for a WebSocket, as the runtime reads its `Upgrade` header: this one
+ *  word in any letter case, and nothing else in the value. A value such as `websocket, h2c`
+ *  leaves as a plain request with no `Upgrade` header (local workerd, measured 2026-11-21). */
+const upgradesOf = (request: { headers: Headers }) =>
+  request.headers.get("upgrade")?.toLowerCase() === "websocket";
+
+const noWebSocket = (path: string) =>
+  `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`;
+
+/** `where`: the header that would be filled, as the caller reads it. */
+const noPlaceholder = (path: string, where: string) =>
+  `itx.fetch: ${path} has an approval rule, which reads a request as it is written: ${where} takes no placeholder`;
 
 /** A request whose body the secret fills, and a secret that is no longer the one it was for. */
 const givenAgain = (path: string) =>

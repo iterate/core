@@ -10,7 +10,14 @@ import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import { hmacSha256Hex } from "../secrets.ts";
 import { encryptSecretMaterial } from "../secret-at-rest.ts";
-import { APPROVED, HOLD_MS, MAX_WAITING, REJECTED, SecretDurableObject } from "./durable-object.ts";
+import {
+  APPROVED,
+  HOLD_MS,
+  MAX_WAITING,
+  REJECTED,
+  RULE_CONFIGURED,
+  SecretDurableObject,
+} from "./durable-object.ts";
 
 // workerd's own comparison, which Node's Web Crypto has not got
 Object.assign(crypto.subtle, { timingSafeEqual });
@@ -1255,6 +1262,180 @@ test("a refresh endpoint over http is refused when a secret is set", async () =>
     }),
   ).rejects.toThrow("must be an https URL");
 });
+
+/** What a request is told that would open a WebSocket with a secret that has a rule. */
+const NO_WEBSOCKET = `itx.fetch: ${PATH} has an approval rule, so it opens no WebSocket\n`;
+
+/** A request whose headers say what it is, for a secret with a rule: what the secret holds when
+ *  a plain token is not enough, and what the request is told. */
+type SaysWhatItIs = {
+  name: string;
+  material?: Record<string, string>;
+  method?: string;
+  headers: Record<string, string>;
+  text: string;
+};
+
+test.for<SaysWhatItIs>([
+  {
+    name: "a request that is written as a WebSocket",
+    headers: { upgrade: "websocket" },
+    text: NO_WEBSOCKET,
+  },
+  {
+    name: "a request whose Upgrade header a field of the secret would fill",
+    material: { token: "real-token-aaaa", word: "websocket" },
+    headers: { upgrade: fieldOf("word") },
+    text: noPlaceholder("its upgrade header"),
+  },
+  {
+    name: "a request whose method-override header a field of the secret would fill",
+    material: { token: "real-token-aaaa", word: "DELETE" },
+    headers: { "x-http-method-override": fieldOf("word") },
+    text: noPlaceholder("its x-http-method-override header"),
+  },
+])(
+  "under a rule, $name is refused when it arrives: no member is asked, and nothing leaves",
+  async ({ material, headers, text }) => {
+    // the rule names POST, and each of these is a POST: without the refusal it would wait
+    const { secret, upstream } = await vault({ material });
+    const answer = await secret.fetch(
+      material ? withFields(headers, "POST") : useRequest(LABELS, { method: "POST", headers }),
+    );
+    const facts = decodeFacts(answer.headers.get(FACTS_HEADER) || "")[0]?.events ?? [];
+    expect({
+      status: answer.status,
+      kind: answer.headers.get(VAULT_ANSWER_HEADER),
+      text: await answer.text(),
+      facts: facts.map((fact) => fact.type),
+      held: (await secret.approvals(PATH)).held.length,
+      sends: upstream.mock.calls.length,
+    }).toEqual({
+      status: 403,
+      kind: "refused",
+      text,
+      // no fact asks a member for an approval that could never send the request
+      facts: ["events.iterate.com/secret/used"],
+      held: 0,
+      sends: 0,
+    });
+  },
+);
+
+test.for<SaysWhatItIs>([
+  {
+    name: "a request that is written as a WebSocket",
+    method: "GET",
+    headers: { upgrade: "websocket" },
+    text: NO_WEBSOCKET,
+  },
+  {
+    name: "a request whose Upgrade header a field of the secret fills",
+    material: { token: "real-token-aaaa", word: "websocket" },
+    method: "GET",
+    headers: { upgrade: fieldOf("word") },
+    text: NO_WEBSOCKET,
+  },
+  {
+    name: "the same with the word in another letter case",
+    material: { token: "real-token-aaaa", word: "WebSocket" },
+    method: "GET",
+    headers: { upgrade: fieldOf("word") },
+    text: NO_WEBSOCKET,
+  },
+  {
+    name: "a request whose method-override header a field of the secret fills",
+    material: { token: "real-token-aaaa", word: "DELETE" },
+    method: "POST",
+    headers: { "x-http-method-override": fieldOf("word") },
+    text: noPlaceholder("a header that names another method"),
+  },
+])(
+  "a rule that is set while a request is on its way reads the request that leaves: $name is refused with the reason, and nothing leaves",
+  async ({ material, method, headers, text }) => {
+    const { secret, state, upstream, decide } = await vault({ material });
+    await decide(MEMBER, { type: RULE_CONFIGURED, payload: { rule: null } });
+    // no rule when the request arrives, and one that names DELETE alone by the time it would leave
+    const read = state.storage.kv.get;
+    let reads = 0;
+    state.storage.kv.get = (key: string) =>
+      key === "approval-rule" && ++reads > 1
+        ? { methods: ["DELETE"], hosts: ["gmail.googleapis.com"] }
+        : read(key);
+    const answer = await secret.fetch(
+      material ? withFields(headers, method) : useRequest(LABELS, { method, headers }),
+    );
+    expect({
+      status: answer.status,
+      kind: answer.headers.get(VAULT_ANSWER_HEADER),
+      text: await answer.text(),
+      sends: upstream.mock.calls.length,
+    }).toEqual({ status: 403, kind: "refused", text, sends: 0 });
+  },
+);
+
+test("with no rule, a request whose Upgrade header the secret fills leaves as a WebSocket: the refusal is the rule's", async () => {
+  const { secret, upstream, decide } = await vault({
+    material: { token: "real-token-aaaa", transport: "websocket" },
+  });
+  await decide(MEMBER, { type: RULE_CONFIGURED, payload: { rule: null } });
+  const answer = await secret.fetch(withFields({ upgrade: fieldOf("transport") }));
+  expect({
+    status: answer.status,
+    upgrade: upstream.mock.calls.map(([request]) => request.headers.get("upgrade")),
+  }).toEqual({ status: 200, upgrade: ["websocket"] });
+});
+
+test.for([
+  // the rule holds DELETE: as written, this header names no method that the rule knows
+  { name: "a method that the rule holds", verb: "DELETE" },
+  // refused by where the placeholder stands, whatever the field holds
+  { name: "a method that the rule does not hold", verb: "PUT" },
+])(
+  "under a rule that does not name the request as it is written, a header that names another method still takes no placeholder: one that the secret would fill with $name is refused, and nothing leaves",
+  async ({ verb }) => {
+    const { secret, upstream } = await vault({
+      rule: { methods: ["DELETE"], hosts: ["gmail.googleapis.com"] },
+      material: { token: "real-token-aaaa", verb },
+    });
+    const filled = await secret.fetch(
+      withFields({ "x-http-method-override": fieldOf("verb") }, "POST"),
+    );
+    // written plainly, the rule reads it: the request waits
+    const written = await secret.fetch(withFields({ "x-http-method-override": "DELETE" }, "POST"));
+    expect({
+      filled: [filled.status, filled.headers.get(VAULT_ANSWER_HEADER), await filled.text()],
+      written: [written.status, written.headers.get(VAULT_ANSWER_HEADER)],
+      sends: upstream.mock.calls.length,
+    }).toEqual({
+      filled: [403, "refused", noPlaceholder("its x-http-method-override header")],
+      written: [202, "held"],
+      sends: 0,
+    });
+  },
+);
+
+/** A path of the pinned host that the tests' rules do not hold for a GET. */
+const LABELS = "https://gmail.googleapis.com/gmail/v1/users/me/labels";
+
+/** What a request is told when a secret with a rule would fill a header that says what it is. */
+function noPlaceholder(where: string) {
+  return `itx.fetch: ${PATH} has an approval rule, which reads a request as it is written: ${where} takes no placeholder\n`;
+}
+
+/** The placeholder of one field of the secret, for a secret that holds several. */
+function fieldOf(name: string) {
+  return `getSecret("${PATH}", { field: "${name}" })`;
+}
+
+/** A request with a secret that holds several fields: its `token` in the Authorization header,
+ *  and `headers` beside it. */
+function withFields(headers: Record<string, string>, method = "GET") {
+  return new Request(LABELS, {
+    method,
+    headers: { authorization: `Bearer ${fieldOf("token")}`, [SECRET_USE_HEADER]: PATH, ...headers },
+  });
+}
 
 /** The Worker's variables: the config of a mind at `iterate.example.com`, and an at-rest key. */
 const VARS = {

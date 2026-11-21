@@ -56,13 +56,14 @@ export const ApprovalRule = z
   }));
 export type ApprovalRule = z.infer<typeof ApprovalRule>;
 
+/** The headers by which a request names another method than its own (`methodsOf`). */
+export const METHOD_HEADERS = ["x-http-method-override", "x-http-method", "x-method-override"];
+
 /** EVERY METHOD A HOST MAY TAKE THE REQUEST FOR: its own, and one that a header names. Some hosts
  *  (Google's APIs among them) run a POST with `X-HTTP-Method-Override: DELETE` as a DELETE. A rule
  *  that names DELETE holds that POST too. */
 export function methodsOf(request: { method: string; headers: Headers }): string[] {
-  const named = ["x-http-method-override", "x-http-method", "x-method-override"].flatMap(
-    (header) => request.headers.get(header) || [],
-  );
+  const named = METHOD_HEADERS.flatMap((header) => request.headers.get(header) || []);
   return [request.method, ...named].map((method) => method.trim().toUpperCase());
 }
 
