@@ -19,7 +19,10 @@ test("a client of the mind's own shows the page to confirm on, and goes to the p
   const html = await page.text();
   expect(page).toMatchObject({ status: 200 });
   expect(html).toContain("<h1>Connect an account</h1>");
-  expect(html).toContain("<dt>Tokens sent only to</dt><dd>");
+  // the row's "?" is beside its name, and the value is the one place the tokens go
+  expect(html).toMatch(
+    /<dt>Tokens sent only to <details class="help">.*?<\/details><\/dt><dd>https:\/\/api\.provider\.example<\/dd>/,
+  );
   const [cookie] = page.headers.get("set-cookie")!.split(";");
   const proceed = new URL(
     /<a class="button" href="([^"]+)">Continue/.exec(html)![1]!.replace(/&(amp|#38);/g, "&"),

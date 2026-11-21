@@ -158,15 +158,13 @@ function draftPage(env: Env, draft: Draft | null): Response {
   const lead =
     "refused" in meaning
       ? `<p><strong>Your signature would be refused:</strong> ${text(meaning.refused)}.</p>`
-      : known ||
-        "<p>This page does not know what this event means. Read its fields before you sign.</p>";
+      : known || "";
   const asked = proposerOf(draft);
   const rows: Fact[] = [
     {
       label: "Asked by",
       value: asked.who,
-      note: asked.warning && `<strong>${text(asked.warning)}</strong>`,
-      help: "Who asked for this signature, as the platform recorded it. A guest's name is the guest's own word.",
+      help: asked.help,
     },
     // who may sign is shown, not explained: another person's passkey gets the refusal's own words
     ...(draft.signer_email
@@ -178,18 +176,8 @@ function draftPage(env: Env, draft: Draft | null): Response {
           },
         ]
       : []),
-    {
-      label: "Adds an event to",
-      value: `${contextWords(draft.path)} of ${text(mind)}`,
-      help: "Your signature adds one event to this context of the mind, with you as its signer.",
-    },
-    {
-      label: "Event type",
-      value: `<code>${text(draft.type)}</code>`,
-      help: known
-        ? undefined
-        : "The type says what kind of event this is. This page has no description for it.",
-    },
+    { label: "Context", value: `<code>${text(draft.path)}</code>` },
+    { label: "Event type", value: `<code>${text(draft.type)}</code>` },
     // a draft's payload is a plain object: `Proposal` took no other
     ...payloadRows(z.record(z.string(), z.unknown()).parse(payload)),
   ];
@@ -197,6 +185,7 @@ function draftPage(env: Env, draft: Draft | null): Response {
     title: "Sign this statement",
     wide: true,
     body: `<h1>Sign this statement</h1>
+      <p>${asked.subject} wants to add this event to ${text(mind)}, with you as its signer. It needs your signature.</p>
       ${lead}
       ${factsTable(rows)}
       <details>
@@ -267,26 +256,24 @@ function meaningOf(
   };
 }
 
-/** A context of this mind in words: the root is never a bare "/". */
-function contextWords(path: string) {
-  if (path === "/") return "the root (<code>/</code>)";
-  if (path.startsWith("/agents/")) return `the agent <code>${text(path)}</code>`;
-  return `the context <code>${text(path)}</code>`;
-}
-
 /** Who asked for the statement, as the platform stamped the call, and where in the mind it came
  *  from. What a person may have written themselves (a guest's name) is marked as their own. */
-function proposerOf(draft: Draft): { who: string; warning?: string } {
+function proposerOf(draft: Draft): { subject: string; who: string; help: string } {
   const by = AskedBy.safeParse(JSON.parse(draft.asked_by || "null"));
   const where = draft.asked_from ? placeWords(draft.asked_from) : "";
-  if (!by.success) return { who: where ? `this mind, ${where}` : "this mind" };
+  const recorded = "Who asked for this signature, as the platform recorded it.";
+  // code that runs in a member's own request stamps "code" too: the platform knows no more, so
+  // the row names the context that the code ran in, and no person
+  const code = {
+    who: draft.asked_from
+      ? `Code running in <code>${text(draft.asked_from)}</code>`
+      : "Code running in this mind",
+    help: "The platform recorded the context that this code ran in. It cannot tell whether a person asked for it.",
+    subject: "Code",
+  };
+  if (!by.success) return code;
   const asker = by.data;
-  if (asker.kind === "code")
-    // code that runs in a member's own request stamps "code" too: the platform knows no more
-    return {
-      who: `this mind's code${where ? `, ${where}` : ""}`,
-      warning: "Maybe no person is behind it. Sign only if you expected it.",
-    };
+  if (asker.kind === "code") return code;
   const who =
     asker.kind === "member"
       ? asker.email
@@ -297,8 +284,20 @@ function proposerOf(draft: Draft): { who: string; warning?: string } {
         : asker.kind === "guest"
           ? `a guest who gave the name &ldquo;${text(asker.name)}&rdquo;`
           : `the mind <strong>${text(asker.hostname)}</strong>`;
-  return { who: `${who}${where ? `, ${where}` : ""}` };
+  return {
+    subject: SUBJECTS[asker.kind],
+    who: `${who}${where ? `, ${where}` : ""}`,
+    help: asker.kind === "guest" ? `${recorded} A guest's name is the guest's own word.` : recorded,
+  };
 }
+
+/** Who wants the event, in the page's first sentence: the kind alone. The row "Asked by" names them. */
+const SUBJECTS = {
+  member: "A member",
+  person: "A person who is not a member",
+  guest: "A guest",
+  mind: "Another mind",
+} as const;
 
 function placeWords(path: string) {
   if (path === "/") return "at the root (<code>/</code>)";

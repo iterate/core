@@ -411,9 +411,10 @@ button > svg {
   gap: 0.75rem 1.25rem;
 }
 /* what a press signs or allows, as a table: a name and its value in each row (standalone-page.ts
-   `factsTable`). `.note` is a quieter line under a value. `.help` is a row's "?": the browser's
-   own details, so a key press or a touch opens it as a click does. Under 30rem a row's value
-   goes under its name. */
+   `factsTable`). `.note` is a quieter line under a value. `.help` is a row's "?", beside its
+   name: the browser's own details, so a key press or a touch opens it as a click does. Open, the
+   name and its help take the row's whole width, and the value goes under them. Under 30rem a
+   row's value goes under its name. */
 .facts {
   margin: 0;
   border: 1px solid var(--border);
@@ -435,6 +436,10 @@ fieldset > .facts {
 }
 .facts dt {
   color: var(--muted-foreground);
+}
+.facts > div:has(.help[open]) > dt,
+.facts > div:has(.help[open]) > dd {
+  grid-column: 1 / -1;
 }
 .facts dd {
   margin: 0;

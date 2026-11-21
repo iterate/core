@@ -427,6 +427,10 @@ border-top: 1px solid var(--border);
 .facts dt {
 color: var(--muted-foreground);
 }
+.facts > div:has(.help[open]) > dt,
+.facts > div:has(.help[open]) > dd {
+grid-column: 1 / -1;
+}
 .facts dd {
 margin: 0;
 overflow-wrap: anywhere;
@@ -638,4 +642,4 @@ background: color-mix(in oklab, var(--primary) 90%, transparent);
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-FQclMF0DzaaoGl8WjiBPvpHEY97wdqBAVjTWqSexkN0='";
+export const plainPageCssHash = "'sha256-2ReNgCvaaPNESKTCYaQws8GtdFOZ7EJ0hOe6DWAQuBE='";

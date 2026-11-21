@@ -18,7 +18,7 @@ test("the title is text: markup in it is escaped", () => {
   );
 });
 
-test("a facts table escapes each label and help, puts the help behind a ? named for its row, and draws no help for a row without it", () => {
+test("a facts table escapes each label and help, puts the help behind a ? beside the name it explains, and draws no help for a row without it", () => {
   expect(
     factsTable([
       {
@@ -31,7 +31,7 @@ test("a facts table escapes each label and help, puts the help behind a ? named 
   ).toBe(
     '<dl class="facts">' +
       // the value is the caller's HTML, as it was given
-      '<div><dt>Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;</dt><dd><strong>the laptop</strong> <details class="help"><summary aria-label="About Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;">?</summary><p>It is &#60;i&#62;its&#60;/i&#62; own claim.</p></details></dd></div>' +
+      '<div><dt>Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34; <details class="help"><summary aria-label="About Who &#60;b&#62;asks&#60;/b&#62; &#34;now&#34;">?</summary><p>It is &#60;i&#62;its&#60;/i&#62; own claim.</p></details></dt><dd><strong>the laptop</strong></dd></div>' +
       "<div><dt>Code</dt><dd><strong>WDJB-MJHT</strong></dd></div>" +
       "</dl>",
   );

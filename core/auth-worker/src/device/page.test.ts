@@ -26,7 +26,7 @@ test("a device's sign-in shows its name as its own claim, what it wants, that it
     `<div><dt>Device</dt><dd><strong>the laptop</strong><span class="note">The name is the device's own claim.</span></dd></div>`,
   );
   expect(text).toMatch(
-    /<dt>Asked<\/dt><dd>\d+ seconds ago, from London, GB <details class="help">/,
+    /<dt>Asked <details class="help">.*?<\/details><\/dt><dd>\d+ seconds ago, from London, GB<\/dd>/,
   );
   expect(text).toContain("<div><dt>It wants</dt><dd>the mind's API</dd></div>");
   expect(text).toContain(
@@ -46,7 +46,7 @@ test("a let-in shows its reason as the asker's word, how long with no renewal, a
     `<div><dt>Who asks</dt><dd><strong>the laptop</strong><span class="note">The name is its own claim: nothing proves who asks. Continue only if you know where this request comes from.</span></dd></div>`,
   );
   expect(text).toContain(
-    `<div><dt>Its reason</dt><dd><blockquote>to fix the build</blockquote> <details class="help"><summary aria-label="About Its reason">?</summary><p>The asker wrote this. Nobody checked it.</p></details></dd></div>`,
+    `<div><dt>Its reason <details class="help"><summary aria-label="About Its reason">?</summary><p>The asker wrote this. Nobody checked it.</p></details></dt><dd><blockquote>to fix the build</blockquote></dd></div>`,
   );
   expect(text).toContain(
     `<div><dt>It gets</dt><dd>everything in this mind, as <strong>owner@example.net</strong><span class="note">It can read and change all of it.</span></dd></div>`,

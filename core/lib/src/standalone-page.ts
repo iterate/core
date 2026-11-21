@@ -50,7 +50,8 @@ const helpMark = (about: string, help: string) =>
  *  fields and their values, one row each (plain-page.css `.facts`). */
 export function factsTable(rows: Fact[]): string {
   const row = ({ label, value, note, help }: Fact) =>
-    `<div><dt>${escapedText(label)}</dt><dd>${value}${help ? ` ${helpMark(label, help)}` : ""}${
+    // the "?" is beside the name it explains; open, its words take the row's whole width
+    `<div><dt>${escapedText(label)}${help ? ` ${helpMark(label, help)}` : ""}</dt><dd>${value}${
       note ? `<span class="note">${note}</span>` : ""
     }</dd></div>`;
   return `<dl class="facts">${rows.map(row).join("")}</dl>`;

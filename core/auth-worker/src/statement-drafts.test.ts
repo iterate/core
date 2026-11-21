@@ -15,8 +15,10 @@ const MEMBER = "owner@example.net";
 const STRANGER = "stranger@example.net";
 const TYPE = "demo/statement-asked";
 const PAYLOAD = { append: ["/minds/example.org/"], note: "<b>bold</b>" };
-/** Where a row's help starts, after its value and a space (./pages.ts `factsTable`). */
-const HELP = '<details class="help">';
+/** The help of the row "Asked by" for a person or a mind, and for code. */
+const RECORDED = "Who asked for this signature, as the platform recorded it.";
+const CODE_HELP =
+  "The platform recorded the context that this code ran in. It cannot tell whether a person asked for it.";
 
 test("a proposed draft is shown on its page, every value as text", async () => {
   const { env } = await stack();
@@ -26,11 +28,12 @@ test("a proposed draft is shown on its page, every value as text", async () => {
   const html = await page!.text();
   expect(page!).toMatchObject({ status: 200 });
   expect(html).toContain(
-    `<dt>Adds an event to</dt><dd>the context <code>/minds/example.com</code> of ${MIND} ${HELP}`,
+    `<p>Code wants to add this event to ${MIND}, with you as its signer. It needs your signature.</p>`,
   );
-  expect(html).toContain(`<dt>Event type</dt><dd><code>${TYPE}</code>`);
+  expect(html).toContain(row("Context", "<code>/minds/example.com</code>"));
+  expect(html).toContain(row("Event type", `<code>${TYPE}</code>`));
   expect(html).toContain(
-    `<dt>Asked by</dt><dd>this mind, through the agent <code>/agents/&#60;onboarding&#62;</code> ${HELP}`,
+    row("Asked by", "Code running in <code>/agents/&#60;onboarding&#62;</code>", CODE_HELP),
   );
   expect(html).toContain("<dt>Field note</dt><dd>&#60;b&#62;bold&#60;/b&#62;</dd>");
   expect(html).not.toContain("<b>bold");
@@ -234,7 +237,11 @@ test("a draft that names its signer shows them, and takes their passkey alone", 
   });
   const html = await (await statementDraftsResponse(env, new Request(signAt)))!.text();
   expect(html).toContain(
-    `<dt>Signer</dt><dd><strong>${STRANGER}</strong> ${HELP}<summary aria-label="About Signer">?</summary><p>Only a passkey of this person can sign this statement.</p></details></dd>`,
+    row(
+      "Signer",
+      `<strong>${STRANGER}</strong>`,
+      "Only a passkey of this person can sign this statement.",
+    ),
   );
   // no page lets a person who is no member add a first passkey (./enrolment.ts is for members), so the draft links to none
   expect(html).not.toContain("add one");
@@ -286,8 +293,8 @@ test("a meld rule of this mind with itself is not explained as a grant, and its 
   expect(html).toContain(
     "<p><strong>Your signature would be refused:</strong> a mind does not meld with itself.</p>",
   );
-  // not explained, so the page says it has no words for the type, and shows each field as a row
-  expect(html).toContain(`<dt>Event type</dt><dd><code>${MELD}</code> ${HELP}`);
+  // not explained, so the page shows the type and each field as a row
+  expect(html).toContain(row("Event type", `<code>${MELD}</code>`));
   expect(html).toContain("<dt>Field append</dt><dd><pre>[\n  &#34;/&#34;\n]</pre></dd>");
   expect(html).toContain("<dt>Field name</dt><dd>peer.example.org</dd>");
   const { draft } = await proposed(env, changed);
@@ -342,8 +349,7 @@ test("a meld rule is said in words, each context on its own line, and the exact 
     `<ul><li><code>/minds/${PEER}/</code></li><li><code>/</code> (everything in the mind)</li></ul>`,
   );
   expect(html).toContain("It signs each event with any key that it publishes.");
-  // the words explain the type, so its row has no help
-  expect(html).toContain(`<dt>Event type</dt><dd><code>${MELD}</code></dd>`);
+  expect(html).toContain(row("Event type", `<code>${MELD}</code>`));
   expect(html).toContain("<details>\n        <summary>The exact text</summary>");
 });
 
@@ -363,14 +369,10 @@ test("a type that the page does not know is said as an event of that type, each 
   const { env } = await stack();
   const html = await pageOf(env, { path: "/", type: TYPE });
   expect(html).toContain(
-    "<p>This page does not know what this event means. Read its fields before you sign.</p>",
+    `<p>Code wants to add this event to ${MIND}, with you as its signer. It needs your signature.</p>`,
   );
-  expect(html).toContain(
-    `<dt>Adds an event to</dt><dd>the root (<code>/</code>) of ${MIND} ${HELP}`,
-  );
-  expect(html).toContain(
-    `<dt>Event type</dt><dd><code>${TYPE}</code> ${HELP}<summary aria-label="About Event type">?</summary><p>The type says what kind of event this is. This page has no description for it.</p></details></dd>`,
-  );
+  expect(html).toContain(row("Context", "<code>/</code>"));
+  expect(html).toContain(row("Event type", `<code>${TYPE}</code>`));
   // every field of the payload, its value escaped
   expect(html).toContain(
     "<dt>Field append</dt><dd><pre>[\n  &#34;/minds/example.org/&#34;\n]</pre></dd>",
@@ -426,39 +428,80 @@ test.for([
   [
     "the mind's own code at its root",
     { from: "/", by: { kind: "code" } },
-    "this mind's code, at the root (<code>/</code>)",
+    "Code running in <code>/</code>",
+    CODE_HELP,
   ],
   [
     "a member through an agent",
     { from: "/agents/onboarding", by: { kind: "member", email: MEMBER } },
     `<strong>${MEMBER}</strong>, a member, through the agent <code>/agents/onboarding</code>`,
+    RECORDED,
   ],
   [
     "a member at the root",
     { from: "/", by: { kind: "member", email: MEMBER } },
     `<strong>${MEMBER}</strong>, a member, at the root (<code>/</code>)`,
+    RECORDED,
   ],
   [
     "someone who is no member",
     { from: "/", by: { kind: "person", email: STRANGER } },
     `<strong>${STRANGER}</strong>, who is not a member, at the root (<code>/</code>)`,
+    RECORDED,
   ],
   [
     "a guest, by the name they typed",
     { from: "/", by: { kind: "guest", name: "<Cy>" } },
     "a guest who gave the name &ldquo;&#60;Cy&#62;&rdquo;, at the root (<code>/</code>)",
+    `${RECORDED} A guest's name is the guest's own word.`,
   ],
-] as const)("a draft that %s proposed names who asked", async ([, input, words]) => {
+] as const)("a draft that %s proposed names who asked", async ([, input, words, help]) => {
   const { env } = await stack();
-  expect(await pageOf(env, input)).toContain(`<dt>Asked by</dt><dd>${words} ${HELP}`);
+  expect(await pageOf(env, input)).toContain(row("Asked by", words, help));
 });
 
-test("a draft that the mind's own code proposed warns under who asked, with no press", async () => {
+test("a draft that the mind's own code proposed names the context that the code ran in, adds no caveat, and its help says the platform cannot tell whether a person asked", async () => {
   const { env } = await stack();
-  expect(await pageOf(env, { from: "/", by: { kind: "code" } })).toContain(
-    '</details><span class="note"><strong>Maybe no person is behind it. Sign only if you expected it.</strong></span></dd>',
+  const html = await pageOf(env, { from: "/agents/onboarding", by: { kind: "code" } });
+  expect(html).toContain(
+    row("Asked by", "Code running in <code>/agents/onboarding</code>", CODE_HELP),
+  );
+  expect(html).not.toContain("Maybe no person");
+  // with no context recorded, the code is this mind's
+  expect(await pageOf(env, { by: { kind: "code" } })).toContain(
+    row("Asked by", "Code running in this mind", CODE_HELP),
   );
 });
+
+test.for([
+  ["code", { by: { kind: "code" } }, "Code"],
+  ["code, for a call that names nobody", {}, "Code"],
+  ["a member", { by: { kind: "member", email: MEMBER } }, "A member"],
+  [
+    "a person who is no member",
+    { by: { kind: "person", email: STRANGER } },
+    "A person who is not a member",
+  ],
+  ["a guest", { by: { kind: "guest", name: "Cy" } }, "A guest"],
+  ["another mind", { by: { kind: "mind", hostname: "peer.example.org" } }, "Another mind"],
+] as const)(
+  "the page's first sentence names %s as who wants the event, and says that it needs a signature",
+  async ([, input, subject]) => {
+    const { env } = await stack();
+    expect((await pageOf(env, input)).replaceAll(/\s+/g, " ")).toContain(
+      `<h1>Sign this statement</h1> <p>${subject} wants to add this event to ${MIND}, with you as its signer. It needs your signature.</p>`,
+    );
+  },
+);
+
+/** A row of the page's table as ./pages.ts `factsTable` draws it: its name, the "?" of its help
+ *  beside the name when it has one, and its value. */
+function row(label: string, value: string, help?: string) {
+  const mark = help
+    ? ` <details class="help"><summary aria-label="About ${label}">?</summary><p>${help}</p></details>`
+    : "";
+  return `<div><dt>${label}${mark}</dt><dd>${value}</dd></div>`;
+}
 
 async function pageOf(env: Env, input: Partial<Parameters<typeof proposeStatement>[1]>) {
   const { signAt } = await proposed(env, input);
