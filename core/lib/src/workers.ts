@@ -2,6 +2,7 @@
 import type { ActRule, GateAnswer } from "./acts.ts";
 import type {
   ControlPlaneSessionApi,
+  SecretBodyField,
   SecretOperation,
   SecretProxy,
   SecretRefresh,
@@ -297,6 +298,7 @@ export type SecretDescription = {
   /** Null is every path, as for an import. */
   lendTo?: string[] | null;
   statementPaths?: string[];
+  bodyFields?: SecretBodyField[];
   /** Why a secret that the stack makes at its deploy is not set: the deploy's words
    *  (core/secrets-worker src/stack-secrets.ts). */
   reason?: string;

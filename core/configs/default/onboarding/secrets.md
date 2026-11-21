@@ -21,6 +21,14 @@ The owner should come away with: the mind keeps a key it cannot read, and sends 
   request back (httpbin and the like): the value would come back where you can read it.
 - A secret that goes in a URL (a Telegram bot token) needs `placement: "url"` when it is
   collected. Its uses are fixed then; they cannot be widened later.
+- A secret that an API takes as a field of a JSON body needs `bodyFields` when it is collected:
+  `[{ method: "POST", url: "https://api.example.com/v1/sinks", field: "config.token" }]`. In
+  that request, and in no other, the placeholder as the whole value of that field is filled,
+  beside the same placeholder in a header:
+  `JSON.stringify({ config: { token: 'getSecret("/secrets/<name>")' } })`. The form shows the
+  owner each request and field. The claim above does not hold for such a secret, and the form
+  says so: if that service shows the value back, you can read it. Ask for a key with only the
+  reach that the owner would give you.
 - `redirectUrl` (the form sends them back when saved) is not tried in onboarding, and neither is
   the one-minute demo below, end to end.
 

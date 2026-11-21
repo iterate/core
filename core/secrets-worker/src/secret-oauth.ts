@@ -240,7 +240,7 @@ export function normalizeSecretOAuth(
     grantedWithin,
     expectAccount: expectAccount || undefined,
     revocationEndpoint,
-    use: secretUseOf(options),
+    use: secretUseOf(options, urls),
     anyoneWithLink: options.anyoneWithLink === true,
     ...(options.straightToProvider === true && { straightToProvider: true }),
     ...(cloud && {

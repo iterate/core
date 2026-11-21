@@ -50,6 +50,24 @@ type Provider = {
   held?: Promise<void>;
 };
 
+test("a connect that names body fields keeps them with the grant: the record that the callback stores has them", async () => {
+  const hooks = { method: "POST", url: `${ORIGIN}/hooks`, field: "config.secret" };
+  const { secret } = vault({ granted: "zone.read dns.read offline_access" });
+  // an entry outside the pin is refused when the connect begins, before a person is asked
+  await expect(
+    secret.secret(PATH, "beginOAuth", {
+      ...CONNECT,
+      bodyFields: [{ ...hooks, url: "https://other.example.net/hooks" }],
+    }),
+  ).rejects.toThrow("is outside the pin");
+  const { nonce } = await begun(secret, { ...CONNECT, bodyFields: [hooks] });
+  await secret.completeOAuth(PATH, { code: "the-code", nonce, by: member });
+  expect(await secret.secret(PATH, "describe", undefined)).toMatchObject({
+    set: true,
+    bodyFields: [hooks],
+  });
+});
+
 test("a grant within its ceiling is kept, and the ceiling goes with its refresh", async () => {
   const { secret, current, seen } = vault({ granted: "zone.read dns.read offline_access" });
   const { nonce } = await begun(secret, CONNECT);

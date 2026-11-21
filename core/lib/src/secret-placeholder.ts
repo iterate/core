@@ -28,7 +28,7 @@ export function assertSecretPath(path: string): string {
   return path;
 }
 
-// ── the placeholder grammar ── for a URL or a header:
+// ── the placeholder grammar ── for a URL, a header or a JSON body:
 // `getSecret("/secrets/NAME")` is the whole stored value; `getSecret("/secrets/NAME", { field: "a.b" })`
 // is one dotted field of a JSON-valued secret; `getSecret("/secrets/NAME", { appJwt: true })` is a
 // GitHub App's JWT made from the secret (api.ts `SecretMaterial`). Double quotes, whitespace free
@@ -38,7 +38,9 @@ export function assertSecretPath(path: string): string {
 // `:` kept (Telegram's `bot123:abc` path). A `Basic base64(user:getSecret(…))` credential is peeled:
 // the placeholder is substituted inside the decoded `user:password` and the credential encoded
 // again — the Authorization a git remote's userinfo becomes (`https://x:getSecret(…)@host/repo.git`,
-// as git and curl send it). No JSON-body template — the body is never scanned.
+// as git and curl send it). In a JSON body it is filled only as the whole value of a field that the
+// secret names, in the request that it names (core/secrets-worker/src/body-placement.ts). Egress
+// reads no body: a request names its secret in a header or its URL.
 //
 // NO TWO RUNS OF WHITESPACE STAND SIDE BY SIDE in the pattern: the run before the closing
 // parenthesis is inside the optional `{ … }` part. Two neighbours would share a long run of spaces

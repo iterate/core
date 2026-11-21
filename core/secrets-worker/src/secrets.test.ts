@@ -9,6 +9,9 @@ import {
   secretUseOf,
 } from "./secrets.ts";
 
+/** The pin of the secret whose use a test asks about. */
+const PIN = ["https://api.example.com"];
+
 test("the fields that a kind of refresh reads are the refresh's alone, each kind's by the schema it reads the material with, and any other field is given out", () => {
   const refused = (refresh: Parameters<typeof refreshOnlyFieldRefusal>[0], fields: string[]) =>
     fields.filter((field) => refreshOnlyFieldRefusal(refresh, "/secrets/a", field) !== null);
@@ -113,11 +116,11 @@ test("a refresh replaces the old token's end with the new answer's, or with none
 });
 
 test("a secret lends to no other by default, to the paths its maker lists, and to every secret when its maker says null", () => {
-  expect(secretUseOf(undefined)).toMatchObject({ lendTo: [] });
-  expect(secretUseOf({ lendTo: ["/secrets/account", "/secrets/account"] })).toMatchObject({
+  expect(secretUseOf(undefined, PIN)).toMatchObject({ lendTo: [] });
+  expect(secretUseOf({ lendTo: ["/secrets/account", "/secrets/account"] }, PIN)).toMatchObject({
     lendTo: ["/secrets/account"],
   });
-  expect(secretUseOf({ lendTo: null })).toEqual({
+  expect(secretUseOf({ lendTo: null }, PIN)).toEqual({
     placement: "header",
     operations: [],
     lendTo: null,
@@ -127,9 +130,126 @@ test("a secret lends to no other by default, to the paths its maker lists, and t
 test.for([[""], [false], [0], ["/secrets/account"], [["account"]]] as const)(
   "a lendTo that is neither a list of secret paths nor null is refused: %j",
   ([lendTo]) => {
-    expect(() => secretUseOf({ lendTo })).toThrow("lendTo lists secret paths");
+    expect(() => secretUseOf({ lendTo }, PIN)).toThrow("lendTo lists secret paths");
   },
 );
+
+test("a secret's body fields are kept with the method in capitals and each entry once, and a list of none is no list", () => {
+  const sinks = { method: "post", url: "https://api.example.com/v1/sinks", field: "config.token" };
+  const enable = { method: "POST", url: "https://api.example.com/v1/catalog/enable", field: "a" };
+  expect({
+    none: secretUseOf(undefined, PIN),
+    empty: secretUseOf({ bodyFields: [] }, PIN),
+    two: secretUseOf({ bodyFields: [sinks, enable, { ...sinks, method: "POST" }] }, PIN).bodyFields,
+  }).toEqual({
+    none: { placement: "header", operations: [], lendTo: [] },
+    empty: { placement: "header", operations: [], lendTo: [] },
+    two: [{ ...sinks, method: "POST" }, enable],
+  });
+});
+
+test.for([
+  {
+    name: "a URL outside the pin",
+    field: { url: "https://other.example.com/v1/sinks" },
+    refused: "is outside the pin https://api.example.com",
+  },
+  {
+    name: "a URL with a query",
+    field: { url: "https://api.example.com/v1/sinks?all=1" },
+    refused: "url is an https URL with a path of plain parts and no query",
+  },
+  {
+    name: "a URL with a part that a host may read another way",
+    field: { url: "https://api.example.com/v1/%2e%2e/sinks" },
+    refused: "url is an https URL with a path of plain parts and no query",
+  },
+  {
+    name: "a URL that is written another way than a URL writes itself",
+    field: { url: "https://API.example.com/v1/../sinks" },
+    refused: "is not as a URL writes itself",
+  },
+  {
+    name: "a URL with no path",
+    field: { url: "https://api.example.com" },
+    refused: "url is an https URL with a path of plain parts and no query",
+  },
+  {
+    name: "a URL that is not https",
+    field: { url: "http://api.example.com/v1/sinks" },
+    refused: "url is an https URL with a path of plain parts and no query",
+  },
+  {
+    name: "an index of a list",
+    field: { field: "items[0].token" },
+    refused: "field is the dotted name of a field of the body's JSON object",
+  },
+  {
+    name: "a wildcard",
+    field: { field: "config.*" },
+    refused: "field is the dotted name of a field of the body's JSON object",
+  },
+  {
+    name: "no field",
+    field: { field: "" },
+    refused: "field is the dotted name of a field of the body's JSON object",
+  },
+  {
+    name: "a field of more than 200 characters",
+    field: { field: "a.".repeat(100) + "b" },
+    refused: "field has at most 200 characters",
+  },
+  {
+    name: "two methods",
+    field: { method: "POST PUT" },
+    refused: "method is one word, such as POST",
+  },
+  {
+    name: "a key that is none of the three",
+    field: { path: "/v1/sinks" },
+    refused: "bodyFields lists at most 10 of { method, url, field }",
+  },
+])("a body field is refused with $name", ({ field, refused }) => {
+  const sinks = { method: "POST", url: "https://api.example.com/v1/sinks", field: "config.token" };
+  expect(() => secretUseOf({ bodyFields: [{ ...sinks, ...field }] }, PIN)).toThrow(refused);
+});
+
+test("a secret names ten body fields at most, and the list is a list", () => {
+  const field = (n: number) => ({
+    method: "POST",
+    url: `https://api.example.com/v1/sinks/${n}`,
+    field: "config.token",
+  });
+  const many = Array.from({ length: 11 }, (_, n) => field(n));
+  expect(secretUseOf({ bodyFields: many.slice(0, 10) }, PIN).bodyFields).toHaveLength(10);
+  expect(() => secretUseOf({ bodyFields: many }, PIN)).toThrow("bodyFields lists at most 10");
+  expect(() => secretUseOf({ bodyFields: field(1) }, PIN)).toThrow("bodyFields lists at most 10");
+});
+
+test("the page that a person sees says, for each body field, where the value is sent and what that can cost", () => {
+  const use = { placement: "header" as const, operations: [], lendTo: [] };
+  expect(
+    useLines(
+      {
+        ...use,
+        bodyFields: [
+          { method: "POST", url: "https://api.example.com/v1/sinks", field: "config.token" },
+          {
+            method: "POST",
+            url: "https://api.example.com/v1/catalog/enable",
+            field: "credential.token",
+          },
+        ],
+      },
+      false,
+    ),
+  ).toBe(
+    "<p>It may also be sent inside the body of a request. A secret that is sent in a body is not kept from this mind's own code if that service shows it back. So give it only the reach that you would give the mind itself.</p>" +
+      "<p>It may be sent inside the body, in the field config.token, of a POST to https://api.example.com/v1/sinks.</p>" +
+      "<p>It may be sent inside the body, in the field credential.token, of a POST to https://api.example.com/v1/catalog/enable.</p>",
+  );
+  expect(useLines(use, false)).toBe("");
+});
 
 test("the page that a person sees says when the secret is lent to every secret", () => {
   const use = { placement: "header" as const, operations: [] };

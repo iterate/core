@@ -1,4 +1,4 @@
-import type { SecretOperation } from "iterate/api";
+import type { SecretBodyField, SecretOperation } from "iterate/api";
 import { ITX_PERSON_HEADER, stampedCallerOf, type Person } from "iterate/principal";
 import { PLAIN_PAGE_ICON_SRC, plainPageCssHash, standalonePage } from "iterate/standalone-page";
 
@@ -101,11 +101,22 @@ export function useLines(
     operations: readonly SecretOperation[];
     lendTo: readonly string[] | null;
     statementPaths?: readonly string[];
+    bodyFields?: readonly SecretBodyField[];
   },
   anyoneWithLink: boolean,
 ): string {
   return [
     use.placement === "url" ? "<p>It may be placed in a URL.</p>" : "",
+    // one sentence for each body field, for a person: where the value goes, and what that costs
+    ...(use.bodyFields?.length
+      ? [
+          "<p>It may also be sent inside the body of a request. A secret that is sent in a body is not kept from this mind's own code if that service shows it back. So give it only the reach that you would give the mind itself.</p>",
+          ...use.bodyFields.map(
+            ({ method, url, field }) =>
+              `<p>It may be sent inside the body, in the field ${escaped(field)}, of a ${escaped(method)} to ${escaped(url)}.</p>`,
+          ),
+        ]
+      : []),
     use.operations.length
       ? `<p>The mind may sign and verify with it: ${use.operations.join(", ")}.</p>`
       : "",

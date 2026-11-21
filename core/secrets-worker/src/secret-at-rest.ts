@@ -21,6 +21,7 @@ type MaterialBinding = {
     operations: readonly string[];
     lendTo: readonly string[] | null;
     statementPaths?: readonly string[];
+    bodyFields?: readonly { method: string; url: string; field: string }[];
     byProxy?: true;
   };
 };
@@ -83,6 +84,17 @@ function additionalDataOf(binding: MaterialBinding): Uint8Array<ArrayBuffer> {
           // named, and only when the secret has them: absent is any path
           ...(binding.use.statementPaths
             ? [{ statementPaths: [...new Set(binding.use.statementPaths)].sort() }]
+            : []),
+          // named, and only when the secret has them: absent is no body. A cell that gets a body
+          // field, or loses one, opens nowhere, so no field is added to a value that is stored.
+          ...(binding.use.bodyFields
+            ? [
+                {
+                  bodyFields: binding.use.bodyFields
+                    .map(({ method, url, field }) => JSON.stringify([method, url, field]))
+                    .sort(),
+                },
+              ]
             : []),
           // named, and only for a secret by proxy: a value's cell binds the same bytes as before
           ...(binding.use.byProxy ? [{ byProxy: true }] : []),

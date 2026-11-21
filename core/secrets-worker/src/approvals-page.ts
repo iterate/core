@@ -14,6 +14,7 @@
 // The page's script hashes each stored text itself and offers approval only when that hash is the
 // digest. The signature is the credential, so the statements route asks for no session.
 import { APPROVALS_CONTEXT, RUN_ACTS_HEADER } from "iterate/acts";
+import type { SecretBodyField } from "iterate/api";
 import { withFacts } from "iterate/facts";
 import { errorCode } from "iterate/lib";
 import { SECRET_PATH } from "iterate/secret-placeholder";
@@ -31,7 +32,7 @@ import {
   proposedRules,
   secretRuleInWords,
 } from "./acts-page.ts";
-import type { ApprovalRule, HeldRequest } from "./approval.ts";
+import { type ApprovalRule, fillsOfText, type HeldRequest } from "./approval.ts";
 import { admitted, callbackPage, escaped, plainPage } from "./callback-page.ts";
 import type { HeldRow } from "./secret/durable-object.ts";
 import { APPROVED, REJECTED, RULE_CONFIGURED } from "./secret/durable-object.ts";
@@ -61,7 +62,9 @@ type ApprovalsDeps = {
   mind: string;
   index: { paths(): Promise<string[]>; remove(path: string): Promise<void> };
   secretOf(path: string): {
-    approvals(path: string): Promise<{ rule: ApprovalRule | null; held: HeldRow[] }>;
+    approvals(
+      path: string,
+    ): Promise<{ rule: ApprovalRule | null; held: HeldRow[]; bodyFields?: SecretBodyField[] }>;
     tightenRule(
       path: string,
       input: { rule: unknown; by: { userId: string; email: string } },
@@ -199,11 +202,16 @@ async function statement(request: Request, deps: ApprovalsDeps): Promise<Respons
 
 // The script shows a request's parts, from the text it hashed.
 async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
-  const secrets: { path: string; rule: ApprovalRule | null; held: HeldRow[] }[] = [];
+  const secrets: {
+    path: string;
+    rule: ApprovalRule | null;
+    held: HeldRow[];
+    bodyFields?: SecretBodyField[];
+  }[] = [];
   for (const path of await deps.index.paths()) {
-    const { rule, held } = await deps.secretOf(path).approvals(path);
+    const { rule, held, bodyFields } = await deps.secretOf(path).approvals(path);
     if (!rule && !held.length) await deps.index.remove(path);
-    else secrets.push({ path, rule, held: held.sort((a, b) => b.at - a.at) });
+    else secrets.push({ path, rule, held: held.sort((a, b) => b.at - a.at), bodyFields });
   }
   const gate = await deps.gate.state();
   const waiting = secrets.filter((secret) => secret.held.length);
@@ -215,7 +223,7 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
           .map(
             (row) => `<fieldset id="request-${escaped(row.digest)}">
 <legend><label><input type="checkbox" data-pick="${escaped(row.digest)}" disabled> ${escaped(summaryOf(row.text))}</label></legend>
-<p class="muted">Waiting since ${new Date(row.at).toISOString()}.${row.state === "approved" ? " Approved: it goes when the same request is sent again." : ""}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>
+<p class="muted">Waiting since ${new Date(row.at).toISOString()}.${row.state === "approved" ? " Approved: it goes when the same request is sent again." : ""}${row.from ? ` It says it came from ${escaped(row.from)}: a claim, not checked.` : ""}</p>${filledInWords(path, row.text)}
 <pre data-text></pre><p class="muted" data-check>Checking…</p></fieldset>`,
           )
           .join(
@@ -225,7 +233,7 @@ async function page(request: Request, deps: ApprovalsDeps): Promise<Response> {
     .join("");
   const rules = secrets
     .filter((secret) => secret.rule)
-    .map(({ path, rule }) => ruleForm(path, rule!))
+    .map(({ path, rule, bodyFields }) => ruleForm(path, rule!, bodyFields))
     .join("");
   const body = [
     "<h1>Approvals</h1>",
@@ -270,13 +278,26 @@ function summaryOf(text: string): string {
   return `${held.method} ${held.url}`;
 }
 
+/** WHAT A MEMBER RELEASES WITH A HELD REQUEST WHOSE BODY THE SECRET FILLS, in words, or "": the
+ *  fields that the request was held with (./approval.ts `HeldRequest.fills`). Its body does not
+ *  say it: a placeholder there reads the same in a request that fills nothing. */
+function filledInWords(path: string, text: string): string {
+  const fills = fillsOfText(text)?.fields || [];
+  return fills.length
+    ? `\n<p><strong>If you approve, the value of ${escaped(path)} is sent inside this request's body, in the field ${fills.map(escaped).join(" and ")}.</strong> If that service shows it back, this mind's own code can read the value, and from then on no rule holds it.</p>`
+    : "";
+}
+
 /** A rule's form: a secret's own rule, or "A new rule" with no path. NO VALUE OF A FORM COMES
  *  FROM THE PAGE'S ADDRESS: a member saves or signs what the page shows, so what it shows is the
  *  vault's own or what the member typed. A rule that someone else wants is a proposal, which the
- *  vault keeps with who asked (./acts-gate.ts `propose`). */
+ *  vault keeps with who asked (./acts-gate.ts `propose`). `bodyFields`: the secret's own. A
+ *  request that fills one waits whatever the rule names (./secret/durable-object.ts `fetch`), and
+ *  the block says so under the rule's own words. */
 export function ruleForm(
   path: string,
   rule: Pick<ApprovalRule, "methods" | "hosts" | "jsonStrings" | "freePaths"> | null,
+  bodyFields?: readonly SecretBodyField[],
 ): string {
   const field = (name: string, label: string, value: string, required = "required") =>
     `<label>${label} <input name="${name}" value="${escaped(value)}" size="44" ${required}></label>`;
@@ -285,7 +306,7 @@ export function ruleForm(
   const words = path && rule ? secretRuleInWords({ ...rule, secret: path }) : "";
   return `<form method="post" action="${RULES_PATH}" class="stack" data-rule${path ? ` id="${escaped(ruleBlockId(path))}"` : ""}>
 ${path ? `<input type="hidden" name="path" value="${escaped(path)}"><h3>${escaped(path)}</h3>` : `<input type="hidden" name="new" value="1"><h3>A new rule</h3>${field("path", "Secret", "/secrets/")}<p role="alert" data-type="error" data-has-rule hidden></p>`}
-<p data-words${words ? "" : " hidden"}>${escaped(words)}</p>
+<p data-words${words ? "" : " hidden"}>${escaped(words)}</p>${bodyFields?.length ? `\n<p>A request that sends ${escaped(path)} inside its body waits too, whatever its method and host: ${bodyFields.map(({ method, url, field }) => `a ${escaped(method)} to ${escaped(url)}, in the field ${escaped(field)}`).join("; ")}.</p>` : ""}
 ${field("methods", "Methods", rule?.methods.join(", ") ?? "POST")}
 ${field("hosts", "Hosts", rule?.hosts.join(", ") ?? "")}
 ${field("jsonStrings", "Only when the JSON body holds one of these, or leave empty for every request", rule?.jsonStrings?.join(", ") ?? "", "")}
@@ -371,7 +392,8 @@ for (const held of data.held) {
   row.querySelector("[data-text]").textContent = [request.method + " " + request.url, ...request.headers.map(([name, value]) => name + ": " + value), "", request.body].join("\\n");
   sha256(enc.encode(held.text)).then((digest) => {
     const good = hex(digest) === held.digest;
-    row.querySelector("[data-check]").textContent = good ? "Checked: this is exactly what will be sent. Request " + held.digest.slice(0, 12) + "." : "This is not the request that waits, so it cannot be approved here.";
+    const sent = request.fills ? "what will be sent, with the value in its body as said above" : "exactly what will be sent";
+    row.querySelector("[data-check]").textContent = good ? "Checked: this is " + sent + ". Request " + held.digest.slice(0, 12) + "." : "This is not the request that waits, so it cannot be approved here.";
     if (good) row.dataset.checked = held.digest;
     row.querySelector("[data-pick]").disabled = !good;
     row.querySelector("[data-pick]").checked = tickedAtOpen(held.digest, good, wanted);

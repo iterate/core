@@ -560,6 +560,12 @@ export const SECRET_OPERATIONS = [
 ] as const;
 export type SecretOperation = (typeof SECRET_OPERATIONS)[number];
 
+/** ONE FIELD OF ONE REQUEST'S JSON BODY THAT A SECRET'S VALUE MAY GO INTO (`SecretUses.bodyFields`):
+ *  the request's method, its exact URL (https, with no query, at an origin of the secret's `urls`),
+ *  and the dotted name of a string field of the body's JSON object.
+ *  `{ method: "POST", url: "https://api.example.com/v1/sinks", field: "config.token" }` */
+export type SecretBodyField = { method: string; url: string; field: string };
+
 /** WHAT A SECRET MAY BE USED FOR, fixed when it is made, kept by the secrets Worker and shown to the
  *  person who gives it on the collection form or the OAuth start page: the mind's code cannot
  *  widen it later. */
@@ -567,6 +573,28 @@ export type SecretUses = {
   /** Where its placeholder may sit in a request: in a header (`"header"`, the default; a `Basic`
    *  credential is a header), or also in the URL (`"url"`, a Telegram bot token in the path). */
   placement?: "header" | "url";
+  /** The fields of JSON request bodies that its value may also go into, for an API that takes a
+   *  token as a field: none by default, ten at most. In a request with that method to that URL,
+   *  the placeholder as the WHOLE value of that field is filled:
+   *  `JSON.stringify({ config: { token: 'getSecret("/secrets/<name>")' } })`. The request names
+   *  the secret in a header too, which is how it reaches the secrets Worker. Such a request has a
+   *  JSON body (`content-type: application/json`, UTF-8, at most 1 MiB) with the placeholder at
+   *  one of those fields, or it is refused. The body is parsed and written again with the field
+   *  set: its keys keep the order of the parse, of a key written twice the last one stays, a
+   *  number that a double does not hold exactly changes, and one beyond a double's range leaves
+   *  as `null`. Its content type leaves as the one JSON type that it names, with no parameter.
+   *  So a caller that signs its body cannot use this. Nothing else is read: a placeholder at
+   *  another place of that body, or in the body of any other request, leaves as written. The
+   *  method and the URL are the request's as it is written: one with a query, with a header
+   *  that names another method, or with a placeholder in its URL is another request. The fields
+   *  are fixed when the value is given: to change them, give it again.
+   *  A WEAKER USE THAN A HEADER: a secret that is sent in a body is NOT kept from this mind's own
+   *  code if that service shows it back, in an answer to this secret or to another one. So give
+   *  such a secret only the reach that you would give the mind itself. The rest of the body and
+   *  the headers are the caller's too: they can tell the service what to do with the value, or
+   *  which endpoint to take the request for. Where the secret has an approval rule, a request
+   *  whose body is filled waits for a member, whatever the rule names. */
+  bodyFields?: SecretBodyField[];
   /** The operations it answers (`SECRET_OPERATIONS`). Default: none. */
   operations?: SecretOperation[];
   /** The secrets whose refresh may borrow its material, by path: as a client secret or a GitHub
@@ -784,8 +812,8 @@ export type SecretOAuthOptions = {
   anyoneWithLink?: boolean;
   /** The start link goes straight to the provider, whose consent is then the one page the person
    *  confirms on. Without it, the platform's page comes first and the person clicks Continue. That
-   *  page still comes first when the secret has an unusual use (`placement: "url"`, `operations`,
-   *  `lendTo`). With `client`, the Cloud's own page already comes in its place. */
+   *  page still comes first when the secret has an unusual use (`placement: "url"`, `bodyFields`,
+   *  `operations`, `lendTo`). With `client`, the Cloud's own page already comes in its place. */
   straightToProvider?: boolean;
 } & SecretUses;
 
@@ -1768,7 +1796,8 @@ export interface IterateContextApi {
   /** The mind's secrets, WRITE-ONLY: a secret IS its path (`/secrets/<name>`, the name
    *  `[a-zA-Z0-9._-]+`), and the path is what an outbound request's placeholder spells —
    *  `getSecret("/secrets/<name>")` in a URL or a header substitutes to the value at egress, and only
-   *  towards the ORIGINS in `urls` (required: a secret is always pinned). `set` stores a string or a
+   *  towards the ORIGINS in `urls` (required: a secret is always pinned). In a JSON body it does
+   *  so only at a field that the secret names (`SecretUses.bodyFields`). `set` stores a string or a
    *  JSON object (`refresh` names the strategy that re-mints an expiring credential); `delete`
    *  forgets it (re-settable); `list` is the catalog — paths, pins, strategy kinds, when first set,
    *  public fields — never a secret value. Every change is one fact on the secret's path

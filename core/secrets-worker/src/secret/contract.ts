@@ -1,7 +1,12 @@
 // No fact carries the value, sealed or not, and no reduce reads them: a mind may withhold or
 // forge a fact in its own log, and the object never takes its word.
 import { z } from "zod";
-import { SECRET_OPERATIONS, type SecretOperation, type SecretRefresh } from "iterate/api";
+import {
+  SECRET_OPERATIONS,
+  type SecretBodyField,
+  type SecretOperation,
+  type SecretRefresh,
+} from "iterate/api";
 import type { Principal } from "iterate/principal";
 import type { Envelope } from "iterate/signed";
 import type { ApprovalRule } from "../approval.ts";
@@ -69,6 +74,11 @@ export const StoredSecret = z.strictObject({
     /** Null: every secret of the mind. */
     lendTo: z.array(z.string()).nullable(),
     statementPaths: z.array(z.string()).optional(),
+    /** The fields of JSON request bodies that the value may go into (iterate/api
+     *  `SecretBodyField`), as ../secrets.ts `secretUseOf` wrote them. In the binding. */
+    bodyFields: z
+      .array(z.strictObject({ method: z.string(), url: z.string(), field: z.string() }))
+      .optional(),
   }),
   public: z.record(z.string(), z.string()).optional(),
 });
@@ -89,6 +99,7 @@ export type SecretFact =
         operations: SecretOperation[];
         lendTo: string[] | null;
         statementPaths?: string[];
+        bodyFields?: SecretBodyField[];
         by?: { userId: string; email: string };
         proxy?: { mind: string; url: string };
       };
@@ -111,8 +122,17 @@ export type SecretFact =
   // The request as received: its placeholders, never a value.
   | {
       type: "events.iterate.com/secret/used";
-      // `proxy`: for a secret by proxy, the URL the request went to
-      payload: { method: string; url: string; status: number; digest?: string; proxy?: string };
+      // `proxy`: for a secret by proxy, the URL the request went to. `inBody`: the request left
+      // with the value in a field of its JSON body (../body-placement.ts), where a host may
+      // keep it.
+      payload: {
+        method: string;
+        url: string;
+        status: number;
+        digest?: string;
+        proxy?: string;
+        inBody?: true;
+      };
     }
   // Never an input or an output of the operation.
   | {

@@ -187,13 +187,20 @@ export type HeldRequest = {
   url: string;
   headers: [string, string][];
   body: string;
+  /** For a request whose body the secret fills (./body-placement.ts): the fields that are filled,
+   *  and the version of the secret that fills them. A refresh keeps the version; a value that is
+   *  given again makes a new one. Both are in the text, so in the digest that a member approves:
+   *  an approval releases these fields of that version, and nothing else. Absent: none. */
+  fills?: HeldFills;
 };
+export type HeldFills = { fields: string[]; version: number };
 
 export function requestText(request: {
   method: string;
   url: string;
   headers: Headers;
   body: string;
+  fills?: HeldFills;
 }): string {
   const headers = [...request.headers]
     .filter(([name]) => !HOP_HEADER.test(name))
@@ -203,8 +210,18 @@ export function requestText(request: {
     url: request.url,
     headers,
     body: request.body,
+    // left out when none: the text of a request that fills nothing is as it always was
+    fills: request.fills,
   } satisfies HeldRequest);
 }
+
+/** What a held request fills (`HeldRequest.fills`), from its stored text. */
+export const fillsOfText = (text: string): HeldFills | undefined =>
+  HeldText.parse(JSON.parse(text)).fills;
+
+const HeldText = z.object({
+  fills: z.object({ fields: z.array(z.string()), version: z.number() }).optional(),
+});
 
 export function requestOfText(text: string): Request {
   const held = JSON.parse(text) as HeldRequest;

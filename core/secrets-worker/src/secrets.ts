@@ -8,6 +8,7 @@ import {
   type SecretEqualsVerification,
   type SecretHmacSigning,
   type SecretHmacVerification,
+  type SecretBodyField,
   type SecretMaterial,
   type SecretOperation,
   type SecretProxy,
@@ -95,12 +96,22 @@ export type SecretUse = {
   lendTo: string[] | null;
   /** Absent: a statement it signs may name any path. */
   statementPaths?: string[];
+  /** Absent: its value goes into no body (./body-placement.ts). */
+  bodyFields?: SecretBodyField[];
 };
 
+/** `urls`: the origins of the secret's pin, at one of which each body field is. */
 export function secretUseOf(
   options:
-    | { placement?: unknown; operations?: unknown; lendTo?: unknown; statementPaths?: unknown }
+    | {
+        placement?: unknown;
+        operations?: unknown;
+        lendTo?: unknown;
+        statementPaths?: unknown;
+        bodyFields?: unknown;
+      }
     | undefined,
+  urls: readonly string[],
 ): SecretUse {
   const given = options?.statementPaths;
   if (
@@ -110,6 +121,7 @@ export function secretUseOf(
   )
     throw new Error("secrets: statementPaths lists paths, each starting with /");
   const statementPaths = given && { statementPaths: [...new Set<string>(given)] };
+  const bodyFields = bodyFieldsOf(options?.bodyFields, urls);
   const placement = options?.placement ?? "header";
   if (placement !== "header" && placement !== "url")
     throw new Error('secrets: placement is "header" or "url"');
@@ -124,7 +136,13 @@ export function secretUseOf(
   // other value that is no list of paths ("", 0, false) is refused below.
   const givenLendTo = options?.lendTo;
   if (givenLendTo === null)
-    return { placement, operations: [...new Set(operations)], lendTo: null, ...statementPaths };
+    return {
+      placement,
+      operations: [...new Set(operations)],
+      lendTo: null,
+      bodyFields,
+      ...statementPaths,
+    };
   // oxlint-disable-next-line iterate/simple-truthiness-check -- as above: only an absent lendTo is the default
   const lendTo = givenLendTo === undefined ? [] : givenLendTo;
   if (!Array.isArray(lendTo) || !lendTo.every((path) => SECRET_PATH.test(String(path))))
@@ -135,9 +153,63 @@ export function secretUseOf(
     placement,
     operations: [...new Set(operations)],
     lendTo: [...new Set<string>(lendTo)],
+    bodyFields,
     ...statementPaths,
   };
 }
+
+/** A SECRET'S BODY FIELDS AS ITS MAKER NAMED THEM (iterate/api `SecretBodyField`), each written
+ *  one way, or undefined for none. The URL is taken only as a URL writes itself, with a path of
+ *  plain parts and no query: the request's own URL is compared with it letter by letter, and a
+ *  `%` or a `..` that a host may read as another path matches nothing (./approval.ts `pathIsFree`
+ *  holds a free path to the same). The field is a path of object keys: no index of a list. */
+function bodyFieldsOf(given: unknown, urls: readonly string[]): SecretBodyField[] | undefined {
+  if (given === undefined) return undefined;
+  const parsed = BodyFields.safeParse(given);
+  if (!parsed.success)
+    throw new Error(
+      `secrets: bodyFields lists at most 10 of { method, url, field }: ${parsed.error.issues[0]?.message}`,
+    );
+  const fields = new Map<string, SecretBodyField>();
+  for (const { method, url, field } of parsed.data) {
+    const written = URL.parse(url);
+    if (written?.href !== url)
+      throw new Error(`secrets: bodyFields: ${JSON.stringify(url)} is not as a URL writes itself`);
+    if (!urls.includes(written.origin))
+      throw new Error(
+        `secrets: bodyFields: ${url} is outside the pin ${urls.join(", ")}: a secret goes into a body only at a pinned host`,
+      );
+    fields.set(JSON.stringify([method.toUpperCase(), url, field]), {
+      method: method.toUpperCase(),
+      url,
+      field,
+    });
+  }
+  return fields.size ? [...fields.values()] : undefined;
+}
+
+// Each string has a length: the entries are sealed with the value and read at every use.
+const BodyFields = z
+  .array(
+    z.strictObject({
+      method: z.string().regex(/^[A-Za-z]{1,20}$/, "method is one word, such as POST"),
+      url: z
+        .string()
+        .max(2000, "url has at most 2,000 characters")
+        .regex(
+          /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/[A-Za-z0-9._~-]+)+\/?$/,
+          "url is an https URL with a path of plain parts and no query, such as https://api.example.com/v1/sinks",
+        ),
+      field: z
+        .string()
+        .max(200, "field has at most 200 characters")
+        .regex(
+          /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/,
+          "field is the dotted name of a field of the body's JSON object, such as config.token",
+        ),
+    }),
+  )
+  .max(10);
 
 // Exchange code is sealed in the record beside the material; a login is a few requests, not a bundle.
 const EXCHANGE_SOURCE_MAX_CHARS = 64 * 1024;
@@ -186,10 +258,10 @@ export function normalizeSecretRecord(
         operations?: unknown;
         lendTo?: unknown;
         statementPaths?: unknown;
+        bodyFields?: unknown;
       }
     | undefined,
 ): SecretRecord {
-  const use = secretUseOf(options);
   if (typeof material !== "string" && !isRecord(material))
     throw new Error("secrets: material is a string or a JSON object");
   const urls = options?.urls === undefined ? [] : originsOf(options.urls);
@@ -197,6 +269,7 @@ export function normalizeSecretRecord(
     throw new Error(
       "secrets: urls is required — the origins this secret may be sent to; a secret is never sent anywhere else",
     );
+  const use = secretUseOf(options, urls);
   let refresh: SecretRefresh | null = null;
   if (options?.refresh) {
     // The one place a strategy kind is admitted from untyped input.
@@ -372,15 +445,46 @@ function secretFieldOf(
   return value;
 }
 
-// A placeholder with no stored secret throws to the caller, never the destination. In the URL the
-// value is one component, so it can never add a query or a fragment. The body is not scanned.
+/** How a placeholder's secret is read. `field`: the one the placeholder names. A resolver refuses
+ *  a field that is not given out. Null: no secret is stored. */
+export type SecretResolver = (
+  path: string,
+  field: string | undefined,
+) => Promise<SecretMaterial | null> | SecretMaterial | null;
+
+/** THE VALUE THAT ONE PLACEHOLDER STANDS FOR, wherever it sits in a request: the whole stored
+ *  string, one field of a JSON secret, or a GitHub App's JWT. `match` is a match of
+ *  `SECRET_PLACEHOLDER`, `where` names its place for a refusal, and `url` is the request's. A
+ *  placeholder with no stored secret throws to the caller, never the destination. */
+export async function secretValueOf(
+  match: RegExpMatchArray,
+  where: string,
+  url: string,
+  resolve: SecretResolver,
+): Promise<string> {
+  const [, path = "", field, appJwt] = match;
+  const placeholder = placeholderOf(path, field, appJwt);
+  const stored = await resolve(path, field);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
+  if (stored == null)
+    throw new SecretRefused(
+      `itx.fetch: no stored mind secret for ${placeholder} in ${where}`,
+      true,
+    );
+  if (appJwt) return githubAppJwtOf(stored, placeholder, where, url);
+  if (field) return secretFieldOf(stored, field, placeholder, where);
+  if (typeof stored === "string") return stored;
+  throw new SecretRefused(
+    `itx.fetch: ${placeholder} in ${where} names no field, but the secret is a JSON object — pick one with { field: "…" }`,
+  );
+}
+
+// The URL and the headers. In the URL the value is one component, so it can never add a query or
+// a fragment. The body is not read here: ./body-placement.ts fills it, at a field that the secret
+// names.
 export async function substituteMindSecrets(
   request: Request,
-  // `field`: the one the placeholder names. A resolver refuses a field that is not given out.
-  resolve: (
-    path: string,
-    field: string | undefined,
-  ) => Promise<SecretMaterial | null> | SecretMaterial | null,
+  resolve: SecretResolver,
   // every spelling of each value put in: what an answer must not carry back
   substitutedValues?: Set<string>,
 ): Promise<Request> {
@@ -391,23 +495,7 @@ export async function substituteMindSecrets(
     let last = 0;
     let any = false;
     for (const m of value.matchAll(SECRET_PLACEHOLDER)) {
-      const [, path = "", field, appJwt] = m;
-      const placeholder = placeholderOf(path, field, appJwt);
-      const stored = await resolve(path, field);
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- null means no secret is stored; a stored empty-string value is a real secret and must be substituted, not refused
-      if (stored == null)
-        throw new SecretRefused(
-          `itx.fetch: no stored mind secret for ${placeholder} in ${where}`,
-          true,
-        );
-      let secret: string;
-      if (appJwt) secret = await githubAppJwtOf(stored, placeholder, where, request.url);
-      else if (field) secret = secretFieldOf(stored, field, placeholder, where);
-      else if (typeof stored === "string") secret = stored;
-      else
-        throw new SecretRefused(
-          `itx.fetch: ${placeholder} in ${where} names no field, but the secret is a JSON object — pick one with { field: "…" }`,
-        );
+      const secret = await secretValueOf(m, where, request.url, resolve);
       // `:` kept: a Telegram bot token sits in a URL path
       const spliced = encode ? encodeURIComponent(secret).replaceAll("%3A", ":") : secret;
       substitutedValues?.add(secret).add(spliced);

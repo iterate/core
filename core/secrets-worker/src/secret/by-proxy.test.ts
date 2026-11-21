@@ -66,6 +66,12 @@ test("a set with proxy refuses what does not go with it, each with a coded sente
       { operations: ["signHmac"] },
       { lendTo: [] },
       { placement: "url" },
+      // the proxy gets the body as it was written: no value is here to put into it
+      {
+        bodyFields: [
+          { method: "POST", url: "https://api.openai.com/v1/keys", field: "config.token" },
+        ],
+      },
       { merge: true },
       { public: ["mind"] },
       { urls: [] },

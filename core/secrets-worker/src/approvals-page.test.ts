@@ -2,6 +2,7 @@ import { Script } from "node:vm";
 import { expect, test } from "vitest";
 import { ITX_PERSON_HEADER, ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import { ACTS_SCRIPT, mailBodiesOf, proposedRules, secretRuleInWords } from "./acts-page.ts";
+import { requestText } from "./approval.ts";
 import { ruleForm, SCRIPT, secretApprovals, tickedAtOpen, wordsAsTyped } from "./approvals-page.ts";
 
 test("no value of the page comes from its address: a link with a rule's words in its query fills in nothing", async () => {
@@ -246,6 +247,74 @@ test("a held mail shows every part that goes: a mail with a text and another HTM
     ACTS_SCRIPT.includes(`const mailBodiesOf = ${mailBodiesOf.toString()};`),
     ACTS_SCRIPT.includes("for (const part of mailBodiesOf(act))"),
   ]).toEqual([true, true]);
+});
+
+test("a held request says what an approval releases, from the fields that it was held with; one that was held with none says nothing; and the rule's block names the secret's fields", async () => {
+  const sinks = { method: "POST", url: "https://api.example.com/v1/sinks", field: "config.token" };
+  const placeholder = 'getSecret("/secrets/sink")';
+  // a row as the secret's object stores it, with the placeholder in a header and in the body
+  const held = (digest: string, fills: string[]) => ({
+    digest,
+    at: 1,
+    until: 2,
+    state: "waiting" as const,
+    text: requestText({
+      method: "POST",
+      url: sinks.url,
+      headers: new Headers({
+        authorization: `Bearer ${placeholder}`,
+        "content-type": "application/json",
+      }),
+      body: JSON.stringify({ config: { token: placeholder } }),
+      fills: fills.length ? { fields: fills, version: 1 } : undefined,
+    }),
+  });
+  const page = await secretApprovals(
+    new Request("https://iterate.example.com/secrets/approvals", { headers: asMember() }),
+    {
+      mind: "example.com",
+      index: { paths: async () => ["/secrets/sink"], remove: async () => undefined },
+      secretOf: () => ({
+        approvals: async () => ({
+          rule: { methods: ["DELETE"], hosts: ["api.example.com"] },
+          held: [
+            held("fills", ["config.token"]),
+            // the same request, held before the secret named a body field: its body leaves as
+            // text, whatever the secret names now
+            held("fills-nothing", []),
+          ],
+          bodyFields: [sinks],
+        }),
+        tightenRule: async () => {
+          throw new Error("the page saved a rule");
+        },
+        decide: async () => ({ result: {}, facts: [] }),
+      }),
+      gate: idleGate(),
+    },
+  );
+  const html = await page.text();
+  const row = (digest: string) => {
+    const from = html.indexOf(`id="request-${digest}"`);
+    return html.slice(from, html.indexOf("</fieldset>", from));
+  };
+  expect({
+    fills: row("fills").includes(
+      "<p><strong>If you approve, the value of /secrets/sink is sent inside this request's body, in the field config.token.</strong> If that service shows it back, this mind's own code can read the value, and from then on no rule holds it.</p>",
+    ),
+    fillsNothing: row("fills-nothing").includes("If you approve"),
+    rule: html.includes(
+      "<p>A request that sends /secrets/sink inside its body waits too, whatever its method and host: a POST to https://api.example.com/v1/sinks, in the field config.token.</p>",
+    ),
+  }).toEqual({ fills: true, fillsNothing: false, rule: true });
+  // the script's line under a request: "exactly" only for a request that fills nothing
+  expect(SCRIPT).toContain(
+    'request.fills ? "what will be sent, with the value in its body as said above" : "exactly what will be sent"',
+  );
+  // the block of a secret that names no body field says nothing of bodies
+  expect(
+    ruleForm("/secrets/sink", { methods: ["DELETE"], hosts: ["api.example.com"] }),
+  ).not.toContain("inside its body");
 });
 
 /** The headers of a member's request, as the boundary stamps them. */

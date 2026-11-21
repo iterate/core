@@ -34,7 +34,8 @@ A rule makes an act wait until a member approves it with a passkey, on
 
 - A rule on a secret names methods and hosts: an `itx.fetch` with that secret that matches waits.
   A member sets it on the page. After five minutes the call answers 403 and says it still waits;
-  once approved, the same request sent again goes.
+  once approved, the same request sent again goes. A request that puts the secret into its JSON
+  body (`bodyFields`) waits under any rule of that secret, whatever the rule names.
 - `itx.approvals` holds the rules for acts: `email.send` (a mail, or with `to` a mail to some
   recipients alone), a verb such as `itx.whatsapp.sendMessage`, or every verb under a name,
   `itx.whatsapp.*`. `rules()` reads them, `setRules([...])` replaces them while the gate is open,

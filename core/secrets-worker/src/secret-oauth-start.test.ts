@@ -59,6 +59,34 @@ test("a client of the mind's own begun straightToProvider has its one page at th
   ]);
 });
 
+test("a secret that names a body field shows its page here first, whoever else confirms: the provider or the Cloud", async () => {
+  const use = {
+    ...target.use,
+    bodyFields: [
+      { method: "POST", url: "https://api.provider.example/v1/hooks", field: "config.secret" },
+    ],
+  };
+  const pages = [
+    await secretOAuthStart(navigation(link), async () => ({
+      ...target,
+      use,
+      straightToProvider: true as const,
+    })),
+    await secretOAuthStart(navigation(link), async () => ({
+      ...target,
+      use,
+      returnTo: `${PLATFORM}/secrets/oauth/callback`,
+      beginAt: "https://cloud.example/clients/github/begin",
+    })),
+  ];
+  const sentence =
+    "It may be sent inside the body, in the field config.secret, of a POST to https://api.provider.example/v1/hooks.";
+  expect(await Promise.all(pages.map(async (page) => [page.status, await page.text()]))).toEqual([
+    [200, expect.stringContaining(sentence)],
+    [200, expect.stringContaining(sentence)],
+  ]);
+});
+
 test("a client of iterate Cloud's has its one page at the Cloud: this browser is bound here and goes straight on", async () => {
   const cloud = {
     ...target,

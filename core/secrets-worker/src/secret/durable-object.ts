@@ -3,6 +3,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type {
   CloudClientName,
+  SecretBodyField,
   SecretMaterial,
   SecretOperation,
   SecretProxy,
@@ -43,6 +44,7 @@ import {
   type Envelope,
 } from "iterate/signed";
 import type { PageCaller } from "../callback-page.ts";
+import { bodyToFill, fieldsToFill, textOf, withBodyFilled } from "../body-placement.ts";
 import { askOf, brokered, cloudClientOf, cloudPinRefusal } from "../cloud-client.ts";
 import { configOf, type Env } from "../env.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secret-at-rest.ts";
@@ -96,8 +98,10 @@ import {
 import {
   ApprovalRule,
   bodyTextOf,
+  fillsOfText,
   HELD_BODY_LIMIT,
   HeldAnswer,
+  type HeldFills,
   isTightening,
   methodsOf,
   requestOfText,
@@ -137,11 +141,18 @@ const STACK_NONCE = "stack";
 const OPERATIONS_PER_MINUTE = 300;
 const FALSE_VERIFICATIONS_PER_MINUTE = 20;
 
-const useOf = ({ placement, operations, lendTo, statementPaths }: SecretUse): SecretUse => ({
+const useOf = ({
   placement,
   operations,
   lendTo,
   statementPaths,
+  bodyFields,
+}: SecretUse): SecretUse => ({
+  placement,
+  operations,
+  lendTo,
+  statementPaths,
+  bodyFields,
 });
 
 // `from` is the kernel's claim, never checked.
@@ -380,7 +391,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     if (!isRecord(input))
       throw codedError(
         "INVALID_INPUT",
-        "secrets.set: pass { material, urls, refresh?, public?, placement?, operations?, lendTo? }, or { material: null, urls, proxy }",
+        "secrets.set: pass { material, urls, refresh?, public?, placement?, bodyFields?, operations?, lendTo? }, or { material: null, urls, proxy }",
       );
     if (input.proxy !== undefined)
       return {
@@ -394,6 +405,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       operations: input.operations,
       lendTo: input.lendTo,
       statementPaths: input.statementPaths,
+      bodyFields: input.bodyFields,
     });
     const publicFields =
       input.public === undefined ? undefined : publicFieldsOf(input.material, input.public);
@@ -720,6 +732,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         operations: record.operations,
         lendTo: record.lendTo,
         statementPaths: record.statementPaths,
+        bodyFields: record.bodyFields,
         by: by ? { userId: by.userId, email: by.email } : undefined,
         proxy: "proxy" in record ? record.proxy : undefined,
       },
@@ -1419,7 +1432,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     this.ctx.storage.kv.put<Collecting>("collecting", {
       nonce,
       urls,
-      use: secretUseOf(isRecord(input) ? input : undefined),
+      use: secretUseOf(isRecord(input) ? input : undefined, urls),
       anyoneWithLink: collected.anyoneWithLink === true,
       description: collected.description,
       fields: collected.fields,
@@ -1572,12 +1585,20 @@ export class SecretDurableObject extends DurableObject<Env> {
       }
   }
 
-  async approvals(path: string): Promise<{ rule: ApprovalRule | null; held: HeldRow[] }> {
+  /** `bodyFields`: the secret's own (iterate/api `SecretUses`). With a rule, a request that fills
+   *  one waits whatever the rule names (`fetch`), which the approvals page says in words. */
+  async approvals(
+    path: string,
+  ): Promise<{ rule: ApprovalRule | null; held: HeldRow[]; bodyFields?: SecretBodyField[] }> {
     this.#pathOf(path);
+    const cell = this.#current()?.cell;
     const held = this.#heldRows().filter(
-      (row) => row.state === "waiting" || row.state === "approved",
+      (row) =>
+        (row.state === "waiting" || row.state === "approved") &&
+        // a request held to fill another version of the secret can leave no more (`fetch`)
+        (fillsOfText(row.text)?.version ?? cell?.version) === cell?.version,
     );
-    return { rule: this.#rule(), held };
+    return { rule: this.#rule(), held, bodyFields: cell?.bodyFields };
   }
 
   // A loosening needs a signed statement.
@@ -1679,16 +1700,18 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   // A call with new bytes is answered `held` at once, so the mind's log hears of it. The wait call
-  // names a digest; nothing else it carries is read.
+  // names a digest; nothing else it carries is read. `fills`: what the secret fills in the
+  // request's body now. The answer's is what the request was held with.
   async #hold(
     path: string,
     request: Request,
     waitFor: string | null,
     facts: SecretFact[],
-  ): Promise<{ request: Request; digest: string; release: () => void }> {
+    fills: HeldFills | undefined,
+  ): Promise<{ request: Request; digest: string; release: () => void; fills?: HeldFills }> {
     let row = waitFor
       ? this.#heldRows().find((held) => held.digest === waitFor)
-      : await this.#rowOf(path, request, facts);
+      : await this.#rowOf(path, request, facts, fills);
     if (!row)
       throw new HeldAnswer(404, "refused", `itx.fetch: no request ${waitFor} waits with ${path}`);
     const { digest, text } = row;
@@ -1719,10 +1742,15 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (now?.state !== "approved") throw sentBefore(digest);
       this.ctx.storage.kv.put<HeldRow>(key, { ...now, state: "sent" });
     };
-    return { request: requestOfText(text), digest, release };
+    return { request: requestOfText(text), digest, release, fills: fillsOfText(text) };
   }
 
-  async #rowOf(path: string, request: Request, facts: SecretFact[]): Promise<HeldRow> {
+  async #rowOf(
+    path: string,
+    request: Request,
+    facts: SecretFact[],
+    fills: HeldFills | undefined,
+  ): Promise<HeldRow> {
     if (Number(request.headers.get("content-length") || 0) > HELD_BODY_LIMIT)
       throw new HeldAnswer(413, "refused", tooLarge(path));
     const bytes = new Uint8Array(await request.arrayBuffer());
@@ -1742,6 +1770,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       url: request.url,
       headers: request.headers,
       body,
+      fills,
     });
     const digest = await sha256Hex(text);
     const rows = this.#heldRows();
@@ -1815,6 +1844,9 @@ export class SecretDurableObject extends DurableObject<Env> {
     const facts: SecretFact[] = [];
     const lent: Facts = [];
     const substituted = new Set<string>();
+    // whether this request's body holds the value, and whether the request was sent
+    let bodyFilled = false;
+    let dispatched = false;
     const answered = (response: Response, own?: VaultAnswerKind) =>
       answerOf(response, [{ path, events: facts }, ...lent], substituted, own);
     // An ask of the Cloud uses no value of the secret: nothing is substituted or pinned. It is
@@ -1831,16 +1863,19 @@ export class SecretDurableObject extends DurableObject<Env> {
           : undefined,
       );
     };
-    let held: { digest: string; release?: () => void } | undefined;
+    let held: { digest: string; release?: () => void; fills?: HeldFills } | undefined;
     // read below, and only for a rule that names strings of the body
     let body: string | null = null;
     const upgrades = request.headers.get("upgrade")?.toLowerCase() === "websocket";
     let proxied: string | undefined;
     // cancelled on a refusal: workerd reports a body a Durable Object left unread
     let unread: Request | undefined;
+    // the request's copy for its one retry after a refresh: it holds the other half of the body
+    let retry: Request | null = null;
     // The pin is checked at every read: after a refresh it may have moved.
+    // `version`: of the stored cell. A refresh keeps it; a value that is given again has a new one.
     const read = async (): Promise<
-      | { nonce: string; record: SecretRecord }
+      | { nonce: string; version: number; record: SecretRecord }
       | { nonce: string; proxy: SecretProxy; proxied: string }
       | null
     > => {
@@ -1889,7 +1924,7 @@ export class SecretDurableObject extends DurableObject<Env> {
       // redirect with it or quote it back
       if (record.placement === "header" && secretPathsIn(request.url).length)
         throw new SecretRefused(placementRefusal(path));
-      return { nonce: held.nonce, record };
+      return { nonce: held.nonce, version: current?.cell.version ?? 0, record };
     };
     const readValue = async () => {
       const stored = await read();
@@ -1905,6 +1940,8 @@ export class SecretDurableObject extends DurableObject<Env> {
         status,
         ...(held && { digest: held.digest }),
         proxy: proxied,
+        // only of a request that left: a refusal after the fill sent the value nowhere
+        ...(bodyFilled && dispatched && { inBody: true as const }),
       },
     });
     // `nonce`: a use by proxy leaves only for the cell it read
@@ -1921,12 +1958,12 @@ export class SecretDurableObject extends DurableObject<Env> {
       if (
         !held &&
         ruleNow &&
-        (upgrades || ruleMatches(ruleNow, methodsOf(request), request.url, body))
+        (upgrades || bodyFilled || ruleMatches(ruleNow, methodsOf(request), request.url, body))
       )
         throw new HeldAnswer(
           409,
           "refused",
-          `itx.fetch: ${path} got an approval rule that names this request while it was being sent; send it again`,
+          `itx.fetch: ${path} got an approval rule that holds this request while it was being sent; send it again`,
         );
       held?.release?.();
       if (held) held.release = undefined;
@@ -1939,7 +1976,9 @@ export class SecretDurableObject extends DurableObject<Env> {
         retried,
         ...(held && { digest: held.digest }),
         proxy: proxied,
+        ...(bodyFilled && { inBody: true }),
       });
+      dispatched = true;
       const response = await dispatch(outbound, nonce ? "the secret proxy" : undefined);
       facts.push(usedFact(response.status));
       return response;
@@ -1949,6 +1988,30 @@ export class SecretDurableObject extends DurableObject<Env> {
       let ask = askFor(request);
       // an ask goes to the Cloud, outside the secret's pinned hosts: no value is read for it
       let stored = ask ? null : await read();
+      // A REQUEST THAT FILLS ONE OF THE SECRET'S BODY FIELDS (../body-placement.ts): few are. Its
+      // body is read first, within the limit of a held request, and one with no place to fill
+      // is refused before a member is asked about it. (What the placeholder names is asked when
+      // the request leaves: another secret's is held first, and refused then.) From here on the
+      // body is its parse written again, and its content type the one JSON type that it names:
+      // as it will leave but for the value, so a rule reads, a member approves and the host
+      // gets one text. The caller sends the body as slowly as it likes, so the secret is read
+      // again after it: one that was deleted or given again meanwhile sends nothing.
+      let fills: HeldFills | undefined;
+      const fillable =
+        stored && "record" in stored && !waitFor
+          ? fieldsToFill(stored.record.bodyFields, request)
+          : [];
+      if (stored && "record" in stored && fillable.length) {
+        const checked = bodyToFill(request.headers, await textOf(request.body), fillable);
+        fills = { fields: checked.places.map(({ field }) => field), version: stored.version };
+        const typed = new Headers(request.headers);
+        typed.set("content-type", checked.type);
+        request = new Request(request, { headers: typed, body: JSON.stringify(checked.json) });
+        unread = request;
+        stored = await read();
+        if (!stored || !("record" in stored) || stored.version !== fills.version)
+          throw new HeldAnswer(409, "refused", givenAgain(path));
+      }
       // A wait call is held whatever the rule says now: what it may send is the stored text alone.
       const rule = this.#rule();
       if (stored && "proxy" in stored && (rule || waitFor))
@@ -1957,19 +2020,27 @@ export class SecretDurableObject extends DurableObject<Env> {
         throw new SecretRefused(
           `itx.fetch: ${path} has an approval rule, so it opens no WebSocket`,
         );
+      // (a request that fills waits whatever its body holds: nothing to read for)
       if (
         (stored || ask) &&
         !waitFor &&
+        !fills &&
         rule?.jsonStrings &&
         ruleNames(rule, methodsOf(request), request.url)
       )
         body = await bodyTextOf(request);
+      // WITH A RULE, THE VALUE GOES INTO A BODY ONLY IN A REQUEST THAT A MEMBER APPROVED, whatever
+      // the rule names (`fills`): a host that shows the value back gives it to the mind's code,
+      // which could then send what the rule holds with no secrets Worker between. The request
+      // is held with the fields that it fills and the secret's version, and leaves only so
+      // (below). `send` refuses a filled body that this did not hold: one of a rule that was
+      // set after this.
       if (
         (stored || ask) &&
-        (waitFor || (rule && ruleMatches(rule, methodsOf(request), request.url, body)))
+        (waitFor || (rule && (fills || ruleMatches(rule, methodsOf(request), request.url, body))))
       ) {
-        const approved = await this.#hold(path, request, waitFor, facts);
-        held = { digest: approved.digest, release: approved.release };
+        const approved = await this.#hold(path, request, waitFor, facts, fills);
+        held = { digest: approved.digest, release: approved.release, fills: approved.fills };
         request = approved.request;
         unread = request;
         ask = askFor(request);
@@ -1983,6 +2054,8 @@ export class SecretDurableObject extends DurableObject<Env> {
         return answered(await send(unread, false, stored.nonce));
       }
       if (ask) {
+        // a request that was held to fill a body is no ask: the secret was connected anew since
+        if (held?.fills) throw new HeldAnswer(409, "refused", givenAgain(path));
         // every header that names the secret is taken off: the Cloud gets no placeholder
         const bare = new Headers(request.headers);
         for (const [name, value] of request.headers)
@@ -2013,7 +2086,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         return valued?.record.material || null;
       };
       // The cast: workers-types' Request<Cf> against the bare Request the pure half takes.
-      const retry = valued?.record.refresh ? (request.clone() as unknown as Request) : null;
+      retry = valued?.record.refresh ? (request.clone() as unknown as Request) : null;
       const refreshed = async () => {
         try {
           facts.push(...(await this.#refresh(path, valued!.nonce)));
@@ -2040,7 +2113,22 @@ export class SecretDurableObject extends DurableObject<Env> {
         const last = attempt > 0 || !retry || !valued || refreshFailed;
         let outbound: Request;
         try {
-          outbound = await substituteMindSecrets(attempt ? retry! : request, resolve, substituted);
+          // the body first, by the request's headers as written: a placeholder is no content type
+          let written = attempt ? retry! : request;
+          const toFill = fieldsToFill(valued?.record.bodyFields, request);
+          // A REQUEST LEAVES WITH WHAT ITS FIRST READ FOUND, OR NOT AT ALL: some fields to fill,
+          // from one version of the secret, or none. For a request that waited, that is what a
+          // member approved. A secret that was given again since (while the request waited, or
+          // during a refresh) has another version and may name other fields: what would go into
+          // the body now is not what was read, or approved.
+          const meant = held ? held.fills : fills;
+          if (meant ? meant.version !== valued?.version : toFill.length)
+            throw new HeldAnswer(409, "refused", givenAgain(path));
+          if (toFill.length) {
+            written = await withBodyFilled(written, toFill, resolve);
+            bodyFilled = true;
+          }
+          outbound = await substituteMindSecrets(written, resolve, substituted);
         } catch (error) {
           if (!(error instanceof SecretRefused) || !error.mintable || last) throw error;
           const failed = await refreshed();
@@ -2066,7 +2154,11 @@ export class SecretDurableObject extends DurableObject<Env> {
             : 403;
       // only a use that was dispatched names the digest of the request that waited
       held = undefined;
-      if (unread && !unread.bodyUsed) await unread.body?.cancel().catch(() => {});
+      // Both halves: by the Streams standard, the cancel of one half of a copied body settles
+      // only with the other's. workerd settles it at once; a runtime that follows the standard
+      // would wait here for the retry copy, which nothing reads any more.
+      if (unread && !unread.bodyUsed)
+        await Promise.allSettled([unread.body?.cancel(), retry?.body?.cancel()]);
       console.info({
         event: "secret.used",
         path,
@@ -2341,6 +2433,10 @@ const unopened = (path: string) =>
 
 const tooLarge = (path: string) =>
   `itx.fetch: a request with ${path} waits for approval, and its body may be at most ${HELD_BODY_LIMIT / 1024 / 1024} MiB`;
+
+/** A request whose body the secret fills, and a secret that is no longer the one it was for. */
+const givenAgain = (path: string) =>
+  `itx.fetch: ${path} was given again or deleted since this request arrived, and its value goes into this request's body; send the request again`;
 
 // `VAULT_ANSWER_HEADER` is the vault's alone: an upstream's copy goes. A 101 keeps its socket.
 function answerOf(
