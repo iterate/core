@@ -228,7 +228,7 @@ const FIRST_SUBAGENTS = ["research", "website", "sandbox"] as const;
 
 /** The first words a new owner reads: a welcome, the one idea, and the first question. */
 const greetingOf = (name?: string) =>
-  `${name ? `Hey ${name}.` : "Hey."} This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first: which colour should this page be?`;
+  `${name ? `Hey ${name}.` : "Hey."} This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first. Your mind needs a logo: name a letter or a sign (★, ◆, ☾, anything) and a colour, and watch the top of this page.`;
 
 /** A subagent's whole brief: its file, what is known of the owner, and how to report. */
 const subagentBrief = (job: string, person: string) =>

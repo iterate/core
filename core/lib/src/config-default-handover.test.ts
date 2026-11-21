@@ -58,7 +58,7 @@ test("the handover writes the first message and starts the first subagents, once
     return { path, type: type.split("/").pop(), key: idempotencyKey.replace(KEY, ""), payload };
   });
   const greeting =
-    "Hey Ada. This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first: which colour should this page be?";
+    "Hey Ada. This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first. Your mind needs a logo: name a letter or a sign (★, ◆, ☾, anything) and a colour, and watch the top of this page.";
   // the assistant's item starts no turn by its role, and with it in the log the Dash's opener
   // stays silent: it must carry no policy that would make the chat count as empty
   expect(rows[1]).toEqual({
