@@ -122,6 +122,8 @@ void test("telemetryModeOf reads minted, given, and off from the state and fails
     telemetryModeOf("ada").pipe(Effect.provideService(State, Effect.succeed(brokenState))),
   );
   assert.equal(failed._tag, "Failure");
+  // and so must a run with no state at all
+  assert.equal((await Effect.runPromiseExit(telemetryModeOf("ada")))._tag, "Failure");
 });
 
 void test("legacy AccountApiToken delete succeeds when permitted, logs and continues on permission refusal with valid credential, and fails on invalid credential or 5xx", async () => {

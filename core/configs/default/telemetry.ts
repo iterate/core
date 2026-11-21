@@ -51,9 +51,10 @@ type TelemetryItx = Pick<
  *  the page of this mind that takes the token, with the `account` to pick and the `bucket` that
  *  "Workers R2 Storage Bucket Item Write" may be narrowed to later. No agent sees the token.
  *  `{ needed: false }` on a stack that holds its own telemetry token. Once it is set:
- *  `{ set: true, wide, bucket }`, where `wide` says that the token still holds "Pipelines Write"
- *  and "Workers R2 Storage Write", with which it writes every R2 bucket of the account: after
- *  the turn-on, ask a member to take both off and to narrow "Bucket Item Write" to `bucket`,
+ *  `{ set: true, wide, bucket }`. As made, the token reads and writes every R2 bucket of the
+ *  account, makes and deletes buckets and can set one public. `wide` says that it still reaches
+ *  past the telemetry bucket: after the turn-on, ask a member to take "Pipelines Write" and
+ *  "Workers R2 Storage Write" off AND to narrow "Bucket Item Write" to `bucket`,
  *  until `wide` is false. `again` collects it anew: the one way to replace a wrong token, since the Dash's secrets
  *  page would set it without the uses that the turn-on needs. */
 export async function telemetryToken(
@@ -63,15 +64,31 @@ export async function telemetryToken(
   const send = await whereTheTablesGo(itx);
   if (!send) return { needed: false as const };
   if (!options?.again && (await itx.secrets.describe(TELEMETRY_SECRET)).set) {
-    // The Pipelines API answers only a token that still holds its two wide permissions.
-    const pipelines = await itx.fetch(
-      new Request(`${accountUrl(send)}/pipelines/v1/pipelines?per_page=1`, {
-        headers: { authorization: BEARER },
-        redirect: "manual",
-      }),
-    );
-    await pipelines.body?.cancel();
-    return { set: true as const, wide: pipelines.ok, bucket: send.bucket };
+    // Two reads say how far the token still reaches: the Pipelines API
+    // answers it while it holds its two wide permissions, and the mind's files bucket lists for
+    // it until "Bucket Item Write" is the telemetry bucket's alone.
+    const reaches = async (path: string) => {
+      const answer = await itx.fetch(
+        new Request(`${accountUrl(send)}${path}`, {
+          headers: { authorization: BEARER },
+          redirect: "manual",
+        }),
+      );
+      await answer.body?.cancel();
+      // the mind's own secrets answered (a held approval, a refusal): that says nothing of reach
+      const cloudflares = !answer.headers.has("x-iterate-vault-answer");
+      if (cloudflares && (answer.status === 401 || answer.status === 403)) return false;
+      // 404: a mind that runs elsewhere has no files bucket, and the token was let in to look
+      if (cloudflares && (answer.ok || answer.status === 404)) return true;
+      throw new Error(
+        `telemetryToken: the token's reach is not known: ${path} answered ${answer.status}. Ask again.`,
+      );
+    };
+    const files = send.bucket.replace(/-telemetry$/, "-files");
+    const wide =
+      (await reaches("/pipelines/v1/pipelines?per_page=1")) ||
+      (await reaches(`/r2/buckets/${files}/objects?per_page=1`));
+    return { set: true as const, wide, bucket: send.bucket };
   }
   const { url } = await itx.secrets.collectFromUser({
     path: TELEMETRY_SECRET,
@@ -87,7 +104,7 @@ export async function telemetryToken(
       { method: "POST", url: `${accountUrl(send)}/pipelines/v1/sinks`, field: "config.token" },
     ],
     description:
-      "A Cloudflare API token of the account, to make the mind's telemetry tables and read them",
+      'A Cloudflare API token of the account, to make the mind\'s telemetry tables and read them. As made, it reads and writes every R2 bucket of the account, and the mind\'s own code can use it. Once the tables are on, narrow it in Cloudflare\'s dashboard: take "Pipelines Write" and "Workers R2 Storage Write" off, and set "Workers R2 Storage Bucket Item Write" to the telemetry bucket alone.',
   });
   return {
     set: false as const,

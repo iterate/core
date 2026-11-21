@@ -16,7 +16,8 @@ The owner should come away with: the mind sees every request, error and event of
   `telemetryTurnOn()` directly). `telemetryToken({ again: true })` replaces a wrong token. Give a
   member both links in ONE message: pick `account`, create the token from the first link (it
   fills in the six permissions), paste it into the second. Say plainly: as made, this token
-  reads and writes every R2 bucket of the account, the mind's files too. WAIT until the member
+  reads and writes every R2 bucket of the account, the mind's files too, makes and deletes
+  buckets and can set one public. WAIT until the member
   says it is done. Then `await itx.config.telemetryTurnOn()` (safe to call again; it answers
   what it made and each pipeline's status). Wait a few minutes and query a recent event before
   you say it works: a table answers a notice until its first rows land. Events the streams got
@@ -26,8 +27,8 @@ The owner should come away with: the mind sees every request, error and event of
   Storage Bucket Item Write" from all buckets to `bucket` alone. Both steps are needed: with the
   two permissions off, the token still reads and writes the objects of every bucket until the
   third is narrowed. The token's value stays; they must never delete or roll it. Check with
-  `telemetryToken()`: ask again while `wide` is true (`wide` cannot see the third step: ask the
-  member to confirm it). A repair needs the two permissions back: `telemetryTurnOn()` then
+  `telemetryToken()`: ask again while `wide` is true. A destroy of the stack leaves the token
+  in the account: its member deletes it then. A repair needs the two permissions back: `telemetryTurnOn()` then
   fails on a list call with a 403.
 - A mind whose `worker.ts` was changed has no `itx.config.telemetryToken` after an update: its
   owner takes the new lines as `template-updates.md` says.

@@ -64,13 +64,16 @@ export const telemetryModeFromState = (rows: {
   return "off";
 };
 
-/** Reads Alchemy's `State` once to determine the stack's telemetry mode for `stage`.
- *  Propagates `StateStoreError` so a store read failure stops the deploy rather than dropping
- *  existing telemetry resources. */
+/** Reads Alchemy's `State` once to determine the stack's telemetry mode for `stage`. A state
+ *  that is not there or cannot be read stops the deploy: read as "off", it would plan the delete
+ *  of a stack's telemetry tokens, catalog, sinks and pipelines. */
 export const telemetryModeOf = (stage: string) =>
   Effect.gen(function* () {
     const stateOption = yield* Effect.serviceOption(State);
-    if (Option.isNone(stateOption)) return "off" as const;
+    if (Option.isNone(stateOption))
+      return yield* Effect.die(
+        `The stack's state is not there to read, so the telemetry mode of ${stage} is not known. Nothing was changed.`,
+      );
     const state = yield* stateOption.value;
     const [catalogToken, analyticsToken, givenToken] = yield* Effect.all([
       state.get({ stack: "mind", stage, fqn: "TelemetryCatalogToken" }),
