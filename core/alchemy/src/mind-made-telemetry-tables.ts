@@ -67,17 +67,24 @@ export const MindMadeTelemetryTablesProvider = () =>
             }),
             Effect.catchTags({ SinkNotFound: () => Effect.void, InvalidSinkId: () => Effect.void }),
           );
-      // The catalog with its namespaces and tables (measured on 20 Nov 2026); its files stay, and
-      // the bucket's `forceDestroy` removes them. No catalog: 404, the account's "no data catalog
-      // route" (7003), or no such bucket (10006, 40406).
-      yield* catalog.Delete({ accountId, bucketName: bucket, force: true }).pipe(
-        Effect.catchIf(
-          (error) =>
-            error._tag === "CloudflareError" &&
-            (error.status === 404 ||
-              error.errors.some(({ code }) => [7003, 10006, 40406].includes(code ?? 0))),
-          () => Effect.void,
-        ),
-      );
+      // The catalog with its namespaces and tables; its files stay, and the bucket's
+      // `forceDestroy` removes them.
+      yield* catalog
+        .Delete({ accountId, bucketName: bucket, force: true })
+        .pipe(Effect.catchIf(noCatalogThere, () => Effect.void));
     }),
   });
+
+/** Whether a refused delete of the catalog says that there is none: a mind that never turned its
+ *  tables on has a bucket with no catalog, and its destroy must pass. Cloudflare answers 404
+ *  "Warehouse not found", which the SDK gives as its `NotFound`; an account with no data catalog
+ *  answers 7003, and a bucket that is gone 10006 or 40406. */
+export const noCatalogThere = (error: {
+  _tag: string;
+  status?: number;
+  errors?: readonly { code?: number }[];
+}) =>
+  error._tag === "NotFound" ||
+  (error._tag === "CloudflareError" &&
+    (error.status === 404 ||
+      Boolean(error.errors?.some(({ code }) => [7003, 10006, 40406].includes(code ?? 0)))));
