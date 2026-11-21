@@ -3,7 +3,8 @@ import { codedError } from "iterate/lib";
 
 // Basin SQL bills the bytes it scans, and only `__ingest_ts`, the partition, narrows a scan.
 const MAX_HOURS = 720;
-const MAX_ROWS = 1_000;
+/** The most rows one query answers. */
+export const MAX_ROWS = 1_000;
 const SQL_MAX_CHARS = 20_000;
 
 /** The node types a query may hold (pgsql-ast-parser's syntax/ast.ts), checked on the parse and on

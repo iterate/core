@@ -1630,11 +1630,13 @@ export interface InstalledAppRoots {}
  *  `IterateContextApiWith<"myApp">` spells `itx.myApp`. Code that holds a plain scope asserts it
  *  (`itx as IterateContextApiWith<"myApp">`) where it knows the app is installed. */
 /** What `itx.telemetry.query` answers: the rows, the SQL that ran for the mind, and an optional
- *  plain notice (e.g. when telemetry tables are off). */
+ *  plain notice (e.g. when telemetry tables are off). `truncated` is there when the answer holds
+ *  the 1,000 rows that are the most one query answers: more may match. */
 export type TelemetryRows = {
   rows: Record<string, unknown>[];
   sql: string;
   notice?: string;
+  truncated?: true;
   send?: TelemetrySend;
 };
 

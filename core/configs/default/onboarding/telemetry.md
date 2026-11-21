@@ -6,7 +6,10 @@ The owner should come away with: the mind sees every request, error and event of
 
 - `await itx.telemetry.query(sql, { hours })` runs one `SELECT` over `events`, `logs` or `spans`
   (or `metrics` alone), cut to this mind's rows of the last `hours` (24 by default, 720 at most),
-  1,000 rows at most. It answers `{ rows, sql, notice?, send? }`. After the turn-on below, the
+  1,000 rows at most (`truncated: true` says the answer is full and more may match: aggregate,
+  or page with `LIMIT` and `OFFSET`). It answers `{ rows, sql, notice?, truncated?, send? }`. A
+  refused query throws with Cloudflare's own words. A JSON function works in the `SELECT` list
+  alone: filter text with `LIKE` or `regexp_match`. After the turn-on below, the
   mind's own code answers it (`telemetry.ts`), with the same spelling and answer.
 - When the tables are off, the query answers `{ rows: [], sql, notice, send }`. A subagent of the
   first sitting reports that the tables are off and stops there. The mind's agent turns them on
@@ -69,14 +72,18 @@ if (notice) return notice;
 return rows;
 ```
 
-What failed in the last day:
+What failed in the last day: the errors logged, by kind, and the requests that failed. Do not
+ask for `status = 'error'` over all spans: an outbound `fetch` that got a 404 is one too.
 
 ```ts
-const { rows, notice } = await itx.telemetry.query(
-  "SELECT timestamp, worker, name, status_message, exception FROM spans WHERE status = 'error' ORDER BY timestamp DESC LIMIT 20",
+const errors = await itx.telemetry.query(
+  "SELECT worker, exception, count(*) AS times, max(timestamp) AS last, min(body) AS example FROM logs WHERE level = 'error' GROUP BY worker, exception ORDER BY times DESC LIMIT 20",
 );
-if (notice) return notice;
-return rows;
+if (errors.notice) return errors.notice;
+const failed = await itx.telemetry.query(
+  "SELECT timestamp, worker, url_path, rpc_method, http_status, outcome, status_message, trace_id FROM spans WHERE kind IN ('server', 'consumer') AND (outcome NOT IN ('ok', 'canceled', 'responseStreamDisconnected', 'aborted') OR http_status >= 500) ORDER BY timestamp DESC LIMIT 20",
+);
+return { errors: errors.rows, failed: failed.rows };
 ```
 
 ## Say

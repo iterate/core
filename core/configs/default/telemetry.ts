@@ -275,7 +275,9 @@ export async function telemetryQuery(itx: TelemetryItx, sql: string, options?: {
       };
     throw new Error(`telemetryQuery: Cloudflare answered ${sent.status}: ${text.slice(0, 300)}`);
   }
-  return { rows: "result" in read.data ? read.data.result.rows : read.data.data, sql: cutSql };
+  const rows = "result" in read.data ? read.data.result.rows : read.data.data;
+  // as the built-in says it: the cut holds every answer to 1,000 rows, and more may match
+  return { rows, sql: cutSql, ...(rows.length >= 1000 && { truncated: true as const }) };
 }
 
 /** R2 SQL's refusal, as far as this file reads it. */

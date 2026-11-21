@@ -9,7 +9,7 @@ import { readBounded, ROW_MAX_BYTES, sends, sized } from "./bounds.ts";
 import { telemetryWorkerConfigOf } from "./config.ts";
 import type { Env } from "./env.ts";
 import { type EventsRow, eventsRow } from "./events-row.ts";
-import { scoped } from "./query.ts";
+import { MAX_ROWS, scoped } from "./query.ts";
 
 /** Plain sentence returned instead of an error when the stack holds no telemetry token. */
 const TELEMETRY_TABLES_OFF =
@@ -39,7 +39,7 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
       }
       const rows = await this.#rows(run, token.exposeSecret());
       outcome = rows.length;
-      return { rows, sql: run.sql };
+      return { rows, sql: run.sql, ...(rows.length >= MAX_ROWS && { truncated: true as const }) };
     } catch (error) {
       outcome = String(error);
       throw error;
@@ -103,9 +103,11 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
         signal: AbortSignal.timeout(30_000),
       },
     );
-    const body = BasinAnswer.safeParse(jsonOrUndefined(await boundedText(response)));
+    const text = await boundedText(response);
+    const body = BasinAnswer.safeParse(jsonOrUndefined(text));
     if (response.ok && body.data?.result) return body.data.result.rows;
-    const why = `Basin SQL ${response.status}: ${body.data?.errors?.map((e) => e.message).join("; ")}`;
+    // the answer as it came: a refusal's shape is Cloudflare's to change, and its words say why
+    const why = `Basin SQL ${response.status}: ${text.slice(0, 300)}`;
     // a 400 is the query's own (Basin's `invalid query`): it fails the same asked again
     throw response.status === 400 ? codedError("INVALID_INPUT", why) : new Error(why);
   }
