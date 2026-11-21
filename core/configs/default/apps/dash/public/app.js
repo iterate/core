@@ -75,7 +75,8 @@ const pages = [
     // context's own subscription rows (who holds each open page), and a page says only its status
     // (hidden, typing) in an ephemeral event. Nothing durable is written for it.
     presence: true,
-    // a call on any agent's page: "Start a call" turns the call facet on for the agent (call.ts)
+    // a call on any agent's page: the first press of the header's call buttons turns the call
+    // facet on for the agent (call.ts)
     call: {
       enable: (itx, path) => itx.cd(path).processors.enable("call", CALL_FACET),
     },

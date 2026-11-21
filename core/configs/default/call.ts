@@ -1,8 +1,8 @@
 // call.ts — A CALL ON ANY AGENT'S CONTEXT, as a facet: the processor row `call`, and its Durable
 // Object class. Any agent's context can be a meeting: a member's page turns the call on for an
 // agent (`itx.cd(agent).processors.enable("call", CALL_FACET)`), and a page then calls its four
-// methods over the session it holds; the UI kit's call parts (`@iterate-com/ui`, `CallBar`,
-// `CallTiles`, `useCall`) draw it. The rules are call/rules.ts; this file wires them to the
+// methods over the session it holds; the UI kit's call parts (`@iterate-com/ui`,
+// `CallHeaderControls`, `CallTiles`, `useCall`) draw it. The rules are call/rules.ts; this file wires them to the
 // platform. It is at the config's root because a publication offers a facet's class only from a
 // root module (or an app's `backend.ts`).
 //

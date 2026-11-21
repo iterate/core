@@ -44,36 +44,11 @@
   gap: 1rem;
   flex-wrap: wrap;
 }
-.meet-band {
-  display: grid;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-/* the chat, and a member's panes beside it on a wide screen, under it on a narrow one */
-.meet-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
-}
-@media (min-width: 64rem) {
-  .meet-columns {
-    grid-template-columns: minmax(0, 1fr) 22rem;
-  }
-}
-.meet-aside {
-  display: grid;
-  gap: 1rem;
-}
-.meet-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.meet-links {
-  display: grid;
-  gap: 0.5rem;
+/* the call's controls, the look switch, the pop-out and Share: one row at the head's right */
+.meet-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
 }
 .meet-call-row {
   display: flex;

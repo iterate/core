@@ -1,5 +1,5 @@
 // The default config's Meet (core/configs/default/apps/meet): a meeting's name, the one function
-// that starts one, the guest routes on a fake mind, and the calendar invite the page builds.
+// that starts one, and the guest routes on a fake mind.
 /// <reference path="../../configs/default/files.d.ts" />
 import { expect, test } from "vitest";
 import { meetApp } from "../../configs/default/apps/meet/app.ts";
@@ -166,7 +166,7 @@ test("a guest is refused on a member's page, and taken on the pages for guests",
   expect(await mind.get(nobody, `/join${AGENT}`)).toMatchObject({ status: 200 });
   expect(await mind.get(nobody, `/in${AGENT}`)).toMatchObject({ status: 401 });
   expect(await mind.get(guest, `/in${AGENT}`)).toMatchObject({ status: 200 });
-  expect(await mind.get(nobody, "/invite.js")).toMatchObject({ status: 200 });
+  expect(await mind.get(nobody, "/share-links.js")).toMatchObject({ status: 200 });
   expect(await mind.get(nobody, "/snapshot-capture.js")).toMatchObject({ status: 200 });
   // a picture for the agent is a POST alone, for an agent's path
   expect(await mind.get(member, `/snapshot${AGENT}`)).toMatchObject({ status: 405 });
@@ -186,50 +186,6 @@ test("a guest is refused on a member's page, and taken on the pages for guests",
     icon: "/icon.svg",
     signIn: ["guest", "passkey"],
   });
-});
-
-test("the calendar invite: Google's form filled in, and an .ics with escaped text, CRLF and folded lines", async () => {
-  const invite = await inviteModule();
-  const start = invite.nextQuarter(new Date("2026-11-19T10:31:00Z"));
-  expect(start.toISOString()).toBe("2026-11-19T10:45:00.000Z");
-  const meeting = {
-    title: "Plan; budget, Q1\nwith Zoë",
-    start,
-    minutes: 30,
-    link: "https://meet.example.org/join/agents/meet/x#secret",
-    uid: "u1@meet.example.org",
-    stamp: new Date("2026-11-19T10:31:00Z"),
-  };
-  const google = new URL(invite.googleCalendarUrl(meeting));
-  expect(Object.fromEntries(google.searchParams)).toEqual({
-    action: "TEMPLATE",
-    text: meeting.title,
-    dates: "20261119T104500Z/20261119T111500Z",
-    details: `Join the meeting: ${meeting.link}`,
-    location: meeting.link,
-  });
-  const ics = invite.icsOf(meeting);
-  expect(ics.split("\r\n")).toContain("SUMMARY:Plan\\; budget\\, Q1\\nwith Zoë");
-  expect(ics).toContain("DTSTART:20261119T104500Z\r\nDTEND:20261119T111500Z\r\n");
-  expect(ics.replace(/\r\n/g, "")).not.toContain("\n");
-  expect(ics.endsWith("END:VCALENDAR\r\n")).toBe(true);
-  expect(invite.escapeText("a\\b")).toBe("a\\\\b");
-  // a title that tries to end its line and add one of its own stays inside SUMMARY
-  const forged = invite.icsOf({ ...meeting, title: "Plan\r\nATTENDEE:mailto:x@example.com" });
-  expect(forged.split("\r\n")).toContain("SUMMARY:Plan\\nATTENDEE:mailto:x@example.com");
-  expect(forged.split("\r\n").filter((line) => line.startsWith("ATTENDEE"))).toEqual([]);
-  // and Google's link holds it encoded, never as a line end of its own
-  const link = invite.googleCalendarUrl({ ...meeting, title: "Plan\r\nATTENDEE:x" });
-  expect(link).not.toMatch(/[\r\n]/);
-  expect(new URL(link).searchParams.get("text")).toBe("Plan\r\nATTENDEE:x");
-  // a long title folds: no line over 75 octets, each next line starts with a space, and no
-  // character is split
-  const long = invite.icsOf({ ...meeting, title: "ä".repeat(100) });
-  const lines = long.split("\r\n");
-  const summary = lines.slice(lines.findIndex((line) => line.startsWith("SUMMARY:")));
-  expect(summary[1]).toMatch(/^ ä+$/);
-  for (const line of lines) expect(new TextEncoder().encode(line).length).toBeLessThanOrEqual(75);
-  expect(long.replace(/\r\n /g, "")).toContain(`SUMMARY:${"ä".repeat(100)}\r\n`);
 });
 
 // ── who asks of the app, as the boundary stamps a request ──
@@ -267,26 +223,6 @@ async function liveLink(secret: string): Promise<ShareState> {
 async function sha256(text: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-type Invite = {
-  title: string;
-  start: Date;
-  minutes: number;
-  link: string;
-  uid: string;
-  stamp: Date;
-};
-/** The page's plain JavaScript, loaded by its address. */
-async function inviteModule(): Promise<{
-  nextQuarter(now: Date): Date;
-  googleCalendarUrl(invite: Invite): string;
-  icsOf(invite: Invite): string;
-  escapeText(text: string): string;
-}> {
-  return await import(
-    new URL("../../configs/default/apps/meet/public/invite.js", import.meta.url).href
-  );
 }
 
 /** The root that `startMeeting` reaches: which agents exist, which have a call, what it did. */

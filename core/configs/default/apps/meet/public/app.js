@@ -1,8 +1,8 @@
 // app.js — MEET'S PAGE (../app.ts): start a meeting, and any agent's chat with its call.
 //
 //   /                    a member: "Start new meeting", and the recent meetings
-//   /contexts/<agent>    a member: the agent's chat and call, its links for guests, and a
-//                        calendar invite
+//   /contexts/<agent>    a member: the agent's chat and call, and Share: the members' link,
+//                        the links for guests, and a calendar invite
 //   /join/<agent>#…      a guest's link: the page keeps the secret in this tab and asks whether
 //                        the link is live; then /in/<agent>, after the platform's sign-in (a
 //                        guest types a name): the join, and the same chat and call on the guest's
@@ -11,8 +11,9 @@
 // The page has no API of its own. A member's page holds the member's `/itx` socket: a meeting
 // starts by `itx.config.startMeeting` (../meeting.ts), the one function an agent calls too. A
 // guest's page holds the platform's view of the one agent's context. The call is the kit's
-// (`useCall`, `CallBar`, `CallTiles`); nothing polls. Join opens the kit's lobby (`CallLobby`)
-// first: the person checks their camera and their sound, then joins with what they turned on.
+// (`useCall`, `CallHeaderControls`, `CallTiles`), and so is Share (`CallShare`): the Dash's agent
+// page draws the same header. Nothing polls. A press of the microphone, the camera, the screen or
+// the voice agent turns the call on when the meeting has none, joins, then does what it says.
 //
 // What is said runs along the kit's caption strip over the composer, and opens to the whole
 // transcript. A member who shares a camera or a screen may turn on "Let the agent look" for it:
@@ -29,22 +30,14 @@ import {
   useState,
 } from "@iterate-com/ui/page";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
-import { CallBar } from "@iterate-com/ui/components/call/call-bar";
-import { CallLobby } from "@iterate-com/ui/components/call/call-lobby";
+import { CallHeaderControls } from "@iterate-com/ui/components/call/call-controls";
 import { CallPipButton, CallPipPlace, useCallPip } from "@iterate-com/ui/components/call/call-pip";
+import { CallShare } from "@iterate-com/ui/components/call/call-share";
 import { CallTiles } from "@iterate-com/ui/components/call/call-tiles";
 import { CaptionStrip } from "@iterate-com/ui/components/call/caption-strip";
 import { TranscriptHistory } from "@iterate-com/ui/components/call/transcript-history";
-import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@iterate-com/ui/components/ui/dialog";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import { Input } from "@iterate-com/ui/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import { useCall } from "@iterate-com/ui/lib/call-engine";
 import {
   memberItx,
@@ -52,7 +45,6 @@ import {
   useContextStub,
   useIterateContext,
 } from "@iterate-com/ui/live";
-import { googleCalendarUrl, icsOf, localInput, nextQuarter } from "./invite.js";
 import { sendSnapshot } from "./snapshot-capture.js";
 // the template's one link-making for guests: the twin of the Dash's file (its header says why)
 import { endLink, makeLink } from "./share-links.js";
@@ -63,7 +55,6 @@ const GUEST_PAGE = ROUTE === "join" || ROUTE === "in";
 const ENDED = "This link has ended. Ask for a new one.";
 const messageOf = (error) => String(error?.message ?? error);
 const nameOf = (path) => path.split("/").pop();
-const when = (at) => new Date(at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 
 // ── a member's front page ──
 function Front({ itx }) {
@@ -114,7 +105,9 @@ function Front({ itx }) {
         (agent) => html`
           <a key=${agent.path} className="meet-call-row" href=${`/contexts${agent.path}`}>
             <span>${agent.title || nameOf(agent.path)}</span>
-            <span className="meet-note">${when(agent.createdAt)}</span>
+            <span className="meet-note"
+              >${new Date(agent.createdAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span
+            >
           </a>
         `,
       )}
@@ -259,9 +252,9 @@ function LookButton({ look, ui }) {
 // ── one meeting: the agent's chat with its call ──
 /** The chat and the call on `stub`, the agent's context: a member's `itx.cd(agent)`, or a guest's
  *  view's. `session` is what the page holds (the member's itx, or the guest's view), which sends
- *  the agent words. `start` turns the call on (a member's alone); `aside(live)` draws a member's
- *  panes beside the chat, with the call's live state. */
-function Meeting({ stub, session, me, title, member, start, aside }) {
+ *  the agent words. `start` turns the call on (a member's alone); `share` makes and ends the links
+ *  for guests (a member's alone): Share in the header. */
+function Meeting({ stub, session, me, title, member, start, share }) {
   const [state, setState] = useState({});
   const patch = useCallback((change) => setState((previous) => ({ ...previous, ...change })), []);
   const context = useIterateContext(stub.stub, AgentChat.contextOptions);
@@ -296,23 +289,6 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
     ui.joined || live?.voiceAgent || said.length > 0
       ? html`<div className="meet-transcript">${transcript}${strip}</div>`
       : undefined;
-  // the lobby before a join, while it is open: a press of the person's opened it, so its
-  // microphone is on (the kit's CallLobby says why)
-  const [lobby, setLobby] = useState(false);
-  const fromLobby = (media) => {
-    setLobby(false);
-    void call?.join({ ...media, listenOnly: !media.mic });
-  };
-  // "Start a call" only while the agent has no call (no live state): then the bar's Join, which
-  // opens the lobby
-  const bar = {
-    call,
-    ui,
-    live,
-    member,
-    start: live ? undefined : start,
-    join: () => setLobby(true),
-  };
   return html`
     <div className="meet">
       <header className="meet-head">
@@ -324,10 +300,28 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
               : html`<span className="meet-note">You are a guest here.</span>`
           }
         </div>
-        <div className="meet-row">
-          <${CallBar} ...${bar} />
+        <div className="meet-actions">
+          <${CallHeaderControls}
+            call=${call}
+            ui=${ui}
+            live=${live}
+            member=${member}
+            start=${live ? undefined : start}
+          />
           ${member && html`<${LookButton} look=${look} ui=${ui} />`}
           ${live && html`<${CallPipButton} pip=${pip} />`}
+          ${
+            share &&
+            html`
+              <${CallShare}
+                share=${share}
+                title=${title}
+                pageUrl=${`${location.origin}/contexts${AGENT}`}
+                context=${context}
+                enable=${start}
+              />
+            `
+          }
         </div>
       </header>
       ${
@@ -352,39 +346,25 @@ function Meeting({ stub, session, me, title, member, start, aside }) {
           </div>
         `
       }
-      <${Dialog} open=${lobby} onOpenChange=${setLobby}>
-        <${DialogContent} className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
-          <${DialogHeader}>
-            <${DialogTitle}>Join the call<//>
-            <${DialogDescription}>
-              Check your camera and your sound first. Nothing is sent until you join.
-            <//>
-          <//>
-          ${lobby && html`<${CallLobby} live=${live} action="join" micAtStart onJoin=${fromLobby} />`}
-        <//>
-      <//>
       <${CallPipPlace} pip=${pip}>
         <${CallTiles} call=${call} ui=${ui} live=${live} member=${member} />
       <//>
-      <div className="meet-columns">
-        <div className="meet-chat-pane">
-          <${AgentChat}
-            path=${AGENT}
-            context=${chatContext}
-            error=${stub.error}
-            state=${state}
-            onStateChange=${patch}
-            onMessage=${({ message, files, key }) =>
-              session.agents.get(AGENT).message({ message, files }, { key })}
-            onAppend=${stub.stub ? (events) => stub.stub.append(...events) : undefined}
-            signedUrl=${signedUrl}
-            me=${me}
-            presence=${true}
-            aboveComposer=${aboveComposer}
-            placeholder="Message this meeting's agent"
-          />
-        </div>
-        ${aside?.(live)}
+      <div className="meet-chat-pane">
+        <${AgentChat}
+          path=${AGENT}
+          context=${chatContext}
+          error=${stub.error}
+          state=${state}
+          onStateChange=${patch}
+          onMessage=${({ message, files, key }) =>
+            session.agents.get(AGENT).message({ message, files }, { key })}
+          onAppend=${stub.stub ? (events) => stub.stub.append(...events) : undefined}
+          signedUrl=${signedUrl}
+          me=${me}
+          presence=${true}
+          aboveComposer=${aboveComposer}
+          placeholder="Message this meeting's agent"
+        />
       </div>
     </div>
   `;
@@ -395,8 +375,6 @@ function MemberMeeting({ itx }) {
   const stub = useContextStub(() => itx.cd(AGENT), [itx]);
   const [me, setMe] = useState();
   const [title, setTitle] = useState(nameOf(AGENT));
-  // the guest link made in this tab, while its secret is still known: { url, until, link }
-  const [shared, setShared] = useState(null);
   useEffect(() => {
     itx.whoami().then(({ principal }) => setMe(principal?.email || principal?.actor));
     itx.agents.list().then((agents) => {
@@ -408,174 +386,27 @@ function MemberMeeting({ itx }) {
     document.title = `${title} · Meet`;
   }, [title]);
   const start = useCallback(() => itx.config.startMeeting({ path: AGENT }), [itx]);
-  const aside = (live) => html`
-    <aside className="meet-aside">
-      <${Invite} title=${title} shared=${shared} links=${live?.links} />
-      ${
-        // a link admits by the call's state: with no call, the link would read as ended
-        stub.stub &&
-        live &&
-        html`<${Guests} stub=${stub.stub} links=${live.links} onMade=${setShared} />`
-      }
-    </aside>
-  `;
-  const props = { stub, session: itx, me, title, member: true, start, aside };
+  // the links for guests, by the template's one link-making; appended through the member's own
+  // stub, so the link names the member as its maker
+  const share = useMemo(
+    () => ({
+      make: async (lifetimeMs) => {
+        if (!stub.stub) throw new Error("The meeting is not open yet.");
+        const { event, url, until, link } = await makeLink({
+          zone: location.hostname.split(".").slice(1).join("."),
+          agent: AGENT,
+          lifetimeMs,
+          now: Date.now(),
+        });
+        await stub.stub.append(event);
+        return { url, until, link };
+      },
+      end: (link) => stub.stub.append(endLink(link)),
+    }),
+    [stub.stub],
+  );
+  const props = { stub, session: itx, me, title, member: true, start, share };
   return html`<${Meeting} ...${props} />`;
-}
-
-/** "Add to calendar": a start and a length, then Google Calendar's form or an .ics file. The
- *  invite holds the meeting's page, or the guest link made in this tab when the member includes
- *  it. */
-function Invite({ title, shared, links }) {
-  const [start, setStart] = useState(() => localInput(nextQuarter(new Date())));
-  const [minutes, setMinutes] = useState("30");
-  const [withGuests, setWithGuests] = useState(false);
-  const [uid] = useState(() => `${crypto.randomUUID()}@${location.hostname}`);
-  // the link counts while the call's live state lists it: an ended link is in no invite
-  const listed = links?.some((link) => link.link === shared?.link);
-  const live = shared && listed && shared.until > Date.now() ? shared : null;
-  const at = new Date(start);
-  const invite = {
-    title,
-    start: Number.isNaN(at.getTime()) ? nextQuarter(new Date()) : at,
-    minutes: Number(minutes),
-    link: live && withGuests ? live.url : `${location.origin}/contexts${AGENT}`,
-    uid,
-    stamp: new Date(),
-  };
-  const checkbox = html`
-    <input
-      type="checkbox"
-      checked=${withGuests}
-      onChange=${(event) => setWithGuests(event.target.checked)}
-    />
-  `;
-  const choice = live
-    ? html`<label className="meet-row meet-note">${checkbox} Include the guest link</label>`
-    : html`<p className="meet-note">The invite links to this page: members only.</p>`;
-  // the one sentence beside the choice, when the invite holds the guest link
-  const guestsNote =
-    live &&
-    withGuests &&
-    html`<p className="meet-note">Anyone with this invite can join until ${when(live.until)}.</p>`;
-  const download = () => {
-    const file = new Blob([icsOf(invite)], { type: "text/calendar;charset=utf-8" });
-    const url = URL.createObjectURL(file);
-    // an anchor in the document, which some browsers need for a download, and the file's URL
-    // kept a while: the download may begin after this turn
-    const anchor = Object.assign(document.createElement("a"), {
-      href: url,
-      download: `${nameOf(AGENT)}.ics`,
-    });
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
-  };
-  return html`
-    <section className="meet-band">
-      <h2 className="meet-subtitle">Add to calendar</h2>
-      <div className="meet-row">
-        <${Input}
-          type="datetime-local"
-          aria-label="Starts at"
-          value=${start}
-          onChange=${(event) => setStart(event.target.value)}
-          className="meet-grow"
-        />
-        <${NativeSelect}
-          aria-label="How long"
-          value=${minutes}
-          onChange=${(event) => setMinutes(event.target.value)}
-        >
-          ${[15, 30, 45, 60, 90].map(
-            (n) => html`<${NativeSelectOption} key=${n} value=${String(n)}>${n} minutes<//>`,
-          )}
-        <//>
-      </div>
-      ${choice} ${guestsNote}
-      <div className="meet-row">
-        <a
-          className=${buttonVariants({ variant: "outline", size: "sm" })}
-          href=${googleCalendarUrl(invite)}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Google Calendar
-        </a>
-        <${Button} variant="outline" size="sm" onClick=${download}>Download .ics<//>
-      </div>
-    </section>
-  `;
-}
-
-/** A member's links for guests: make one (its secret is shown once, then only its hash is kept),
- *  and end one. A link opens this agent's chat and call to anyone who has it. */
-function Guests({ stub, links, onMade }) {
-  const [hours, setHours] = useState("24");
-  const [made, setMade] = useState("");
-  const [error, setError] = useState("");
-  const make = async () => {
-    setError("");
-    try {
-      const { event, url, until, link } = await makeLink({
-        zone: location.hostname.split(".").slice(1).join("."),
-        agent: AGENT,
-        lifetimeMs: (Number(hours) || 24) * 3_600_000,
-        now: Date.now(),
-      });
-      await stub.append(event);
-      await navigator.clipboard.writeText(url).catch(() => {});
-      setMade(url);
-      onMade({ url, until, link });
-    } catch (failure) {
-      setError(messageOf(failure));
-    }
-  };
-  return html`
-    <section className="meet-band">
-      <h2 className="meet-subtitle">Guests</h2>
-      <p className="meet-note">
-        A link lets anyone who has it into this meeting as a guest, with a name and no account: they
-        read and write its chat and join its call, and reach nothing else of the mind. The agent
-        acts for them with everything it can reach. A link ends at its time, or when you end it.
-      </p>
-      <div className="meet-row">
-        <${NativeSelect}
-          value=${hours}
-          onChange=${(event) => setHours(event.target.value)}
-          aria-label="How long the link lives"
-        >
-          <${NativeSelectOption} value="1">For 1 hour<//>
-          <${NativeSelectOption} value="24">For 1 day<//>
-          <${NativeSelectOption} value="168">For 7 days<//>
-        <//>
-        <${Button} size="sm" onClick=${make}>Make a link and copy it<//>
-      </div>
-      ${made && html`<p className="meet-note">Copied; it is shown here once: <code className="meet-text">${made}</code></p>`}
-      ${error && html`<p role="alert" className="meet-error">${error}</p>`}
-      <ul className="meet-links">
-        ${links?.map(
-          (link) => html`
-            <li key=${link.link} className="meet-row">
-              <span className="meet-note meet-grow">
-                By ${link.madeBy}, until
-                ${when(link.until)}${link.guests.length ? `; came: ${link.guests.join(", ")}` : ""}
-              </span>
-              <${Button}
-                size="sm"
-                variant="ghost"
-                onClick=${() =>
-                  stub.append(endLink(link.link)).catch((failure) => setError(messageOf(failure)))}
-              >
-                End
-              <//>
-            </li>
-          `,
-        )}
-      </ul>
-    </section>
-  `;
 }
 
 // ── a guest ──
