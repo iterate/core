@@ -321,7 +321,8 @@ export async function runProvide(input: {
 /** How long before a sign-in's end the next connection is made: 20 to 55 seconds, by chance. Under
  *  a minute, so that a stored sign-in counts as ending and is refreshed (node.ts `mindToken`). By
  *  chance, because bridges that share one stored sign-in end at the same moment: the first to renew
- *  refreshes it, and the others find it fresh. */
+ *  refreshes it, and the others find it fresh. Two that renew in the same moment take turns
+ *  (config.ts `withSessionsLock`). */
 const renewBeforeMs = () => 20_000 + Math.floor(Math.random() * 35_000);
 
 /** The folder of the nearest package.json at or above the file's own folder. */

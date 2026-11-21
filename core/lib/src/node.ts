@@ -16,7 +16,13 @@ import { connectedMind } from "./client/connected-mind.ts";
 import { type DiscoveredMind, discoverMind } from "./client/oauth.ts";
 import { startHeartbeat } from "./client/heartbeat.ts";
 import { isCodingAgent } from "./cli/coding-agent.ts";
-import { readSession, removeSession, writeSession, type StoredSession } from "./cli/config.ts";
+import {
+  readSession,
+  removeSession,
+  withSessionsLock,
+  writeSession,
+  type StoredSession,
+} from "./cli/config.ts";
 import { loginFlowFor, type LoginFlow } from "./cli/device-login/flow.ts";
 import { deviceLogin, showsColors } from "./cli/device-login/index.ts";
 import { oauthLogin, refreshOAuthSession } from "./cli/oauth.ts";
@@ -123,9 +129,18 @@ export async function mindToken(input: {
   if (stored && !endsWithinTheMinute(stored)) return stored.token;
   if (stored?.refreshToken) {
     try {
-      const refreshed = await refreshOAuthSession({ resource, session: stored });
-      writeSession(resource, refreshed);
-      return refreshed.token;
+      // ONE AT A TIME (cli/config.ts `withSessionsLock`), and the file is read again inside: a
+      // process that waited finds the sign-in that the first one renewed, or finds none that can
+      // be renewed (null: the sign-in below).
+      const token = await withSessionsLock(async () => {
+        const now = readSession(resource);
+        if (now && !endsWithinTheMinute(now)) return now.token;
+        if (!now?.refreshToken) return null;
+        const refreshed = await refreshOAuthSession({ resource, session: now });
+        writeSession(resource, refreshed);
+        return refreshed.token;
+      });
+      if (token) return token;
     } catch (error) {
       // Only the issuer's `invalid_grant` says the grant ended, and then nothing is worth keeping
       // (cli/oauth.ts `tokenResponse` carries the issuer's error as the cause). A timeout or a 5xx

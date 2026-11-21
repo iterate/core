@@ -4,9 +4,19 @@
 // the sign-ins, one per OAuth resource a token is for (a mind's API, the right to hand in a mind
 // that runs elsewhere). Both are written mode 600 in a folder of mode 700. The Node client
 // (../node.ts) reads and refreshes the sessions.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 
 export const CONFIG_DIR = join(
@@ -107,4 +117,49 @@ export function removeSession(resource: string) {
   if (!(resource in sessions)) return;
   delete sessions[resource];
   writeJson(SESSIONS_PATH, sessions);
+}
+
+/** What the lock file holds, or "" when it is gone. */
+const lockText = (lock: string) => {
+  try {
+    return readFileSync(lock, "utf8");
+  } catch {
+    return "";
+  }
+};
+
+/** A renewal ends or fails within 30 seconds (oauth.ts `requestOptions`). A lock whose time is a
+ *  minute from now, either way, is no renewal at work: its process stopped, or the clock moved. */
+const SESSIONS_LOCK_STALE_MS = 60_000;
+
+/** ONE PROCESS AT A TIME RENEWS A STORED SIGN-IN. The bridges on one computer share it, and a
+ *  mind's issuer replaces the refresh token at each renewal. Two that renew at once each get one:
+ *  the file keeps the one written last, the issuer the one it made last, and where those differ
+ *  the next renewal is refused as `invalid_grant`, which signs every bridge out. The lock is
+ *  `sessions.json.lock`, made only if it is not there; `work` reads the file again inside it.
+ *  A stale lock is taken over, and at its end a process removes only its own. A process that has waited
+ *  two stale times gives up, and its caller keeps the sign-in. A new sign-in, a sign-out and the
+ *  removal of a refused sign-in write the file outside the lock. */
+export async function withSessionsLock<T>(work: () => Promise<T>): Promise<T> {
+  const lock = `${SESSIONS_PATH}.lock`;
+  const mine = `${process.pid} ${randomUUID()}`;
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  for (const giveUpAt = Date.now() + 2 * SESSIONS_LOCK_STALE_MS; ; await sleep(50)) {
+    try {
+      writeFileSync(lock, mine, { flag: "wx", mode: 0o600 });
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    }
+    const madeAt = statSync(lock, { throwIfNoEntry: false })?.mtimeMs;
+    if (madeAt !== undefined && Math.abs(Date.now() - madeAt) > SESSIONS_LOCK_STALE_MS)
+      rmSync(lock, { force: true });
+    else if (Date.now() > giveUpAt) throw new Error(`Could not take the lock ${lock}.`);
+  }
+  try {
+    return await work();
+  } finally {
+    // not another process's, which took this one over as stale
+    if (lockText(lock) === mine) rmSync(lock, { force: true });
+  }
 }
