@@ -334,9 +334,11 @@ reason }`); never try again without asking. A request lives 20 s, one at a time,
 - **The page's parts** (the UI kit): `useCall(context, page, liveValue)` holds the call in the tab;
   `CallLobby` comes before a join on arrival (below): the person's camera picture, their microphone's level, the
   devices, a test sound, who is in the call, then Join now or Join muted; the tracks it opened go
-  to the call as they are. `CallHeaderControls` is its controls for a header, one button group of
-  icon buttons with tooltips: the microphone, the camera, the screen and the voice agent; out of the call, one press
-  turns the call on, joins, and does what the button says. The Dash and Meet draw it, and Share
+  to the call as they are. `CallHeaderControls` is its controls for a header. Out of the call it is
+  one button: Start call when nobody is in the call (it turns the call on when the agent has none),
+  or Join call with how many are in it; a press joins with the microphone, or listening when the
+  browser refuses the microphone. In the call it is one button group of icon buttons with tooltips
+  (the microphone, the camera, the screen, the voice agent, the devices) and Leave. The Dash and Meet draw it, and Share
   (`CallShare`) beside it. `CallBar` is the older row with a main button in words. `CallTiles` is the cameras, the
   screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,
   pickers for the microphone, camera and speaker, repair of a failed connection, three simulcast

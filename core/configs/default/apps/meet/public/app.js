@@ -13,10 +13,11 @@
 // guest's page holds the platform's view of the one agent's context. The call is the kit's
 // (`useCall`, `CallHeaderControls`, `CallTiles`), and so is Share (`CallShare`). A meeting's page is
 // the Dash's agent page: the kit's one header row (`AgentPageHeader`: the way back to the meetings,
-// the title and path, who is here with the mind's face first, the call's button group, Share, and
+// the title and path, who is here with the mind's face first, the call's controls, Share, and
 // Chat | Events), then the call's tiles, then the chat, which fills the rest of the page. Nothing
-// polls. A press of the microphone, the camera, the screen or the voice agent turns the call on
-// when the meeting has none, joins, then does what it says.
+// polls. Out of the call the controls are one button: Start call (it turns the call on when the
+// meeting has none) or Join call, which joins with the microphone. In the call they are the
+// microphone, the camera, the screen, the voice agent and the devices, and Leave.
 //
 // What is said runs along the kit's caption strip over the composer, and opens to the whole
 // transcript. A member who shares a camera or a screen may turn on "Let the agent look" for it:
