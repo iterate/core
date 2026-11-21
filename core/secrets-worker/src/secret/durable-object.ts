@@ -44,7 +44,13 @@ import {
   type Envelope,
 } from "iterate/signed";
 import type { PageCaller } from "../callback-page.ts";
-import { bodyToFill, fieldsToFill, textOf, withBodyFilled } from "../body-placement.ts";
+import {
+  bodyToFill,
+  fieldsToFill,
+  leavesAsRead,
+  textOf,
+  withBodyFilled,
+} from "../body-placement.ts";
 import { askOf, brokered, cloudClientOf, cloudPinRefusal } from "../cloud-client.ts";
 import { configOf, type Env } from "../env.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "../secret-at-rest.ts";
@@ -102,6 +108,7 @@ import {
   HELD_BODY_LIMIT,
   HeldAnswer,
   type HeldFills,
+  heldOfText,
   isTightening,
   methodsOf,
   requestOfText,
@@ -1519,11 +1526,23 @@ export class SecretDurableObject extends DurableObject<Env> {
     console.info({ event: "secret.approval-rule-configured", path, rule });
   }
 
+  /** THE REQUESTS THAT ARE HELD HERE, as every reader gets them: the page, the count of those
+   *  that wait, a member's approval and a wait call. A row ends with its day. It ends also once
+   *  its request can leave no more (../body-placement.ts `leavesAsRead`, the rule of `fetch`):
+   *  the secret was given again since the request was held to fill its body, or the secret names
+   *  a body field now for a request that was held to fill none. Such a row is deleted here, as
+   *  one whose day ended is: the same request, sent again, is a new one. */
   #heldRows(): HeldRow[] {
     const now = Date.now();
+    const cell = this.#current()?.cell;
+    const canLeave = (text: string) => {
+      const held = heldOfText(text);
+      return leavesAsRead(held.fills, cell?.version, fieldsToFill(cell?.bodyFields, held));
+    };
     const rows: HeldRow[] = [];
+    // its day first: the text of a row whose day ended is not read
     for (const [key, row] of this.ctx.storage.kv.list<HeldRow>({ prefix: "held:" }))
-      if (row.until > now) rows.push(row);
+      if (row.until > now && canLeave(row.text)) rows.push(row);
       else this.ctx.storage.kv.delete(key);
     return rows;
   }
@@ -1591,14 +1610,10 @@ export class SecretDurableObject extends DurableObject<Env> {
     path: string,
   ): Promise<{ rule: ApprovalRule | null; held: HeldRow[]; bodyFields?: SecretBodyField[] }> {
     this.#pathOf(path);
-    const cell = this.#current()?.cell;
     const held = this.#heldRows().filter(
-      (row) =>
-        (row.state === "waiting" || row.state === "approved") &&
-        // a request held to fill another version of the secret can leave no more (`fetch`)
-        (fillsOfText(row.text)?.version ?? cell?.version) === cell?.version,
+      (row) => row.state === "waiting" || row.state === "approved",
     );
-    return { rule: this.#rule(), held, bodyFields: cell?.bodyFields };
+    return { rule: this.#rule(), held, bodyFields: this.#current()?.cell.bodyFields };
   }
 
   // A loosening needs a signed statement.
@@ -1674,9 +1689,9 @@ export class SecretDurableObject extends DurableObject<Env> {
       return refuse(`the vault does not act on ${statement.type}`);
     const digests = statement.about || [];
     if (!digests.length) return refuse("the statement names no request");
-    const now = Date.now();
-    const rows = digests.map((digest) => this.ctx.storage.kv.get<HeldRow>(`held:${digest}`));
-    if (rows.some((row) => !row || row.state !== "waiting" || row.until <= now))
+    const live = this.#heldRows();
+    const rows = digests.map((digest) => live.find((row) => row.digest === digest));
+    if (rows.some((row) => row?.state !== "waiting"))
       return refuse("a request it names does not wait here");
     const reason = statement.payload?.reason;
     if (statement.type === REJECTED && (typeof reason !== "string" || !reason.trim()))
@@ -1709,16 +1724,22 @@ export class SecretDurableObject extends DurableObject<Env> {
     facts: SecretFact[],
     fills: HeldFills | undefined,
   ): Promise<{ request: Request; digest: string; release: () => void; fills?: HeldFills }> {
-    let row = waitFor
-      ? this.#heldRows().find((held) => held.digest === waitFor)
-      : await this.#rowOf(path, request, facts, fills);
-    if (!row)
-      throw new HeldAnswer(404, "refused", `itx.fetch: no request ${waitFor} waits with ${path}`);
+    const find = (digest: string) => this.#heldRows().find((held) => held.digest === digest);
+    const ended = (digest: string | null) =>
+      new HeldAnswer(
+        404,
+        "refused",
+        `itx.fetch: no request ${digest} waits with ${path}. A held request ends after a day, and one whose body the secret fills ends when the secret is given again. Send the request again.`,
+      );
+    let row = waitFor ? find(waitFor) : await this.#rowOf(path, request, facts, fills);
+    if (!row) throw ended(waitFor);
     const { digest, text } = row;
     const key = `held:${digest}`;
     if (row.state === "waiting") {
       await this.#settled(digest, HOLD_MS);
-      row = this.ctx.storage.kv.get<HeldRow>(key) ?? row;
+      // as every reader gets it (`#heldRows`): a row that ended while this call waited is no row
+      row = find(digest);
+      if (!row) throw ended(digest);
     }
     if (row.state === "sent") throw sentBefore(digest);
     if (row.state === "rejected")
@@ -2116,13 +2137,13 @@ export class SecretDurableObject extends DurableObject<Env> {
           // the body first, by the request's headers as written: a placeholder is no content type
           let written = attempt ? retry! : request;
           const toFill = fieldsToFill(valued?.record.bodyFields, request);
-          // A REQUEST LEAVES WITH WHAT ITS FIRST READ FOUND, OR NOT AT ALL: some fields to fill,
-          // from one version of the secret, or none. For a request that waited, that is what a
-          // member approved. A secret that was given again since (while the request waited, or
-          // during a refresh) has another version and may name other fields: what would go into
-          // the body now is not what was read, or approved.
-          const meant = held ? held.fills : fills;
-          if (meant ? meant.version !== valued?.version : toFill.length)
+          // A REQUEST LEAVES WITH WHAT ITS FIRST READ FOUND, OR NOT AT ALL
+          // (../body-placement.ts `leavesAsRead`): some fields to fill, from one version of the
+          // secret, or none. For a request that waited, that is what a member approved. A held
+          // request that can leave no more is held no more (`#heldRows`), so this refuses only
+          // a request whose secret was given again while the request was on its way: while its
+          // body arrived, during a refresh, or right after a member's approval.
+          if (!leavesAsRead(held ? held.fills : fills, valued?.version, toFill))
             throw new HeldAnswer(409, "refused", givenAgain(path));
           if (toFill.length) {
             written = await withBodyFilled(written, toFill, resolve);
@@ -2139,6 +2160,8 @@ export class SecretDurableObject extends DurableObject<Env> {
           valued = await readValue();
           continue;
         }
+        // the body is this request's now: a refusal in `send` cancels it there
+        unread = outbound;
         const response = await send(outbound, attempt > 0);
         if (response.status !== 401 || last || (await refreshed())) return answered(response);
         await response.body?.cancel();
@@ -2154,11 +2177,17 @@ export class SecretDurableObject extends DurableObject<Env> {
             : 403;
       // only a use that was dispatched names the digest of the request that waited
       held = undefined;
-      // Both halves: by the Streams standard, the cancel of one half of a copied body settles
-      // only with the other's. workerd settles it at once; a runtime that follows the standard
-      // would wait here for the retry copy, which nothing reads any more.
-      if (unread && !unread.bodyUsed)
-        await Promise.allSettled([unread.body?.cancel(), retry?.body?.cancel()]);
+      // Each body that nothing reads any more is cancelled: of the request that holds the
+      // caller's body now, and of its copy for the retry. By the Streams standard the cancel of
+      // one half of a copied body settles only with the other's. So the cancels are awaited
+      // when they will settle: there is no copy, or both halves are cancelled here. One half
+      // alone is cancelled with no wait: a host that took the other half may never end it, and
+      // nothing below depends on the cancel.
+      const unreadBodies = [unread, retry].flatMap(
+        (left) => (left && !left.bodyUsed && left.body) || [],
+      );
+      const cancels = Promise.allSettled(unreadBodies.map((left) => left.cancel()));
+      if (!retry || unreadBodies.length === 2) await cancels;
       console.info({
         event: "secret.used",
         path,

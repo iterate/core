@@ -593,7 +593,9 @@ export type SecretUses = {
    *  such a secret only the reach that you would give the mind itself. The rest of the body and
    *  the headers are the caller's too: they can tell the service what to do with the value, or
    *  which endpoint to take the request for. Where the secret has an approval rule, a request
-   *  whose body is filled waits for a member, whatever the rule names. */
+   *  whose body is filled waits for a member, whatever the rule names. An approval is for the
+   *  value that the secret holds then: when the secret is given again, each request that waits
+   *  or was approved to fill a body ends, and the same request, sent again, waits anew. */
   bodyFields?: SecretBodyField[];
   /** The operations it answers (`SECRET_OPERATIONS`). Default: none. */
   operations?: SecretOperation[];

@@ -14,7 +14,7 @@ import type { Envelope } from "iterate/signed";
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
 import { hmacSha256Hex } from "../secrets.ts";
-import { APPROVED, SecretDurableObject } from "./durable-object.ts";
+import { APPROVED, HOLD_MS, MAX_WAITING, SecretDurableObject } from "./durable-object.ts";
 
 // workerd's own comparison, which Node's Web Crypto has not got
 Object.assign(crypto.subtle, { timingSafeEqual });
@@ -231,30 +231,27 @@ test("a request that fills is held as it will leave: a member reads its body wri
 
 test.for([
   {
+    // the request was held to fill nothing, and the secret would fill it now
     name: "with a body field that it did not have",
     before: undefined,
     after: [SINKS],
-    // the row was held to fill nothing: it is still listed, and leaves no more
-    listed: 1,
     fills: { fields: ["config.token"], version: 2 },
   },
   {
     name: "without the field that the request was held with",
     before: [SINKS],
     after: undefined,
-    listed: 0,
     fills: undefined,
   },
   {
     name: "with another value and the same field",
     before: [SINKS],
     after: [SINKS],
-    listed: 0,
     fills: { fields: ["config.token"], version: 2 },
   },
 ])(
-  "a request that waited leaves as it was approved, or not at all: once the secret is given again $name, the approved request is refused, and the same request sent now waits anew",
-  async ({ before, after, listed, fills }) => {
+  "a request that waited leaves as it was approved, or not at all: once the secret is given again $name, the approved request is held no more, and the same request sent now waits anew",
+  async ({ before, after, fills }) => {
     // the rule names the request's method, so it waits with a body field and without one
     const { secret, sent, approve } = await vault({
       bodyFields: before,
@@ -268,7 +265,7 @@ test.for([
       urls: [API],
       bodyFields: after,
     });
-    const stillListed = (await secret.approvals(PATH)).held.length;
+    const listed = (await secret.approvals(PATH)).held.length;
     const approved = await secret.fetch(
       useRequest(`${API}/sinks`, { method: "POST", headers: { [SECRET_HELD_HEADER]: digest } }),
     );
@@ -277,37 +274,139 @@ test.for([
     expect({
       approved: [approved.status, await approved.text()],
       sent,
-      stillListed,
+      listed,
       again: again.status,
       // the new request says what it fills, and for which version, in the text that is approved
       anew: (await secret.approvals(PATH)).held
         .filter((row) => row.digest === anew && anew !== digest)
         .map((row) => JSON.parse(row.text).fills),
     }).toEqual({
-      approved: [
-        409,
-        expect.stringContaining("was given again or deleted since this request arrived"),
-      ],
+      // the page lists it no more, so the wait call finds none: the two agree
+      approved: [404, expect.stringContaining(`no request ${digest} waits with ${PATH}`)],
       sent: [],
-      stillListed: listed,
+      listed: 0,
       again: 202,
       anew: [fills],
     });
   },
 );
 
+test("held requests that can leave no more count no more: after the value is given again, fifty that waited to fill are gone from the page, the count and the storage, and new requests wait", async () => {
+  // the rule names DELETE: each POST waits because it fills, and a DELETE waits by the rule
+  const { secret, state, approve } = await vault({
+    bodyFields: [SINKS],
+    rule: { methods: ["DELETE"], hosts: ["api.example.com"] },
+  });
+  const digestOf = async (held: Response) => Held.parse(await held.clone().json()).digest;
+  const old: string[] = [];
+  for (let index = 0; index < MAX_WAITING; index += 1)
+    old.push(await digestOf(await secret.fetch(sink({ index, config: { token: PLACEHOLDER } }))));
+  const erase = () => secret.fetch(useRequest(`${API}/notes`, { method: "DELETE" }));
+  // the limit stops a request that fills, and one that fills nothing
+  const full = [await secret.fetch(sink({ config: { token: PLACEHOLDER } })), await erase()];
+  await secret.secret(PATH, "set", {
+    material: "another-value-aaaa",
+    urls: [API],
+    bodyFields: [SINKS],
+  });
+  // a member's page that was open before: its approval names a request that is held no more
+  const late = await approve(old[0] ?? "");
+  const next = [await secret.fetch(sink({ config: { token: PLACEHOLDER } })), await erase()];
+  expect({
+    full: full.map((answer) => answer.status),
+    late: late.result,
+    next: next.map((answer) => answer.status),
+    listed: (await secret.approvals(PATH)).held.map((row) => row.digest).toSorted(),
+    stored: state.storage.kv.list({ prefix: "held:" }).length,
+  }).toEqual({
+    full: [429, 429],
+    late: { error: "a request it names does not wait here" },
+    next: [202, 202],
+    listed: (await Promise.all(next.map(digestOf))).toSorted(),
+    stored: 2,
+  });
+});
+
+test("a held request ends with its day before its text is read: a row whose text this code could not read is deleted then, and stops no reader", async () => {
+  const { secret, state } = await vault({
+    bodyFields: [SINKS],
+    rule: { methods: ["DELETE"], hosts: ["api.example.com"] },
+  });
+  // no code here writes such a text: it stands for one that another version of this code wrote
+  state.storage.kv.put("held:unreadable", {
+    digest: "unreadable",
+    text: "not the JSON of a held request",
+    at: 0,
+    until: Date.now() - 1,
+    state: "waiting",
+  });
+  expect({
+    held: (await secret.approvals(PATH)).held,
+    stored: state.storage.kv.list({ prefix: "held:" }).length,
+  }).toEqual({ held: [], stored: 0 });
+});
+
+test("a call that still waits when the secret is given again is told at the end of its wait that its request is held no more, and to send it again", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const { secret, sent } = await vault({
+      bodyFields: [SINKS],
+      rule: { methods: ["DELETE"], hosts: ["api.example.com"] },
+    });
+    const first = await secret.fetch(sink({ config: { token: PLACEHOLDER } }));
+    const { digest } = Held.parse(await first.clone().json());
+    const waited = secret.fetch(
+      useRequest(`${API}/sinks`, { method: "POST", headers: { [SECRET_HELD_HEADER]: digest } }),
+    );
+    // the wait call holds once its timer is set
+    await vi.waitFor(() => expect(vi.getTimerCount()).toEqual(1));
+    await secret.secret(PATH, "set", {
+      material: "another-value-aaaa",
+      urls: [API],
+      bodyFields: [SINKS],
+    });
+    await vi.advanceTimersByTimeAsync(HOLD_MS);
+    const answer = await waited;
+    const facts = decodeFacts(answer.headers.get(FACTS_HEADER) || "")[0]?.events ?? [];
+    expect({
+      status: answer.status,
+      kind: answer.headers.get(VAULT_ANSWER_HEADER),
+      text: await answer.text(),
+      // no fact says that the wait ran out on a request that an approval would still send
+      facts: facts.map((fact) => fact.type),
+      sent,
+    }).toEqual({
+      status: 404,
+      kind: "refused",
+      text: expect.stringContaining("Send the request again."),
+      facts: ["events.iterate.com/secret/used"],
+      sent: [],
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test.for([
-  { name: "loses its body field", before: [SINKS], after: undefined },
-  { name: "gets a body field", before: undefined, after: [SINKS] },
+  { name: "loses its body field", waited: false, before: [SINKS], after: undefined },
+  { name: "gets a body field", waited: false, before: undefined, after: [SINKS] },
+  // an approved request too: the secret is given again after the last look at what is held
+  { name: "loses its body field", waited: true, before: [SINKS], after: undefined },
+  { name: "gets a body field", waited: true, before: undefined, after: [SINKS] },
 ])(
-  "a request that did not wait leaves with what its first read found, or not at all: a secret that $name while its token is refreshed sends nothing more",
-  async ({ before, after }) => {
-    // no rule, so the request does not wait; its access token has ended, so a refresh comes first
-    const { secret, sent, upstream } = await vault({
+  "a request leaves with what its first read found, or not at all (approved first: $waited): a secret that $name while its token is refreshed sends nothing more",
+  async ({ waited, before, after }) => {
+    // Its access token has ended, so a refresh comes before the request goes. With no rule the
+    // request does not wait; with one that names its method, it is approved first.
+    const { secret, sent, upstream, approve } = await vault({
       bodyFields: before,
       material: { ...GRANT.material, accessTokenExpiresAt: "2026-01-01T00:00:00.000Z" },
       refresh: GRANT.refresh,
+      rule: waited ? { methods: ["POST"], hosts: ["api.example.com"] } : undefined,
     });
+    const held = waited ? await secret.fetch(granted({ config: { token: ACCESS } })) : undefined;
+    const digest = held ? Held.parse(await held.json()).digest : "";
+    if (held) await approve(digest);
     upstream.mockImplementation(async (request: Request) => {
       sent.push(await seen(request));
       // the owner gives the secret again while the token endpoint answers
@@ -318,7 +417,14 @@ test.for([
       });
       return Response.json({ access_token: "new-access-aaaa" });
     });
-    const answer = await secret.fetch(granted({ config: { token: ACCESS } }));
+    const answer = await secret.fetch(
+      held
+        ? new Request(`${API}/sinks`, {
+            method: "POST",
+            headers: { [SECRET_USE_HEADER]: PATH, [SECRET_HELD_HEADER]: digest },
+          })
+        : granted({ config: { token: ACCESS } }),
+    );
     expect({
       status: answer.status,
       text: await answer.text(),
@@ -575,6 +681,70 @@ test("a secret that is deleted while the body of a request arrives sends nothing
     sent: [],
   });
 });
+
+test.for([
+  // both copies of the body are unread, so both are cancelled, and its source hears of it
+  { name: "took no body: both copies of it are cancelled", takes: false, cancelled: true },
+  // The host's copy is the host's, and it never ends: the cancel of the other copy alone would
+  // not settle by the Streams standard. The refusal does not wait for it.
+  {
+    name: "took a piece of the body and no more: the answer does not wait",
+    takes: true,
+    cancelled: false,
+  },
+])(
+  "a refusal of the retry, after a first try to a host that $name",
+  async ({ takes, cancelled: heard }) => {
+    const { secret, upstream } = await vault(GRANT);
+    // the caller's body, which never ends, and says when its source hears of a cancel
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => controller.enqueue(new TextEncoder().encode('{"name":"sink"}')),
+      cancel: () => void (cancelled = true),
+    });
+    const urls: string[] = [];
+    upstream.mockImplementation(async (request: Request) => {
+      urls.push(request.url);
+      if (request.url === `${API}/token`) return Response.json({ access_token: "new-access-aaaa" });
+      if (takes) {
+        const reader = request.body?.getReader();
+        await reader?.read();
+        reader?.releaseLock();
+      }
+      // The host takes the token no more. After the refresh, when its answer is dropped, the
+      // owner gives the secret again, with a body field for this very request.
+      const dropped = new ReadableStream({
+        cancel: async () => {
+          await secret.secret(PATH, "set", {
+            material: "given-again-aaaa",
+            urls: [API],
+            bodyFields: [SINKS],
+          });
+        },
+      });
+      return new Response(dropped, { status: 401 });
+    });
+    const answer = await secret.fetch(
+      new Request(`${API}/sinks`, {
+        method: "POST",
+        body,
+        headers: {
+          authorization: `Bearer ${ACCESS}`,
+          "content-type": "application/json",
+          [SECRET_USE_HEADER]: PATH,
+        },
+        // the cast: a stream as a body needs `duplex`, which workers-types' RequestInit does not declare
+        ...({ duplex: "half" } as object),
+      }),
+    );
+    expect({ status: answer.status, urls, cancelled }).toEqual({
+      // the retry would fill a body now, which the first try did not: it does not leave
+      status: 409,
+      urls: [`${API}/sinks`, `${API}/token`],
+      cancelled: heard,
+    });
+  },
+);
 
 test.for([
   {

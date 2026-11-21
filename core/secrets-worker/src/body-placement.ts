@@ -26,7 +26,7 @@
 // request whose body is filled (./secret/durable-object.ts `fetch`).
 import type { SecretBodyField } from "iterate/api";
 import { SECRET_PLACEHOLDER } from "iterate/secret-placeholder";
-import { HELD_BODY_LIMIT, methodsOf } from "./approval.ts";
+import { HELD_BODY_LIMIT, type HeldFills, methodsOf } from "./approval.ts";
 import { isRecord, SecretRefused, type SecretResolver, secretValueOf } from "./secrets.ts";
 
 /** THE FIELDS OF A REQUEST'S BODY THAT A SECRET FILLS: those of its body fields whose method and
@@ -44,6 +44,20 @@ export const fieldsToFill = (
         request.url.split("#")[0] === url && methodsOf(request).every((taken) => taken === method),
     )
     .map(({ field }) => field);
+
+/** WHETHER A REQUEST CAN LEAVE AS IT WAS READ. `meant`: what its first read found for the secret
+ *  to fill in its body, or what it was held with (./approval.ts `HeldRequest.fills`); none for a
+ *  request that filled nothing. `version` and `toFill` (`fieldsToFill`) are the secret's now. A
+ *  request leaves with those fields from that version of the secret, or with none from a secret
+ *  that names none for it. A secret that was given again since has another version and may name
+ *  other fields: what would go into the body now is not what was read, or what a member
+ *  approved. One rule for the request that is sent and for the request that still waits
+ *  (./secret/durable-object.ts `fetch`, `#heldRows`). */
+export const leavesAsRead = (
+  meant: HeldFills | undefined,
+  version: number | undefined,
+  toFill: readonly string[],
+): boolean => (meant ? meant.version === version : !toFill.length);
 
 /** THE BODY OF A REQUEST THAT FILLS, parsed, and the places in it that are filled: those of
  *  `fields` (`fieldsToFill`) whose whole value is one placeholder. `headers` are the request's as

@@ -215,11 +215,21 @@ export function requestText(request: {
   } satisfies HeldRequest);
 }
 
+/** A held request without its body, from its stored text: its method, URL and headers as a rule
+ *  and a secret's body fields read them (`methodsOf`, ./body-placement.ts `fieldsToFill`), and
+ *  what it was held to fill (`HeldRequest.fills`). */
+export function heldOfText(text: string) {
+  const { headers, ...held } = HeldText.parse(JSON.parse(text));
+  return { ...held, headers: new Headers(headers) };
+}
+
 /** What a held request fills (`HeldRequest.fills`), from its stored text. */
-export const fillsOfText = (text: string): HeldFills | undefined =>
-  HeldText.parse(JSON.parse(text)).fills;
+export const fillsOfText = (text: string): HeldFills | undefined => heldOfText(text).fills;
 
 const HeldText = z.object({
+  method: z.string(),
+  url: z.string(),
+  headers: z.array(z.tuple([z.string(), z.string()])),
   fills: z.object({ fields: z.array(z.string()), version: z.number() }).optional(),
 });
 
