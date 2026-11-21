@@ -66,7 +66,9 @@ function Front({ itx }) {
       (agents) =>
         setList(
           agents
-            .filter((agent) => agent.path.startsWith("/agents/meet/"))
+            // the meetings alone: a meeting's own call (`<meeting>/call`) is a context under it,
+            // which the catalog lists too, and which has no agent and no chat
+            .filter((agent) => /^\/agents\/meet\/[^/]+$/.test(agent.path))
             .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
             .slice(0, 50),
         ),
