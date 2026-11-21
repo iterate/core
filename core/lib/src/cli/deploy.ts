@@ -78,6 +78,7 @@ export type DeployInput = {
   newAccount?: boolean;
   owner?: string;
   controlPlaneHostname?: string;
+  egressGateway?: string;
   /** where each mail is forwarded as it arrived; `none` stops the forward (`deployConfigOf`) */
   mailForwardTo?: string;
   yes?: boolean;
@@ -148,6 +149,7 @@ export function deployConfigOf(answers: {
   domain: string;
   owner?: string;
   controlPlaneHostname?: string;
+  egressGateway?: string;
   mailForwardTo?: string;
   deployed?: DeployedMind;
 }) {
@@ -196,7 +198,15 @@ export function deployConfigOf(answers: {
     ownerEmails,
     topology: deployed?.topology || ("full-cloudflare" as const),
     alchemy: { ...kept?.alchemy, stageName: deployed?.stageName || stageNameOf(answers.domain) },
-    cloudflare: { ...kept?.cloudflare, accountId: answers.accountId, zones },
+    cloudflare: {
+      ...kept?.cloudflare,
+      accountId: answers.accountId,
+      zones,
+      // the egress gateway is what the flag says, else what the mind has; `none` takes it away
+      ...(answers.egressGateway && {
+        egressGatewayWorker: answers.egressGateway === "none" ? undefined : answers.egressGateway,
+      }),
+    },
   };
 }
 
@@ -1976,6 +1986,7 @@ export async function deployMind(input: DeployInput) {
       domain,
       owner: mind ? input.owner : await newOwner(),
       controlPlaneHostname: input.controlPlaneHostname,
+      egressGateway: input.egressGateway,
       mailForwardTo: input.mailForwardTo,
       deployed: mind,
     });

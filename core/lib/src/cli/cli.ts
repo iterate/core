@@ -241,6 +241,12 @@ const launcherProcedures = {
           .describe(
             "Where the mind's sign-in, API and MCP server answer: the domain itself, or one label under it (default: iterate.<domain>; for a mind that is there already: the one it has)",
           ),
+        egressGateway: z
+          .string()
+          .optional()
+          .describe(
+            "The stack's egress gateway: a Worker of the account, by name, that carries what the mind's itx.fetch sends out of the stack, each request with its secret in. It is trusted as the vault is. `none` takes it away (default: none; for a mind that is there already: what it has)",
+          ),
         mailForwardTo: z
           .string()
           .optional()

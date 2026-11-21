@@ -1,6 +1,6 @@
 // THE BOUNDARY'S ONE RULE (./http.ts): a request on the control-plane hostname is the control plane's,
 // and a request on any other hostname goes to the mind, for its config worker.
-import { MIND_PROVIDE_EXTERNAL_MIND_HEADER } from "iterate/mind-api";
+import { MIND_EGRESS_GATEWAY_PATH, MIND_PROVIDE_EXTERNAL_MIND_HEADER } from "iterate/mind-api";
 import type { AuthService } from "iterate/workers";
 import { expect, test } from "vitest";
 import { boundaryResponse, isControlPlaneRequest, type MindTransport } from "./http.ts";
@@ -84,6 +84,54 @@ test("a stack whose mind is a Worker takes no mind: the dial is refused, and not
   const answer = await stack.answered("https://iterate.example.com/api", DIAL);
   expect(answer).toMatchObject({ status: 403 });
   expect(stack).toMatchObject({ asked: [], linked: [], reachedMind: [] });
+});
+
+// THE EGRESS GATEWAY'S PATH (iterate/mind-api `MIND_EGRESS_GATEWAY_PATH`): what a computer dials
+// with the ticket that `provideEgressGateway` answered.
+const GATEWAY_URL = `https://iterate.example.com${MIND_EGRESS_GATEWAY_PATH}`;
+const TICKET_DIAL = { upgrade: "websocket", authorization: "Bearer a-ticket" };
+
+test("a dial of /api/egress-gateway goes to the gateway's Providers entrypoint, unasked: the auth Worker and the mind are not called, and no stamp of a caller goes with it", async () => {
+  const stack = stackOf({ gateway: true });
+  const answer = await stack.answered(GATEWAY_URL, {
+    ...TICKET_DIAL,
+    "sec-websocket-protocol": "iterate-egress.v1",
+    "x-itx-principal": "a stamp that only the boundary writes",
+    cookie: "__Host-iterate-session=live",
+  });
+  expect(await answer.text()).toBe("the egress gateway's socket");
+  expect(stack).toMatchObject({
+    asked: [],
+    // the ticket and the subprotocol arrive as they were sent; a stamp and a cookie do not
+    providerDials: [[GATEWAY_URL, "Bearer a-ticket", "iterate-egress.v1", "websocket", null, null]],
+    linked: [],
+    reachedMind: [],
+    reachedAuth: [],
+  });
+});
+
+test("a stack with no egress gateway has no such path: 404, and nothing is asked", async () => {
+  const stack = stackOf();
+  for (const headers of [TICKET_DIAL, {}])
+    expect(await stack.answered(GATEWAY_URL, headers)).toMatchObject({ status: 404 });
+  expect(stack).toMatchObject({ asked: [], providerDials: [], reachedMind: [], reachedAuth: [] });
+});
+
+test("the path is exact: a longer path goes to the mind, as before", async () => {
+  const stack = stackOf({ gateway: true });
+  for (const url of [`${GATEWAY_URL}/`, `${GATEWAY_URL}/x`])
+    expect(await (await stack.answered(url, TICKET_DIAL)).text(), url).toBe("the mind's own");
+  expect(stack).toMatchObject({ providerDials: [] });
+  expect(stack.reachedMind).toHaveLength(2);
+});
+
+test("a request of that path that is no WebSocket upgrade never reaches the gateway: 426", async () => {
+  const stack = stackOf({ gateway: true });
+  for (const init of [{}, { method: "POST" }]) {
+    const answer = await stack.answered(GATEWAY_URL, { authorization: "Bearer a-ticket" }, init);
+    expect([answer.status, answer.headers.get("upgrade")]).toEqual([426, "websocket"]);
+  }
+  expect(stack).toMatchObject({ providerDials: [], asked: [], reachedMind: [] });
 });
 
 test.for([
@@ -170,7 +218,10 @@ test("only the Door's own request to a host of the mind carries the own stamp an
  *  Worker was asked about, with the audience. `link`: the mind runs elsewhere, and `linked` is
  *  each dial that the boundary let in. The home lab's token is live for the audience of the right
  *  to hand in a mind alone. */
-function stackOf({ link = false } = {}) {
+function stackOf({ link = false, gateway = false } = {}) {
+  /** each dial that reached the egress gateway's entrypoint for its providers: its URL, its ticket,
+   *  its subprotocol, its upgrade, a caller's stamp, a cookie */
+  const providerDials: (string | null)[][] = [];
   const reachedAuth: string[] = [];
   const reachedMind: string[] = [];
   const asked: string[][] = [];
@@ -198,6 +249,21 @@ function stackOf({ link = false } = {}) {
           : null;
       },
     } as Partial<AuthService>,
+    ...(gateway && {
+      EGRESS_GATEWAY_PROVIDERS: {
+        fetch: async (dial: Request) => {
+          providerDials.push([
+            dial.url,
+            dial.headers.get("authorization"),
+            dial.headers.get("sec-websocket-protocol"),
+            dial.headers.get("upgrade"),
+            dial.headers.get("x-itx-principal"),
+            dial.headers.get("cookie"),
+          ]);
+          return new Response("the egress gateway's socket");
+        },
+      },
+    }),
   } as Parameters<typeof boundaryResponse>[1];
   const mind = {
     fetch: async (request: Request) => {
@@ -217,11 +283,12 @@ function stackOf({ link = false } = {}) {
     passThroughOnException() {},
   } as unknown as ExecutionContext;
   return {
-    answered: (url: string, headers: Record<string, string> = {}) =>
-      boundaryResponse(new Request(url, { headers }), env, ctx, mind),
+    answered: (url: string, headers: Record<string, string> = {}, init: RequestInit = {}) =>
+      boundaryResponse(new Request(url, { ...init, headers }), env, ctx, mind),
     reachedAuth,
     reachedMind,
     asked,
     linked,
+    providerDials,
   };
 }

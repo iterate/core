@@ -1,6 +1,6 @@
 // The authority over one secret. The mind's `/secrets/<name>` context is its record, which the
 // mind's own code can withhold from or forge into, so nothing here reads it.
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, env } from "cloudflare:workers";
 import type {
   CloudClientName,
   SecretBodyField,
@@ -12,8 +12,8 @@ import type {
 import {
   codedError,
   errorCode,
+  fetchLeavingTheStack,
   ITERATE_CAUSE_HEADER,
-  leavingTheStack,
   reportIssue,
 } from "iterate/lib";
 import { type Facts, withFacts } from "iterate/facts";
@@ -2547,7 +2547,7 @@ const dispatch = async (request: Request, place = "the pinned host"): Promise<Re
   let overdue: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      fetch(leavingTheStack(request), { redirect: "manual" }),
+      fetchLeavingTheStack(env, request, { redirect: "manual" }),
       new Promise<Response>((answer) => {
         overdue = setTimeout(
           () =>
@@ -2561,7 +2561,9 @@ const dispatch = async (request: Request, place = "the pinned host"): Promise<Re
         );
       }),
     ]);
-  } catch {
+  } catch (error) {
+    // The origin and the error's code, when it has one. The error's own text may quote the URL.
+    console.error({ event: "secret.send-failed", origin, code: errorCode(error) });
     const unreachable = `itx.fetch: ${place} ${origin} could not be reached`;
     // a proxy's failure is a gateway's
     throw place === "the pinned host"

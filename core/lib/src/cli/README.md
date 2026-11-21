@@ -128,6 +128,10 @@ What it does, in order:
      forwarded as it arrived ([core/alchemy](../../../alchemy/README.md#the-one-input)). The
      address must be a verified destination address of the account's Email Routing, which a
      person adds in the dashboard; while it is not, every mail to the mind fails for its sender.
+   - `cloudflare.egressGatewayWorker`: absent, unless `--egress-gateway <Worker name>` names a
+     Worker of the account that carries what a mind's `itx.fetch` sends out of the stack, each
+     request with its secret in ([core/alchemy](../../../alchemy/README.md) says what does not
+     go through it). With none, the stack binds no gateway and Cloudflare's own fetch sends.
    - `mindId`: for a new mind, the id of the identity that the command makes right before the
      deploy ([The mind's identity key](#the-minds-identity-key)). A mind that is there already
      keeps its own.
@@ -159,10 +163,11 @@ What it does, in order:
 command reads that mind's own config from Cloudflare (the boundary Worker's variable `ITERATE`),
 shows it, and deploys over it. The deploy starts from the whole config that the mind was deployed
 with, which the stack keeps in the boundary Worker's variable `DEPLOY_CONFIG`, so every field
-stays, the sandboxes' image and the mail forward among them. `--owner`,
-`--control-plane-hostname` and `--mail-forward-to` each replace what the mind has;
-`--mail-forward-to none` removes the forward. It asks first; `--yes` is the yes. No file of an earlier deploy is needed. A
-run over a mind with a sandbox image planned no changes and took 29 s (18 Nov 2026).
+stays, the sandboxes' image, the mail forward and the egress gateway among them. `--owner`,
+`--control-plane-hostname`, `--mail-forward-to` and `--egress-gateway` each replace what the mind
+has; `--mail-forward-to none` removes the forward, and `--egress-gateway none` the gateway. It
+asks first; `--yes` is the yes. No file of an earlier deploy is needed. A run over a mind with a
+sandbox image planned no changes and took 29 s (18 Nov 2026).
 
 - A mind deployed before the stack kept `DEPLOY_CONFIG` is refused, with nothing changed: deploy
   it once with core/alchemy's script and its own config, then the command works over it.

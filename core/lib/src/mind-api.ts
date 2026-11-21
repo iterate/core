@@ -119,6 +119,16 @@ export const mindProvideConnectResourceOf = (controlPlaneHostname: string) =>
  *  invocation reaches, and not in the one invocation that answers an ordinary dial. */
 export const MIND_PROVIDE_EXTERNAL_MIND_HEADER = "x-iterate-provide-external-mind";
 
+/** The path that a computer dials to carry bytes for the stack's egress gateway, with the ticket
+ *  that `provideEgressGateway` answered (core/boundary-worker/src/http.ts has its rule). */
+export const MIND_EGRESS_GATEWAY_PATH = "/api/egress-gateway";
+
+/** THE NAME OF THE KEY OF A COMPUTER THAT PROVIDES THE EGRESS GATEWAY ITS WAY OUT. A key for this
+ *  name lends the mind nothing: it gets `provideEgressGateway` and reaches nothing of the mind.
+ *  No member can allow a key for it now: the auth Worker refuses one
+ *  (core/auth-worker/src/key-rules.ts) until that key has words of its own on the page. */
+export const EGRESS_GATEWAY_KEY_NAME = "egressGateway";
+
 /** RFC 9728 §3.1. */
 export function protectedResourceMetadataUrlOf(resource: string) {
   const { origin, pathname } = new URL(resource);

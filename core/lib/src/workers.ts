@@ -136,6 +136,7 @@ export interface TelemetryService {
  *      a member's token, or a member's cookie    `mind`, as that member
  *      a key's token                             `mind`, the key's one lend
  *      the token of the right to hand in a mind  `provideExternalMind`, and nothing else
+ *      the token of a key for `egressGateway`    `provideEgressGateway`, and nothing else
  */
 export interface ControlPlaneSession extends ControlPlaneSessionApi {
   /** THE MIND RUNS ELSEWHERE AND HANDS IN HOW TO REACH IT. Only a token of that right calls it
@@ -145,6 +146,35 @@ export interface ControlPlaneSession extends ControlPlaneSessionApi {
    *  answers, until the session ends, which it does when the token does. A newer session's call
    *  takes the mind over. `door` is the function's for its call alone: `door.dup()` keeps it. */
   provideExternalMind(connect: (door: Door) => MindTarget): void;
+  /** A COMPUTER PROVIDES THE EGRESS GATEWAY ITS WAY OUT. Only a key that a member allowed for the
+   *  name `egressGateway` calls it (./mind-api.ts `EGRESS_GATEWAY_KEY_NAME`), and that session
+   *  has no `mind`. The first call answers a `ticket` for one dial of `url` within 30 seconds
+   *  (./mind-api.ts `MIND_EGRESS_GATEWAY_PATH`): that socket carries the bytes. The computer
+   *  keeps its link by calling again before `until` (epoch milliseconds) with the `link` that it
+   *  got. Each call asks about the key again: a key that a member removed is refused, and its
+   *  links end at once. */
+  provideEgressGateway(input?: {
+    link?: string;
+  }): Promise<{ url: string; link: string; ticket?: string; until: number }>;
+}
+
+/** THE EGRESS GATEWAY'S ENTRYPOINT FOR THE COMPUTERS THAT PROVIDE ITS WAY OUT: the gateway
+ *  Worker's second entrypoint (`EgressGatewayProviders`), which the stack's deploy binds to the
+ *  boundary alone as `EGRESS_GATEWAY_PROVIDERS`. What leaves the stack goes to the other
+ *  entrypoint (iterate/lib `EgressGateway`). */
+export interface EgressGatewayProviders {
+  /** THE KEY MAY HOLD ITS LINK UNTIL `until` (epoch milliseconds; 0: end every link of the key
+   *  now). With no `link`, or with one that the gateway no longer has: a new link's id and the
+   *  ticket for its one dial. With a `link` of this key that is attached: that link, extended,
+   *  and no ticket. A link of another key, and a second `mind`, are refused. */
+  lease(provider: {
+    mind: string;
+    key: string;
+    link?: string;
+    until: number;
+  }): Promise<{ link: string; ticket?: string }>;
+  /** The dial of `MIND_EGRESS_GATEWAY_PATH`, with its ticket: the gateway accepts the socket. */
+  fetch(dial: Request): Promise<Response>;
 }
 
 /** THE CLOSE CODE OF A SESSION WHOSE MIND ANOTHER SESSION TOOK OVER (`provideExternalMind`

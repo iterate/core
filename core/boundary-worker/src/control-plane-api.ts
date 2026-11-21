@@ -7,6 +7,7 @@
 //   ControlPlaneSessionRpcTarget    what the credential is for, and nothing more
 //     get mind                      the mind's own API, from `MindTransport.api(who)`
 //     provideExternalMind(connect)  a mind that runs elsewhere hands itself in
+//     provideEgressGateway(input?)  a computer provides the egress gateway its way out
 //
 // One function hosts a session from its socket to its end (`controlPlaneApiResponse`), in both
 // places where a session ends: the boundary's own invocation, and the object that holds the link
@@ -26,16 +27,23 @@ import {
   WebSocketPair,
 } from "capnweb";
 import { endWhenSilent } from "core-itx/end-when-silent";
-import { codedError } from "iterate/lib";
-import { mindApiUrlOf, mindProvideConnectResourceOf } from "iterate/mind-api";
+import { codedError, withTimeout } from "iterate/lib";
+import {
+  EGRESS_GATEWAY_KEY_NAME,
+  MIND_EGRESS_GATEWAY_PATH,
+  mindApiUrlOf,
+  mindProvideConnectResourceOf,
+} from "iterate/mind-api";
 import { controlPlaneOriginOf, type MindConfig } from "iterate/mind-config";
 import { STACK_KEY_PATH } from "iterate/signed";
 import {
   type ApiCaller,
   type AuthService,
   type ControlPlaneSession,
+  type EgressGatewayProviders,
   MIND_TAKEN_OVER_CLOSE_CODE,
 } from "iterate/workers";
+import { z } from "zod";
 import type { MindTransport } from "./http.ts";
 import { type MindApiStub, SessionMind } from "./session-mind.ts";
 import { bearerOf } from "./stamp.ts";
@@ -52,8 +60,10 @@ export type ConnectStub = RpcStub<Parameters<ControlPlaneSession["provideExterna
  *      session there. */
 export type ControlPlaneApiHost = {
   auth: Pick<AuthService, "whoIs" | "browserSession" | "fetch">;
-  config: Pick<MindConfig, "controlPlaneHostname" | "topology">;
+  config: Pick<MindConfig, "controlPlaneHostname" | "topology" | "mindId">;
   mind?: Pick<MindTransport, "api" | "fetch">;
+  /** The egress gateway's entrypoint for its providers, when the stack's deploy names a gateway. */
+  egressGatewayProviders?: Pick<EgressGatewayProviders, "lease">;
   /** This session's part of `provideExternalMind`, made once for the session. */
   handIn?: (session: ApiSession) => (connect: ConnectStub) => Promise<void>;
 };
@@ -154,6 +164,7 @@ export function controlPlaneApiResponse(request: Request, host: ControlPlaneApiH
       auth: host.auth,
       config: host.config,
       mind: host.mind,
+      egressGatewayProviders: host.egressGatewayProviders,
       handIn: host.handIn?.(ours),
       // The ten seconds are the client's to call in, not the auth Worker's and the mind's to
       // answer in: they stop while a call of `authenticate` runs, and start again when it is
@@ -172,6 +183,7 @@ export function controlPlaneApiResponse(request: Request, host: ControlPlaneApiH
         );
       },
       mindChanged: () => end("mind"),
+      credentialEnded: () => end("credential"),
     }),
   );
   // A CLIENT THAT WENT WITH NO CLOSE (a laptop asleep, a dropped network) leaves a socket that
@@ -211,7 +223,7 @@ const webSocketOnly = () =>
 /** What a root is made with: its host's (`ControlPlaneApiHost`), the headers of the WebSocket's
  *  own request (`authenticate` with no token reads the credential that the request carried), and
  *  the session's own moments, which `controlPlaneApiResponse` acts on. */
-type RootDeps = Pick<ControlPlaneApiHost, "auth" | "config" | "mind"> & {
+type RootDeps = Pick<ControlPlaneApiHost, "auth" | "config" | "mind" | "egressGatewayProviders"> & {
   headers: Headers;
   handIn?: (connect: ConnectStub) => Promise<void>;
   authenticating(): void;
@@ -221,7 +233,18 @@ type RootDeps = Pick<ControlPlaneApiHost, "auth" | "config" | "mind"> & {
   authenticated(session: { endsAt: number; release(): void }): void;
   /** The mind that this session reached is gone, or the mind that it could not reach is back. */
   mindChanged(): void;
+  /** The session's credential was refused before its own end: the session ends now. */
+  credentialEnded(): void;
 };
+
+/** HOW LONG A PROVIDER HOLDS ITS LINK AFTER ONE CALL of `provideEgressGateway`. Its program calls
+ *  again every ten seconds. So a key that a member removed carries no byte after this time, and
+ *  after one call's wait when its program still calls. */
+const EGRESS_LEASE_MS = 30_000;
+
+/** A refusal this close to the token's end is taken as the token's end, not as a removed key:
+ *  the auth Worker's clock and this one are two clocks. */
+const TOKEN_END_MARGIN_MS = 5_000;
 
 /** How often a session asks after its mind (`#watchedMind`): a session over a mind that is gone,
  *  or over a refusal of a mind that is back, ends within this time. */
@@ -285,6 +308,15 @@ class ControlPlaneRpcTarget extends RpcTarget {
           "FORBIDDEN",
           "this socket's request says that it hands in a mind (the header x-iterate-provide-external-mind): only the token of a mind that runs elsewhere opens a session on it",
         );
+      // A PROVIDER'S KEY reaches nothing of the mind, and the mind is never asked.
+      if ("providerKey" in credential.who) {
+        authenticated({ endsAt: credential.endsAt, release: () => {} });
+        return new ControlPlaneSessionRpcTarget(
+          providesEgressGateway(),
+          providerHandsInNoMind,
+          this.#egressLeaseOf(credential.who.providerKey, credential.endsAt),
+        );
+      }
       const watched = await this.#watchedMind(mind, credential.who);
       authenticated({ endsAt: credential.endsAt, release: watched.release });
       return new ControlPlaneSessionRpcTarget(watched.mind, mindsOwnCredential);
@@ -294,6 +326,49 @@ class ControlPlaneRpcTarget extends RpcTarget {
       this.#deps.refused();
       throw error;
     }
+  }
+
+  /** ONE PROVIDER KEY'S `provideEgressGateway` (iterate/workers `ControlPlaneSession`), for its
+   *  session. A refusal of the key while this session's own clock holds its token live, by a
+   *  margin, means that a member removed the key: the gateway is told to end the key's links now
+   *  (`until: 0`), and the session ends. At the token's own end nothing is ended here: the
+   *  computer renews from a new session, and its link stays. The gateway never gets the token. */
+  #egressLeaseOf(key: { id: string; token: string }, endsAt: number) {
+    const { auth, config, egressGatewayProviders, credentialEnded } = this.#deps;
+    return async (input: unknown) => {
+      if (!egressGatewayProviders)
+        throw codedError(
+          "NO_SERVICE",
+          "this stack has no egress gateway: its deploy names none (iterate deploy --egress-gateway <Worker name>)",
+        );
+      const given = EgressLeaseInput.safeParse(input);
+      if (!given.success)
+        throw codedError(
+          "INVALID_INPUT",
+          "provideEgressGateway takes nothing, or { link } with the link's id that an earlier call answered",
+        );
+      const link = given.data?.link;
+      // ten seconds for the gateway to answer: a call of the session does not wait on it for longer
+      const lease = (provider: Parameters<EgressGatewayProviders["lease"]>[0]) =>
+        withTimeout(egressGatewayProviders.lease(provider), 10_000, "the egress gateway");
+      const identity = await auth.whoIs(key.token, mindApiUrlOf(config.controlPlaneHostname));
+      if (identity?.provide !== EGRESS_GATEWAY_KEY_NAME) {
+        if (Date.now() < endsAt - TOKEN_END_MARGIN_MS)
+          await lease({ mind: config.mindId, key: key.id, until: 0 }).catch((error) =>
+            console.error({ event: "boundary.egress-links-not-ended", error: String(error) }),
+          );
+        credentialEnded();
+        throw codedError("UNAUTHENTICATED", "this key no longer provides the egress gateway");
+      }
+      const until = Math.min(Date.now() + EGRESS_LEASE_MS, identity.expiresAt * 1000);
+      const leased = await lease({ mind: config.mindId, key: key.id, link, until });
+      return {
+        url: `wss://${config.controlPlaneHostname}${MIND_EGRESS_GATEWAY_PATH}`,
+        link: leased.link,
+        ticket: leased.ticket,
+        until,
+      };
+    };
   }
 
   /** THE MIND IS ASKED ONCE, AND ITS ANSWER IS KEPT: a getter that asked at each read would start
@@ -353,14 +428,17 @@ class ControlPlaneRpcTarget extends RpcTarget {
 class ControlPlaneSessionRpcTarget extends RpcTarget {
   readonly #mind: SessionMind | { refusal: unknown };
   readonly #handIn: (connect: ConnectStub) => Promise<void>;
+  readonly #egressLease: (input: unknown) => Promise<unknown>;
 
   constructor(
     mind: SessionMind | { refusal: unknown },
     handIn: (connect: ConnectStub) => Promise<void>,
+    egressLease: (input: unknown) => Promise<unknown> = noProviderKey,
   ) {
     super();
     this.#mind = mind;
     this.#handIn = handIn;
+    this.#egressLease = egressLease;
   }
 
   /** The same target at every read. It has no disposer of its own, so a stub of it that a client
@@ -373,11 +451,19 @@ class ControlPlaneSessionRpcTarget extends RpcTarget {
   async provideExternalMind(connect: ConnectStub) {
     await this.#handIn(connect);
   }
+
+  async provideEgressGateway(input?: unknown) {
+    return this.#egressLease(input);
+  }
 }
 
+/** What a call of `provideEgressGateway` takes: nothing, or the id of the link to keep. */
+const EgressLeaseInput = z.strictObject({ link: z.string().min(1).max(128).optional() }).optional();
+
 /** WHO A CREDENTIAL IS, AND WHEN IT ENDS, or null when it is not live. `who` is absent for the
- *  token of the right to hand in a mind, which is nobody of the mind's. With `token`, that token
- *  alone is asked about. With none, the request's own credential is: its `Authorization` header,
+ *  token of the right to hand in a mind, which is nobody of the mind's. A key for the egress
+ *  gateway is no caller of the mind's either: it is a provider's key, with its id and its token.
+ *  With `token`, that token alone is asked about. With none, the request's own credential is: its `Authorization` header,
  *  and with no such header its cookie. A request that carries an `Authorization` header of any
  *  kind never falls back to the cookie: the header and the cookie may name two people.
  *
@@ -389,10 +475,19 @@ class ControlPlaneSessionRpcTarget extends RpcTarget {
 async function credentialOf(
   { headers, auth, config }: Pick<RootDeps, "headers" | "auth" | "config">,
   token: string | undefined,
-): Promise<{ who?: ApiCaller; endsAt: number } | null> {
+): Promise<{
+  who?: ApiCaller | { providerKey: { id: string; token: string } };
+  endsAt: number;
+} | null> {
   const bearer = token || bearerOf(headers);
   if (bearer) {
     const identity = await auth.whoIs(bearer, mindApiUrlOf(config.controlPlaneHostname));
+    // a key for the egress gateway lends the mind nothing
+    if (identity?.provide === EGRESS_GATEWAY_KEY_NAME)
+      return {
+        who: { providerKey: { id: identity.grant, token: bearer } },
+        endsAt: identity.expiresAt * 1000,
+      };
     if (identity?.provide)
       return {
         who: {
@@ -431,6 +526,26 @@ const handsInMind = () => ({
     "this token hands in a mind that runs elsewhere, and reaches nothing of the mind: call provideExternalMind",
   ),
 });
+
+const providesEgressGateway = () => ({
+  refusal: codedError(
+    "FORBIDDEN",
+    "this key provides the egress gateway its way out, and reaches nothing of the mind: call provideEgressGateway",
+  ),
+});
+
+const providerHandsInNoMind = (): Promise<never> =>
+  Promise.reject(
+    codedError("FORBIDDEN", "this key provides the egress gateway, and hands in no mind"),
+  );
+
+const noProviderKey = (): Promise<never> =>
+  Promise.reject(
+    codedError(
+      "FORBIDDEN",
+      "provideEgressGateway takes the token of a key that a member allowed for the name egressGateway",
+    ),
+  );
 
 const mindsOwnCredential = (): Promise<never> =>
   Promise.reject(

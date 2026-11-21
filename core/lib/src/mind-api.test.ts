@@ -64,6 +64,9 @@ test.for([
   ["/oauth2/token", "auth"],
   ["/api", "api"],
   ["/api/files/a.txt", "api"],
+  // the path of the egress gateway's providers is a route of the API, and has no metadata document
+  ["/api/egress-gateway", "api"],
+  ["/.well-known/oauth-protected-resource/api/egress-gateway", "auth"],
   ["/apiary", "auth"],
   ["/.well-known/oauth-protected-resource/api", "api"],
   ["/mcp", "mcp"],

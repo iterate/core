@@ -33,6 +33,28 @@ with no passkey left a way back in. What follows is the deploy by hand.
   `iterate-<alchemy.stageName>-turn`, by Alchemy's own resources. The secrets Worker alone holds
   their secrets, and serves them as `/secrets/cloudflare-realtime-sfu` and
   `/secrets/cloudflare-turn`. They cost nothing until a call uses them.
+- An egress gateway, only when the input names one (`cloudflare.egressGatewayWorker`): a Worker
+  of the account that the stack does not make. The vault and the boundary get it as
+  `EGRESS_GATEWAY` and send through it what a mind's `itx.fetch` sends out of the stack, each
+  request with its secret in. The field's doc in `src/config.ts` lists what does not go through
+  it. The boundary alone gets the gateway's entrypoint `EgressGatewayProviders` as
+  `EGRESS_GATEWAY_PROVIDERS`. Give each stack a gateway Worker of its own: one gateway serves
+  one stack. An input that names none binds nothing, and Cloudflare's own fetch sends.
+  - **Never roll the vault or the boundary back to a Worker version from before the deploy that
+    named the gateway.** A version holds a Worker's code, bindings and variables together, so
+    that version has no gateway: its requests leave by Cloudflare's own fetch, the vault's with
+    the secret in. The way back from a bad gateway is `--egress-gateway none` or a new deploy,
+    never a version id.
+  - **Never edit the vault's or the boundary's bindings by hand** (the dashboard, or an upload
+    that keeps the variables). A version that is written without the gateway's binding sends by
+    Cloudflare's own fetch, as the version from before the gateway does.
+  - A gateway that throws, that answers an error, or that was deleted fails the sends. Nothing
+    then leaves another way.
+  - A plan or a deploy that names a Worker which does not exist fails, and changes nothing:
+    Alchemy looks the Worker up by its name. A destroy does not look it up: it passes when the
+    gateway Worker is gone. Nothing checks that the Worker has the entrypoint
+    `EgressGatewayProviders`: without it the deploy passes, and a dial of `/api/egress-gateway`
+    is a 500.
 - Our own providers beside the script handle what Alchemy does not do yet (read in 2.0.0-beta.85
   and beta.87, the version that `pnpm-workspace.yaml` pins), along with thin wrappers of Alchemy's
   providers (`src/realtime.ts`, `src/telemetry-token.ts`). The header of each file says what, and

@@ -14,6 +14,7 @@ import {
   environmentTitle,
   forwardIssues,
   ITERATE_CAUSE_HEADER,
+  fetchLeavingTheStack,
   leavingTheStack,
   oneStepDeeper,
   isSameOriginBrowserRequest,
@@ -331,6 +332,60 @@ test("oneStepDeeper: a cause with no clock starts one, and keeps what else it ca
   vi.useRealTimers();
 });
 
+// ── THE LAST HOP OF A REQUEST THAT LEAVES THE STACK (`fetchLeavingTheStack`) ──
+
+test("a request that leaves a stack with an egress gateway goes through it or not at all", async () => {
+  const hop = lastHop();
+  const request = () =>
+    new Request("https://origin.example/x", { headers: { authorization: "Bearer the-secret" } });
+  const answer = await fetchLeavingTheStack(hop.env, request(), { redirect: "follow" });
+  expect(await answer.text()).toBe("carried");
+  // once, and a gateway follows no redirect whatever the caller's init says
+  expect(hop).toMatchObject({
+    carried: [{ url: "https://origin.example/x", init: { redirect: "manual" }, cause: null }],
+  });
+  expect(hop.carried).toHaveLength(1);
+  // a gateway that fails is the request's failure
+  const down = new Error("the gateway is down");
+  await expect(
+    fetchLeavingTheStack({ EGRESS_GATEWAY: { fetch: () => Promise.reject(down) } }, request()),
+  ).rejects.toBe(down);
+  // and a gateway's own 502 comes back as it is
+  const refused = new Response("no way out\n", { status: 502 });
+  expect(await fetchLeavingTheStack(lastHop(() => refused).env, request())).toBe(refused);
+  expect(hop).toMatchObject({ platform: [] });
+});
+
+test("a stack with no egress gateway sends by the platform's fetch with the caller's own init, and calls nothing else", async () => {
+  const hop = lastHop();
+  const init = { redirect: "manual" } as const;
+  const answer = await fetchLeavingTheStack({}, new Request("https://origin.example/x"), init);
+  expect(await answer.text()).toBe("by the platform's fetch");
+  expect(hop).toMatchObject({
+    platform: [{ url: "https://origin.example/x", init, cause: null }],
+  });
+  // with no init the platform's fetch gets none, so it follows a redirect
+  await fetchLeavingTheStack({}, new Request("https://origin.example/y"));
+  expect(hop.platform[1]).toEqual({
+    url: "https://origin.example/y",
+    init: undefined,
+    cause: null,
+  });
+  expect(hop).toMatchObject({ carried: [] });
+});
+
+test("the cause mark leaves as causeLeavingTheStack gives it, through a gateway and without one", async () => {
+  const hop = lastHop();
+  const mark = JSON.stringify({ chain: "2026-11-19T00:00:00.000Z with a request ~n1", depth: 3 });
+  const marked = () =>
+    new Request("https://origin.example/x", { headers: { [ITERATE_CAUSE_HEADER]: mark } });
+  await fetchLeavingTheStack(hop.env, marked());
+  await fetchLeavingTheStack({}, marked());
+  const outside = causeLeavingTheStack(mark);
+  expect(outside).toContain("another stack");
+  expect([hop.carried[0]?.cause, hop.platform[0]?.cause]).toEqual([outside, outside]);
+});
+
 const roundtrip = (a: unknown, b: unknown) => {
   const ops = diff(a, b);
   expect(ops, `diff(${JSON.stringify(a)}, ${JSON.stringify(b)})`).toBeDefined();
@@ -342,4 +397,27 @@ function decodeSvg(href: string) {
   const prefix = "data:image/svg+xml,";
   expect(href.startsWith(prefix)).toBe(true);
   return decodeURIComponent(href.slice(prefix.length));
+}
+
+/** A gateway that says what it was handed, and the platform's fetch, which says what it sent. */
+function lastHop(answer: () => Promise<Response> | Response = () => new Response("carried")) {
+  const carried: { url: string; init?: RequestInit; cause: string | null }[] = [];
+  const platform: { url: string; init?: RequestInit; cause: string | null }[] = [];
+  const seen = (into: typeof carried) => (request: Request, init?: RequestInit) =>
+    void into.push({ url: request.url, init, cause: request.headers.get(ITERATE_CAUSE_HEADER) });
+  vi.stubGlobal("fetch", async (request: Request, init?: RequestInit) => {
+    seen(platform)(request, init);
+    return new Response("by the platform's fetch");
+  });
+  const gateway = {
+    fetch: async (request: Request, init?: RequestInit) => {
+      seen(carried)(request, init);
+      return answer();
+    },
+  };
+  return {
+    env: { EGRESS_GATEWAY: gateway },
+    carried,
+    platform,
+  };
 }

@@ -1,3 +1,4 @@
+import { EGRESS_GATEWAY_KEY_NAME } from "iterate/mind-api";
 import { type MindConfig, controlPlaneOriginOf, zoneOf } from "iterate/mind-config";
 
 /** WHERE A PAGE OF THIS WORKER MAY SEND A PERSON ON, of the `next` a link gave: an address of
@@ -82,6 +83,10 @@ const PLATFORM_NAMES = new Set([
   // a row of the default config's agents (agents.ts), not a root: the mind's table refuses it for a
   // key
   "agents",
+  // Kept for the key of a computer that provides the egress gateway its way out, which lends the
+  // mind nothing (iterate/mind-api `EGRESS_GATEWAY_KEY_NAME`). No member is asked to allow one
+  // under the words of a lend: the page gets that key's own words first.
+  EGRESS_GATEWAY_KEY_NAME,
 ]);
 
 // `actor` allows no `_`, so it is never a user's id, `user_…`.

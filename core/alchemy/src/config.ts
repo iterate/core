@@ -39,6 +39,18 @@ export const MindConfig = z
       /** An image in the account's registry that sandboxes start. Absent: Cloudflare's own small
        *  image. Only iterate's own mind sets it. */
       containerImage: z.string().min(1).optional(),
+      /** THE STACK'S EGRESS GATEWAY: a Worker of this account, by name. The vault and the
+       *  boundary get it as `EGRESS_GATEWAY` and send through its fetch, with no other way out
+       *  (iterate/lib `fetchLeavingTheStack`), each request with its secret in. So whoever deploys
+       *  names it, and nothing in a mind can. One gateway Worker serves one stack.
+       *    - THROUGH IT: what a mind sends by `itx.fetch` to a host outside its zones (a script,
+       *      an agent, loaded code, a sandbox), with a secret or without; a secret's token
+       *      refresh and its exchange code; a request signed for another mind.
+       *    - NOT THROUGH IT: the vault's calls to an iterate Cloud; the auth, mind and telemetry
+       *      Workers' own fetches (other minds' identity, module downloads, Git, Cloudflare's
+       *      API); the managed bindings (AI, Browser, Images, mail).
+       *  Absent: no binding, and the platform's fetch sends. */
+      egressGatewayWorker: z.string().min(1).optional(),
     }),
     /** A FORWARD BY THE STACK, beside the config's own `email` method (iterate/sdk), where a
      *  mind's config forwards. Absent: the config's `email` alone decides where a mail goes. `forwardTo`:

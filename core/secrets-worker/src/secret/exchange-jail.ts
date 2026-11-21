@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import type { SecretMaterial } from "iterate/api";
+import { type EgressGatewayEnv, fetchLeavingTheStack } from "iterate/lib";
 import { z } from "zod";
 import { originPinned, sha256Hex } from "../secrets.ts";
 
@@ -8,7 +9,7 @@ const REFUSED_HEADER = "x-itx-exchange-refused";
 
 // The props, the pin, are out of the loaded code's reach. Redirects come back through here each
 // time; `connect()` sockets have no handler, so they fail.
-export class PinnedOutbound extends WorkerEntrypoint<object, { urls: string[] }> {
+export class PinnedOutbound extends WorkerEntrypoint<EgressGatewayEnv, { urls: string[] }> {
   override async fetch(request: Request): Promise<Response> {
     const { origin } = new URL(request.url);
     if (!originPinned(request.url, this.ctx.props.urls))
@@ -17,7 +18,8 @@ export class PinnedOutbound extends WorkerEntrypoint<object, { urls: string[] }>
         headers: { [REFUSED_HEADER]: origin },
       });
     console.info({ event: "secret.exchange-request", origin });
-    const response = await fetch(request, { redirect: "manual" });
+    // an exchange carries the secret's material: it leaves as every request of the vault does
+    const response = await fetchLeavingTheStack(this.env, request, { redirect: "manual" });
     if (!response.headers.has(REFUSED_HEADER)) return response;
     // an upstream's own copy of the header must not fail its secret's refresh
     const headers = new Headers(response.headers);

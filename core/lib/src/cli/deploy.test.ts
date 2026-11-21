@@ -690,6 +690,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
       accountId,
       zones: ["ada-labs.com"],
       containerImage: `registry.cloudflare.com/${accountId}/iterate-sandbox@sha256:${"ab".repeat(32)}`,
+      egressGatewayWorker: "ada-egress",
     },
     mail: { forwardTo: "team@group.example" },
   });
@@ -761,6 +762,16 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
   expect(() => overMind(whole, { mailForwardTo: "team@ada-labs.com" })).toThrow(
     /domain of the mind/,
   );
+  // the egress gateway: a flag names another Worker, `none` takes it away, no flag keeps it
+  expect(overMind(whole, { egressGateway: "other-egress" })).toEqual({
+    ...whole,
+    cloudflare: { ...whole.cloudflare, egressGatewayWorker: "other-egress" },
+  });
+  const { egressGatewayWorker: __, ...withoutGateway } = whole.cloudflare;
+  expect(JSON.parse(JSON.stringify(overMind(whole, { egressGateway: "none" })))).toEqual({
+    ...whole,
+    cloudflare: withoutGateway,
+  });
   // a mind deployed before the stack kept its whole config is read, with no deploy config: the
   // command then deploys nothing over it (deployMind)
   expect(

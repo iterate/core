@@ -53,7 +53,7 @@ type ErrorCode =
   | "MIND_NAME_TAKEN" // minds.create({ mind }): a mind of that slug exists in another org; minds.rename(mind, { slug }): another mind holds the slug
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
-  | "NO_SERVICE" // itx.services.<name>: the stack's config binds no service of that name (core/alchemy config `services`)
+  | "NO_SERVICE" // itx.services.<name>: the stack's config binds no service of that name (core/alchemy config `services`); `provideEgressGateway` on a stack that names no egress gateway
   | "NO_SANDBOXES_YET" // a sandbox's start, command, file or container call on a stack with no container (core/alchemy config `mind.containers: false`, for an account without Workers Paid): never retried
   | "NO_FACET" // no facet of that name has been loaded into this context
   | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (core/itx/src/context/facet-host.ts) — its next call starts it fresh
@@ -145,6 +145,38 @@ export function leavingTheStack(request: Request): Request {
   if (outside) headers.set(ITERATE_CAUSE_HEADER, outside);
   else headers.delete(ITERATE_CAUSE_HEADER);
   return new Request(request, { headers });
+}
+
+/** A STACK'S EGRESS GATEWAY: a Worker of the owner's that gets each request as it leaves the
+ *  stack, WITH ITS SECRET IN IT. The stack's deploy binds it to the vault and the boundary as
+ *  `EGRESS_GATEWAY` (core/alchemy/src/config.ts `egressGatewayWorker`, which says what goes
+ *  through it and what does not), so it is trusted as the vault is: only a deploy binds one, and
+ *  nothing in a mind can.
+ *
+ *  What a gateway must do: send exactly the request that it gets, over `https:` alone, and follow
+ *  no redirect. Fail closed: a request that it did not carry is a 502 before the answer's head,
+ *  and an error in the body's stream after it; it never sends another way and never sends twice.
+ *  Answer as the platform's fetch does: the head first, a streamed body, a WebSocket upgrade as a
+ *  101 with its socket. */
+export type EgressGateway = { fetch(request: Request, init?: RequestInit): Promise<Response> };
+
+/** What the last hop reads of a Worker's variables: the gateway's service binding, which the
+ *  vault and the boundary of a stack have when its deploy names a gateway, and not otherwise. */
+export type EgressGatewayEnv = { EGRESS_GATEWAY?: EgressGateway };
+
+/** THE LAST HOP of a request that leaves the stack, after every check: the stack's egress gateway
+ *  and nothing else, or for a stack with no gateway the platform's fetch with the caller's
+ *  `init`. A gateway that throws, or that answers its own error, is the request's failure:
+ *  nothing sends the request another way. A gateway follows no redirect. */
+export function fetchLeavingTheStack(
+  env: EgressGatewayEnv,
+  request: Request,
+  init?: RequestInit,
+): Promise<Response> {
+  const leaving = leavingTheStack(request);
+  return env.EGRESS_GATEWAY
+    ? env.EGRESS_GATEWAY.fetch(leaving, { redirect: "manual" })
+    : fetch(leaving, init);
 }
 
 /** What marks a 508 as an act refused past the loop limit (core/itx/src/unavailable.ts). */

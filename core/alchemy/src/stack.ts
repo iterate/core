@@ -371,6 +371,20 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     const realtimeSfu = yield* Cloudflare.Calls.App(REALTIME_SFU, { name: names.realtimeSfu });
     const turnKey = yield* Cloudflare.Calls.TurnKey(TURN_KEY, { name: names.turnKey });
 
+    // ── the egress gateway that this deploy names: a Worker of the owner's, in the account ──
+    // The stack does not make it: `lookup` finds it by its name, the deploy fails when no Worker
+    // has that name, and Alchemy never updates or deletes it. The vault and the boundary get it
+    // as a service binding and send what leaves the stack through its fetch (iterate/lib
+    // `fetchLeavingTheStack`). A deploy that names none binds nothing, and the platform's fetch
+    // sends.
+    const egressGatewayName = config.cloudflare.egressGatewayWorker;
+    const egressGateway = egressGatewayName
+      ? Cloudflare.Worker.lookup({ name: egressGatewayName })
+      : undefined;
+    const egressGatewayBindings: Record<string, Cloudflare.Worker> = egressGateway
+      ? { EGRESS_GATEWAY: egressGateway }
+      : {};
+
     // ── secrets ──
     const secrets = yield* Cloudflare.Worker("Secrets", {
       ...sharedWorkerProps,
@@ -398,6 +412,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         APPROVALS: Cloudflare.DurableObject("APPROVALS", { className: "ApprovalsIndex" }),
         ACTS: Cloudflare.DurableObject("ACTS", { className: "ActsGate" }),
         LOADER: Cloudflare.Workers.WorkerLoader("LOADER"),
+        ...egressGatewayBindings,
       },
     });
 
@@ -428,6 +443,13 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         // absent without `mail`: such a mind's boundary has no binding more
         ...(config.mail && { MAIL_FORWARD_TO: config.mail.forwardTo }),
         TELEMETRY: Cloudflare.WorkerEntrypoint(telemetry, { entrypoint: "Telemetry" }),
+        ...egressGatewayBindings,
+        // the boundary alone: the gateway's entrypoint for the computers that provide its way out
+        ...(egressGateway && {
+          EGRESS_GATEWAY_PROVIDERS: Cloudflare.WorkerEntrypoint(egressGateway, {
+            entrypoint: "EgressGatewayProviders",
+          }),
+        }),
         ...(mindIsInTheStack
           ? {
               // The mind and the boundary bind each other. Each binding is the other Worker's

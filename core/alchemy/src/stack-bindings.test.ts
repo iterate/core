@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { test } from "node:test";
+import { inspect } from "node:util";
 import { fromApiToken } from "@distilled.cloud/cloudflare/Credentials";
 import type { Named } from "alchemy/Named";
 import { isResource } from "alchemy/Resource";
@@ -69,15 +70,20 @@ const sourcesOf = (expr: any): string[] =>
         ? expr.outs.flatMap(sourcesOf)
         : sourcesOf(expr.expr);
 
+/** A Worker that the stack does not make (`Cloudflare.Worker.lookup`, the egress gateway): Node
+ *  prints it as `Cloudflare.Worker.lookup(<its name>)`. */
+const lookedUp = (value: any) => isExpr(value) && (value as any).Type === "Cloudflare.Worker";
+
 const kindOf = (value: any): string => {
   if (typeof value === "string") return "plain_text";
   // the one Effect left here is one that carries its kind (see `bindingsOf`)
   if (Effect.isEffect(value)) return (value as any)["~alchemy/Kind"];
   if (Redacted.isRedacted(value)) return "secret_text";
+  if (lookedUp(value)) return inspect(value);
   if (isExpr(value)) return `output of ${sourcesOf(value).join(", ")}`;
   if (isResource(value)) return `${value.Type} ${value.LogicalId}`;
   if (value.kind === "Cloudflare.WorkerEntrypoint")
-    return `${value.kind} (worker ${value.worker.LogicalId}, entrypoint ${value.entrypoint})`;
+    return `${value.kind} (worker ${lookedUp(value.worker) ? inspect(value.worker) : value.worker.LogicalId}, entrypoint ${value.entrypoint})`;
   if (value.kind === "Cloudflare.DurableObject") {
     const containers = (value.containers ?? []).map(
       (container: Named<string>) => container["~alchemy/Id"],
@@ -85,6 +91,14 @@ const kindOf = (value: any): string => {
     return `${value.kind} (class ${value.className}${value.scriptName ? `, worker ${value.scriptName}` : ""}${containers.length ? `, containers ${containers.join(" ")}` : ""})`;
   }
   return value.kind;
+};
+
+/** What `declaredOf` answers: each Worker's bindings by kind, each resource's type, and each
+ *  Worker's variables that are plain text. */
+type Declared = {
+  workers: Record<string, string[]>;
+  resources: Record<string, string>;
+  texts: Record<string, Record<string, string>>;
 };
 
 /** Each Worker's bindings and declared resources, as the program declares them for one config. */
@@ -105,9 +119,16 @@ const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMod
       );
     yield* inStack(mindStack(config, options));
     const workers: Record<string, string[]> = {};
+    /** each Worker's variables that are plain text, as the text itself */
+    const texts: Record<string, Record<string, string>> = {};
     for (const resource of Object.values(stack.resources).filter(
       (r) => r.Type === "Cloudflare.Worker",
     )) {
+      texts[resource.LogicalId] = Object.fromEntries(
+        Object.entries<any>(resource.Props.env ?? {}).filter(
+          ([, value]) => typeof value === "string",
+        ),
+      );
       const lines: string[] = [];
       // An Effect is run, as Alchemy runs it (another Worker's entrypoint), unless it carries its
       // kind (`~alchemy/Kind`, the Worker Loader): Alchemy reads that one as it is.
@@ -120,19 +141,14 @@ const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMod
     const resources = Object.fromEntries(
       Object.values(stack.resources).map((r) => [r.LogicalId, r.Type as string]),
     );
-    return { workers, resources };
+    return { workers, resources, texts };
   });
 
 void test("each Worker of the stack holds what stack-bindings.snapshot.json says", async () => {
   const listing: Record<string, Record<string, string[]>> = {};
   for (const [name, config] of Object.entries(CASES))
     listing[name] = (
-      await Effect.runPromise(
-        declaredOf(MindConfig.parse(config)) as Effect.Effect<{
-          workers: Record<string, string[]>;
-          resources: Record<string, string>;
-        }>,
-      )
+      await Effect.runPromise(declaredOf(MindConfig.parse(config)) as Effect.Effect<Declared>)
     ).workers;
   if (process.env.UPDATE_STACK_BINDINGS)
     writeFileSync(SNAPSHOT, `${JSON.stringify(listing, null, 2)}\n`);
@@ -155,15 +171,85 @@ void test("each Worker of the stack holds what stack-bindings.snapshot.json says
     );
 });
 
+const declared = (config: object) =>
+  Effect.runPromise(declaredOf(MindConfig.parse(config)) as Effect.Effect<Declared>);
+
+// A STACK THAT NAMES NO GATEWAY IS AS IT WAS BEFORE THE GATEWAY'S FIELD EXISTED. Its config
+// variables are written out here character by character: a marker or a new key there would
+// change every mind. Its bindings are read from the declaration and never from the snapshot
+// file, so a rewrite of the snapshot cannot hide one. This reads the declaration, not what
+// Alchemy sends to Cloudflare: a plan of a stack shows that.
+void test("a stack that names no egress gateway binds none, and has the same ITERATE and DEPLOY_CONFIG, byte for byte", async () => {
+  const id = "a".repeat(64);
+  const external = "external-mind-connects-into-cloudflare-boundary";
+  for (const [name, topology, mail] of [
+    [
+      "full-cloudflare, mail forward",
+      "full-cloudflare",
+      ',"mail":{"forwardTo":"team@group.example"}',
+    ],
+    ["full-cloudflare, no mail forward", "full-cloudflare", ""],
+    ["external mind, no mail forward", external, ""],
+  ] as const) {
+    const { texts, workers } = await declared(CASES[name]);
+    // the two Workers that send what leaves the stack; a mind's and a telemetry Worker's `ITERATE`
+    // has fields of its own after these, and the loop below reads every Worker's
+    for (const worker of ["Secrets", "Boundary"])
+      assert.equal(
+        texts[worker]!.ITERATE,
+        `{"mindId":"${id}","controlPlaneHostname":"example.com","zones":["example.com"],"ownerEmails":["owner@owner.example"],"topology":"${topology}"}`,
+        `${name} / ${worker}`,
+      );
+    assert.equal(
+      texts.Boundary!.DEPLOY_CONFIG,
+      `{"mindId":"${id}","controlPlaneHostname":"example.com","ownerEmails":["owner@owner.example"],"topology":"${topology}","alchemy":{"stageName":"example-com"},"cloudflare":{"accountId":"${accountId}","zones":["example.com"]}${mail}}`,
+      name,
+    );
+    // no binding of any Worker, and no plain-text variable, names a gateway
+    for (const worker of Object.keys(workers))
+      assert.deepEqual(
+        [
+          ...workers[worker]!.filter((line) => /egress/i.test(line)),
+          ...Object.entries(texts[worker]!).filter(([key, value]) => /egress/i.test(key + value)),
+        ],
+        [],
+        `${name} / ${worker}`,
+      );
+  }
+});
+
+for (const name of ["full-cloudflare, no mail forward", "external mind, no mail forward"] as const)
+  void test(`${name}, and an egress gateway: the vault and the boundary get the gateway, found by its name; the boundary alone gets its Providers entrypoint; nothing else of the stack changes`, async () => {
+    const gateway = "Cloudflare.Worker.lookup(owners-egress-gateway)";
+    const { workers } = await declared({
+      ...CASES[name],
+      cloudflare: { ...base.cloudflare, egressGatewayWorker: "owners-egress-gateway" },
+    });
+    const without = (await declared(CASES[name])).workers;
+    const added = (worker: string) =>
+      workers[worker]!.filter((line) => !without[worker]!.includes(line));
+    assert.deepEqual(added("Secrets"), [`EGRESS_GATEWAY:${gateway}`]);
+    assert.deepEqual(added("Boundary"), [
+      `EGRESS_GATEWAY:${gateway}`,
+      `EGRESS_GATEWAY_PROVIDERS:Cloudflare.WorkerEntrypoint (worker ${gateway}, entrypoint EgressGatewayProviders)`,
+    ]);
+    // no other Worker gets a line, and every other line of every Worker is the same stack's with
+    // no gateway
+    for (const [worker, lines] of Object.entries(workers)) {
+      if (worker !== "Secrets" && worker !== "Boundary")
+        assert.deepEqual(added(worker), [], worker);
+      assert.deepEqual(
+        lines.filter((line) => !added(worker).includes(line)),
+        without[worker],
+        worker,
+      );
+    }
+  });
+
 void test("telemetry modes: minted keeps both AccountApiToken resources, given uses TelemetryToken, and off makes the bucket and streams but no token, catalog, sink or pipeline, while other Workers stay identical", async () => {
   const config = MindConfig.parse(CASES["full-cloudflare, no mail forward"]);
   const runMode = (telemetryMode: TelemetryMode) =>
-    Effect.runPromise(
-      declaredOf(config, { telemetryMode }) as Effect.Effect<{
-        workers: Record<string, string[]>;
-        resources: Record<string, string>;
-      }>,
-    );
+    Effect.runPromise(declaredOf(config, { telemetryMode }) as Effect.Effect<Declared>);
   const [minted, given, off] = await Promise.all([
     runMode("minted"),
     runMode("given"),

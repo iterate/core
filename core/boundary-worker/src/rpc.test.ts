@@ -199,6 +199,42 @@ test("only fetchForMind signs: it uses the statement again while it lives and le
   expect({ signs: signs.length, sent: sent.length }).toEqual({ signs: 1, sent: 4 });
 });
 
+// ── THE DOOR'S LAST HOP, WITH AN EGRESS GATEWAY AND WITHOUT ONE (iterate/lib `fetchLeavingTheStack`) ──
+
+test("a request with no secret to an outside host leaves through the gateway when the stack has one, and by the platform's fetch when it has none", async () => {
+  const withGateway = stackOf({ gateway: true });
+  const answer = await withGateway.door.fetch(
+    new Request("https://example.net/a", { method: "POST", body: "b" }),
+  );
+  expect(await answer.text()).toBe("through the gateway");
+  expect(withGateway).toMatchObject({
+    carried: [{ url: "https://example.net/a", redirect: "manual" }],
+    platform: [],
+  });
+  const without = stackOf({ gateway: false });
+  expect(await (await without.door.fetch(new Request("https://example.net/a"))).text()).toBe(
+    "by the platform's fetch",
+  );
+  expect(without).toMatchObject({ carried: [], platform: ["https://example.net/a"] });
+});
+
+test("a request signed for another mind leaves through the gateway with its statement", async () => {
+  const stack = stackOf({ gateway: true });
+  const answer = await stack.door.fetchForMind(
+    "iterate.peer.net",
+    new Request("https://app.peer.net/through-a-gateway", { method: "POST", body: "b" }),
+  );
+  expect(await answer.text()).toBe("through the gateway");
+  expect(stack.carried).toMatchObject([
+    { url: "https://app.peer.net/through-a-gateway", redirect: "manual" },
+  ]);
+  // the header is the signed envelope, as base64
+  expect(atob(stack.carried[0]?.headers["iterate-auth-statement"] ?? "")).toContain(
+    "iterate.peer.net",
+  );
+  expect(stack).toMatchObject({ platform: [] });
+});
+
 test.for([
   ["agent@example.com", true],
   ["Agent@Example.ORG", true],
@@ -213,3 +249,52 @@ test.for([
 ] as const)("a mail may leave from %s: %s", ([from, allowed]) => {
   expect(senderRefusal(from, config) === null).toBe(allowed);
 });
+
+/** A Door of a stack, with a gateway that says what it was handed when `gateway` is true, and
+ *  the platform's fetch, which says what it sent. */
+function stackOf({ gateway }: { gateway: boolean }) {
+  const platform: string[] = [];
+  const carried: { url: string; redirect?: string; headers: Record<string, string> }[] = [];
+  vi.stubGlobal("fetch", async (request: Request) => {
+    platform.push(request.url);
+    return new Response("by the platform's fetch");
+  });
+  const env = {
+    ITERATE: JSON.stringify(config),
+    AUTH: {
+      whoIs: async () => null,
+      sign: async (input: { payload: { method: string; url: string } }) => {
+        return {
+          statement: statementText({
+            mind: "iterate.peer.net",
+            from: config.controlPlaneHostname,
+            path: "/",
+            type: MIND_FETCH_STATEMENT_TYPE,
+            payload: input.payload,
+            at: Date.now(),
+            expires: Date.now() + 300_000,
+          }),
+          signature: { format: "ml-dsa-65", key: "k", sig: "s" },
+        };
+      },
+      // the cast: a stand-in envelope, whose signature the Door never reads
+    } as unknown as Partial<AuthService>,
+    ...(gateway && {
+      EGRESS_GATEWAY: {
+        fetch: async (request: Request, init?: RequestInit) => {
+          carried.push({
+            url: request.url,
+            redirect: init?.redirect,
+            headers: Object.fromEntries(request.headers),
+          });
+          return new Response("through the gateway");
+        },
+      },
+    }),
+  } as Env;
+  const door = Object.assign(new Door(undefined as never, undefined as never), {
+    env,
+    ctx: { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext,
+  });
+  return { door, platform, carried };
+}

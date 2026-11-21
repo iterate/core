@@ -9,7 +9,13 @@ import {
   WebSocketPair,
 } from "capnweb";
 import type { ControlPlaneApi } from "iterate/api";
-import type { ApiCaller, AuthService, ControlPlaneSession, MindTarget } from "iterate/workers";
+import type {
+  ApiCaller,
+  AuthService,
+  ControlPlaneSession,
+  EgressGatewayProviders,
+  MindTarget,
+} from "iterate/workers";
 import { expect, test, vi } from "vitest";
 import { controlPlaneApiResponse } from "./control-plane-api.ts";
 
@@ -17,6 +23,8 @@ const CONTROL_PLANE = "https://iterate.example.com";
 const MEMBER = "a-member's-token";
 const KEY = "a-key's-token";
 const HOME_LAB = "the-home-lab's-token";
+const PROVIDER_KEY = "a-provider-key's-token";
+const MIND_ID = "a".repeat(64);
 const COOKIE = "__Host-iterate-session=a-live-session";
 
 test("a token in the call: the mind is asked once, with who the token is and never the token, and the first call is pipelined", async () => {
@@ -194,6 +202,158 @@ test("the token of the right to hand in a mind gets no mind, and a member's cred
     .rejects //
     .toMatchObject({ code: "FORBIDDEN" });
 });
+
+// ── A COMPUTER PROVIDES THE EGRESS GATEWAY ITS WAY OUT (`provideEgressGateway`) ──
+
+test("a key that a member allowed for egressGateway gets provideEgressGateway and no mind: the mind is never asked, a read of mind is refused, and it hands in no mind", async () => {
+  const stack = stackOf({ gateway: true });
+  const session = stack.dial().api.authenticate(PROVIDER_KEY);
+  await expect(Promise.resolve(session.mind.whoami())).rejects.toMatchObject({
+    code: "FORBIDDEN",
+  });
+  await expect(Promise.resolve(whole(session).provideExternalMind(NO_MIND)))
+    .rejects //
+    .toMatchObject({ code: "FORBIDDEN" });
+  expect(await whole(session).provideEgressGateway()).toMatchObject({ link: "link-1" });
+  expect(stack).toMatchObject({ apis: [], legs: [], lends: [] });
+});
+
+test("the first call answers a ticket and a deadline 30 seconds ahead, never past the token's end; a call with the link extends it with no ticket; each call asks about the key again, and the gateway is never told the token", async () => {
+  vi.useFakeTimers();
+  const at = Date.now();
+  const stack = stackOf({ gateway: true });
+  const session = whole(stack.dial().api.authenticate(PROVIDER_KEY));
+  expect(await session.provideEgressGateway()).toEqual({
+    url: "wss://iterate.example.com/api/egress-gateway",
+    link: "link-1",
+    ticket: "ticket-1",
+    until: at + 30_000,
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(await session.provideEgressGateway({ link: "link-1" })).toEqual({
+    url: "wss://iterate.example.com/api/egress-gateway",
+    link: "link-1",
+    until: at + 40_000,
+  });
+  // the gateway is told the mind's id, the key's id, the link and the deadline
+  expect(stack).toEqual(
+    expect.objectContaining({
+      leases: [
+        { mind: MIND_ID, key: "key:provider", until: at + 30_000 },
+        { mind: MIND_ID, key: "key:provider", link: "link-1", until: at + 40_000 },
+      ],
+      // the call of authenticate, and one ask for each call of the method
+      asked: Array(3).fill([PROVIDER_KEY, `${CONTROL_PLANE}/api`]),
+    }),
+  );
+  expect(JSON.stringify(stack.leases)).not.toContain(PROVIDER_KEY);
+  const short = stackOf({ gateway: true, tokenEndsIn: 12_000 });
+  const { until } = await whole(short.dial().api.authenticate(PROVIDER_KEY)).provideEgressGateway();
+  expect(Math.round(until)).toBe(at + 10_000 + 12_000);
+});
+
+test("a key that a member removed is refused at its next call: the boundary tells the gateway to end that key's links at once (until 0), and the session ends with 1008", async () => {
+  const stack = stackOf({ gateway: true });
+  const { api, closed } = stack.dial();
+  const session = whole(api.authenticate(PROVIDER_KEY));
+  await session.provideEgressGateway();
+  stack.removedKeys.add(PROVIDER_KEY);
+  await expect(Promise.resolve(session.provideEgressGateway({ link: "link-1" }))).rejects.toThrow();
+  expect(stack.leases.at(-1)).toEqual({ mind: MIND_ID, key: "key:provider", until: 0 });
+  expect(stack.leases).toHaveLength(2);
+  expect(await closed).toEqual({
+    code: 1008,
+    reason: "the sign-in for this session ended: authenticate again",
+  });
+});
+
+test("at the token's own end the gateway is not told to end the key's links: the computer renews from a new session, and its link stays", async () => {
+  vi.useFakeTimers();
+  const stack = stackOf({ gateway: true, tokenEndsIn: 20_000 });
+  const { api, closed } = stack.dial();
+  const session = whole(api.authenticate(PROVIDER_KEY));
+  await session.provideEgressGateway();
+  // the auth Worker's clock is three seconds ahead of this one: it refuses the token as ended
+  // while the session's own timer has not run
+  vi.setSystemTime(Date.now() + 17_000);
+  stack.removedKeys.add(PROVIDER_KEY);
+  await expect(Promise.resolve(session.provideEgressGateway({ link: "link-1" }))).rejects.toThrow();
+  expect(stack.leases).toHaveLength(1);
+  expect(await closed).toMatchObject({ code: 1008 });
+});
+
+test("a provider's key opens no session on the socket that hands in a mind", async () => {
+  const stack = stackOf({ gateway: true });
+  await expect(
+    Promise.resolve(stack.dial({}, {}, { handInSocket: true }).api.authenticate(PROVIDER_KEY)),
+  ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  expect(stack).toMatchObject({ leases: [], apis: [] });
+});
+
+test("a member's token, a member's cookie, a key for another name and the token that hands in a mind are each refused the method, and the gateway is not asked", async () => {
+  const stack = stackOf({ gateway: true });
+  for (const session of [
+    stack.dial().api.authenticate(MEMBER),
+    stack.dial({ cookie: COOKIE, origin: CONTROL_PLANE }).api.authenticate(),
+    stack.dial().api.authenticate(KEY),
+    stack.dial().api.authenticate(HOME_LAB),
+  ])
+    await expect(Promise.resolve(whole(session).provideEgressGateway())).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  expect(stack).toMatchObject({ leases: [] });
+});
+
+test("a stack with no egress gateway refuses the method with its reason, and the session stands", async () => {
+  const stack = stackOf();
+  const { api, closed } = stack.dial();
+  const session = whole(api.authenticate(PROVIDER_KEY));
+  let over = false;
+  void closed.then(() => (over = true));
+  for (const _ of [1, 2])
+    await expect(Promise.resolve(session.provideEgressGateway())).rejects.toMatchObject({
+      code: "NO_SERVICE",
+      message: expect.stringContaining("this stack has no egress gateway"),
+    });
+  expect(over).toBe(false);
+  expect(stack).toMatchObject({ leases: [] });
+});
+
+test("a gateway that throws (its refusal of a renewal too), or that does not answer in ten seconds, fails the call and not the session", async () => {
+  vi.useFakeTimers();
+  const stack = stackOf({ gateway: true });
+  const session = whole(stack.dial().api.authenticate(PROVIDER_KEY));
+  stack.gateway = async () => {
+    throw new Error("the gateway's own fault");
+  };
+  await expect(Promise.resolve(session.provideEgressGateway({ link: "x" }))).rejects.toThrow(
+    "the gateway's own fault",
+  );
+  // the caller gets no deadline, and the gateway is not told to end the key's links
+  expect(stack).toMatchObject({ leases: [{ key: "key:provider", link: "x" }] });
+  expect(stack.leases).toHaveLength(1);
+  stack.gateway = () => new Promise(() => {});
+  const late = expect(Promise.resolve(session.provideEgressGateway())).rejects.toMatchObject({
+    code: "TIMEOUT",
+  });
+  await vi.advanceTimersByTimeAsync(10_000);
+  await late;
+  stack.gateway = undefined;
+  expect(await session.provideEgressGateway()).toMatchObject({ link: "link-1" });
+});
+
+test.for([[{ link: 7 }], [{ link: "" }], ["link-1"], [{ link: "x".repeat(129) }]] as const)(
+  "provideEgressGateway takes nothing or a link's id: %j is refused before anyone is asked",
+  async ([input]) => {
+    const stack = stackOf({ gateway: true });
+    const session = whole(stack.dial().api.authenticate(PROVIDER_KEY));
+    // the cast: a client's type of the call takes { link?: string }
+    await expect(
+      Promise.resolve(session.provideEgressGateway(input as { link: string })),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(stack).toMatchObject({ leases: [], asked: [[PROVIDER_KEY, `${CONTROL_PLANE}/api`]] });
+  },
+);
 
 test("one socket has one session: a second authenticate is refused, and the mind is asked once", async () => {
   const stack = stackOf();
@@ -506,6 +666,8 @@ function stackOf(
     tokenEndsIn?: number;
     cookieEndsIn?: number;
     mindIsAway?: boolean;
+    /** The stack's deploy names an egress gateway. */
+    gateway?: boolean;
   } = {},
 ) {
   const asked: string[][] = [];
@@ -514,7 +676,14 @@ function stackOf(
   const lends: Lend[] = [];
   const legs: Record<string, string>[] = [];
   const legEnds: WebSocket[] = [];
+  const leases: Parameters<EgressGatewayProviders["lease"]>[0][] = [];
   const state = {
+    /** Each call of the egress gateway's `lease`, as it arrived. */
+    leases,
+    /** The gateway's answer in place of its own, for a test's fault. */
+    gateway: undefined as EgressGatewayProviders["lease"] | undefined,
+    /** Tokens of keys that a member removed: the auth Worker no longer knows them. */
+    removedKeys: new Set<string>(),
     asked,
     cookies,
     apis,
@@ -526,14 +695,36 @@ function stackOf(
     /** The mind's own invocation for a session is gone: every call on its stub fails. */
     mindsInvocationIsGone: false,
   };
-  const expiresAt = () => (Date.now() + (options.tokenEndsIn ?? 3_600_000)) / 1000;
+  // a token's end is fixed when the stack is made, as a token's is when it is signed
+  const tokenEndsAt = (Date.now() + (options.tokenEndsIn ?? 3_600_000)) / 1000;
+  const expiresAt = () => tokenEndsAt;
+  /** The gateway's own answer: a new link and its ticket, or the caller's link extended. */
+  const egressGatewayProviders: Pick<EgressGatewayProviders, "lease"> = {
+    lease: async (provider) => {
+      leases.push(provider);
+      if (state.gateway) return state.gateway(provider);
+      return provider.link ? { link: provider.link } : { link: "link-1", ticket: "ticket-1" };
+    },
+  };
   const auth: Pick<AuthService, "whoIs" | "browserSession" | "fetch"> = {
     whoIs: async (token, resource) => {
       asked.push([token, resource]);
-      const audience = { [MEMBER]: "/api", [KEY]: "/api", [HOME_LAB]: "/api/provide-connect" }[
-        token
-      ];
+      const audience = {
+        [MEMBER]: "/api",
+        [KEY]: "/api",
+        [PROVIDER_KEY]: "/api",
+        [HOME_LAB]: "/api/provide-connect",
+      }[token];
       if (resource !== `${CONTROL_PLANE}${audience}`) return null;
+      if (state.removedKeys.has(token) || Date.now() >= tokenEndsAt * 1000) return null;
+      if (token === PROVIDER_KEY)
+        return {
+          principal: { actor: "service_provider" },
+          grant: "key:provider",
+          expiresAt: expiresAt(),
+          member: false,
+          provide: "egressGateway",
+        };
       if (token === KEY)
         return {
           principal: { actor: "service_printer" },
@@ -584,13 +775,23 @@ function stackOf(
   };
   return Object.assign(state, {
     /** `authOverrides`: the auth Worker's answers that this one socket gets in place of the stack's. */
-    dial(headers: Record<string, string> = {}, authOverrides: Partial<typeof auth> = {}) {
+    dial(
+      headers: Record<string, string> = {},
+      authOverrides: Partial<typeof auth> = {},
+      /** `handInSocket`: the session ends where a mind hands itself in, which reaches no mind. */
+      { handInSocket = false } = {},
+    ) {
       const answer = controlPlaneApiResponse(
         new Request(`${CONTROL_PLANE}/api`, { headers: { upgrade: "websocket", ...headers } }),
         {
           auth: { ...auth, ...authOverrides },
-          config: { controlPlaneHostname: "iterate.example.com", topology: "full-cloudflare" },
-          mind,
+          config: {
+            mindId: MIND_ID,
+            controlPlaneHostname: "iterate.example.com",
+            topology: "full-cloudflare",
+          },
+          ...(handInSocket ? { handIn: () => async () => {} } : { mind }),
+          ...(options.gateway && { egressGatewayProviders }),
         },
       );
       // capnweb's answer to an upgrade holds the client's half of its own pair

@@ -97,6 +97,14 @@ void test("a forward address at a zone of the mind, or under one, is refused: su
   );
 });
 
+void test("an egress gateway's name that is empty is refused", () => {
+  const cloudflare = { ...config().cloudflare, egressGatewayWorker: "" };
+  assert.deepEqual(MindConfig.safeParse({ ...config(), cloudflare }).error?.issues[0]?.path, [
+    "cloudflare",
+    "egressGatewayWorker",
+  ]);
+});
+
 function config() {
   return {
     mindId: "a".repeat(64),

@@ -12,8 +12,8 @@ import { withFacts } from "iterate/facts";
 import {
   causeLeavingTheStack,
   codedError,
+  fetchLeavingTheStack,
   ITERATE_CAUSE_HEADER,
-  leavingTheStack,
   reportIssue,
 } from "iterate/lib";
 import { SECRET_USE_HEADER, secretPathsReferenced } from "iterate/secret-placeholder";
@@ -59,7 +59,7 @@ export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorServic
     // mind would append what it says.
     const url = new URL(outbound.url);
     const ownZone = zoneOf(boundaryConfigOf(this.env), url.hostname);
-    if (!ownZone) return withFacts(await fetch(leavingTheStack(outbound)), []);
+    if (!ownZone) return withFacts(await fetchLeavingTheStack(this.env, outbound), []);
     // The boundary's handler refuses a hostname that ends with a dot (421): the mind's own
     // request goes in as the same DNS name without it.
     url.hostname = url.hostname.replace(/\.$/, "");
@@ -107,7 +107,9 @@ export class Door extends WorkerEntrypoint<Env, DoorProps> implements DoorServic
     headers.set(ITERATE_STATEMENT_HEADER, statement);
     return withoutStatement(
       withFacts(
-        await fetch(leavingTheStack(new Request(unsigned, { headers })), { redirect: "manual" }),
+        await fetchLeavingTheStack(this.env, new Request(unsigned, { headers }), {
+          redirect: "manual",
+        }),
         [],
       ),
       statement,

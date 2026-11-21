@@ -5,7 +5,11 @@
 // topologies differ only in how the mind is reached (`MindTransport`, ./mind-transport.ts).
 import { runApprovedActs } from "iterate/acts";
 import { recordFacts as recorded, withFacts } from "iterate/facts";
-import { controlPlaneRouteOf, MIND_PROVIDE_EXTERNAL_MIND_HEADER } from "iterate/mind-api";
+import {
+  controlPlaneRouteOf,
+  MIND_EGRESS_GATEWAY_PATH,
+  MIND_PROVIDE_EXTERNAL_MIND_HEADER,
+} from "iterate/mind-api";
 import { isControlPlaneHostname, type MindConfig } from "iterate/mind-config";
 import { MIND_IDENTITY_PATH } from "iterate/mind-identity-log";
 import { ITERATE_CAUSE_HEADER, ITX_OWN_HEADER } from "iterate/lib";
@@ -93,12 +97,38 @@ export async function boundaryResponse(
     // itself in says so (iterate/mind-api `MIND_PROVIDE_EXTERNAL_MIND_HEADER`), and its socket
     // ends in the object that holds its link. A stack whose mind is a Worker takes none.
     if (!isWebSocketUpgrade(request) || !request.headers.has(MIND_PROVIDE_EXTERNAL_MIND_HEADER))
-      return controlPlaneApiResponse(request, { auth: env.AUTH, config, mind });
+      return controlPlaneApiResponse(request, {
+        auth: env.AUTH,
+        config,
+        mind,
+        egressGatewayProviders: env.EGRESS_GATEWAY_PROVIDERS,
+      });
     if (!mind.link)
       return new Response("This stack's mind is a Worker of the stack: it takes no mind.\n", {
         status: 403,
       });
     return mind.link(request);
+  }
+  // THE EGRESS GATEWAY'S PATH FOR THE SOCKET THAT CARRIES ITS BYTES (iterate/mind-api
+  // `MIND_EGRESS_GATEWAY_PATH`): this exact path, as a WebSocket upgrade alone, goes to the
+  // gateway's entrypoint for its providers, which checks the dial's ticket and accepts the
+  // socket. Nobody is asked here: the ticket came from `provideEgressGateway`, which asked
+  // (./control-plane-api.ts). A mind's own request to this path comes here as anyone's dial
+  // does, and needs a ticket as anyone's. The dial goes on without a caller's stamps, which only
+  // the boundary writes, and without a browser's cookie. A stack with no egress gateway has no
+  // such path.
+  if (route === "api" && url.pathname === MIND_EGRESS_GATEWAY_PATH) {
+    if (!env.EGRESS_GATEWAY_PROVIDERS)
+      return new Response("This stack has no egress gateway.\n", { status: 404 });
+    if (!isWebSocketUpgrade(request))
+      return new Response("The egress gateway takes a WebSocket here, with a ticket.\n", {
+        status: 426,
+        headers: { upgrade: "websocket" },
+      });
+    const headers = new Headers(
+      [...request.headers].filter(([name]) => !name.startsWith("x-itx-") && name !== "cookie"),
+    );
+    return env.EGRESS_GATEWAY_PROVIDERS.fetch(new Request(request, { headers }));
   }
   const { forwarded, answer } = await stampedRequest(request, {
     auth: env.AUTH,

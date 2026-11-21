@@ -5,7 +5,8 @@ import {
   VAULT_ANSWER_HEADER,
 } from "iterate/secret-placeholder";
 import { decodeFacts, FACTS_HEADER } from "iterate/facts";
-import { expect, test, vi } from "vitest";
+import { env as vaultEnv } from "cloudflare:workers";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { z } from "zod";
 import type { Envelope } from "iterate/signed";
 import { hmacSha256Hex } from "../secrets.ts";
@@ -18,6 +19,7 @@ import {
   RULE_CONFIGURED,
   SecretDurableObject,
 } from "./durable-object.ts";
+import { PinnedOutbound } from "./exchange-jail.ts";
 
 // workerd's own comparison, which Node's Web Crypto has not got
 Object.assign(crypto.subtle, { timingSafeEqual });
@@ -251,6 +253,104 @@ test("a request the rule does not match is sent at once, and an upstream's copy 
     header: null,
     sends: 1,
   });
+});
+
+// ── THE VAULT'S LAST HOP WITH AN EGRESS GATEWAY (iterate/lib `fetchLeavingTheStack`) ──
+
+test("a request with a secret is pinned, then substituted, then handed to the gateway once: the gateway gets the value, and the caller's answer has it redacted", async () => {
+  const { secret, upstream } = await vault();
+  const carried = gatewayOf(
+    (request) =>
+      new Response("ok", { headers: { "x-echo": request.headers.get("authorization") ?? "" } }),
+  );
+  const answer = await secret.fetch(useRequest(MESSAGES, { method: "GET" }));
+  expect({ status: answer.status, echo: answer.headers.get("x-echo") }).toEqual({
+    status: 200,
+    echo: "Bearer [redacted]",
+  });
+  expect(carried).toEqual([
+    { url: MESSAGES, authorization: "Bearer real-token-aaaa", redirect: "manual" },
+  ]);
+  expect(upstream).not.toHaveBeenCalled();
+});
+
+test("a request that the pin refuses, and one that waits for an approval, never reach the gateway", async () => {
+  const { secret, upstream } = await vault();
+  const carried = gatewayOf(() => new Response("carried"));
+  const outside = await secret.fetch(useRequest("https://example.net/steal", { method: "GET" }));
+  expect(outside).toMatchObject({ status: 403 });
+  const held = await secret.fetch(gmailPost("hello"));
+  expect([held.status, held.headers.get(VAULT_ANSWER_HEADER)]).toEqual([202, "held"]);
+  expect(carried).toEqual([]);
+  expect(upstream).not.toHaveBeenCalled();
+});
+
+test("a gateway's 502 is the request's failure: nothing is sent by the platform's fetch", async () => {
+  const { secret, upstream } = await vault();
+  const carried = gatewayOf(
+    () =>
+      new Response("no way out\n", {
+        status: 502,
+        headers: { "iterate-egress-gateway": "failed" },
+      }),
+  );
+  const answer = await secret.fetch(useRequest(MESSAGES, { method: "GET" }));
+  expect([answer.status, answer.headers.get("iterate-egress-gateway")]).toEqual([502, "failed"]);
+  // and a gateway that throws is a failure too, in the vault's own words, with a log line that
+  // names the origin and no URL
+  const thrown = gatewayOf(() => Promise.reject(new Error("the gateway broke")));
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const refused = await secret.fetch(useRequest(MESSAGES, { method: "GET" }));
+  expect(logged).toHaveBeenCalledWith({
+    event: "secret.send-failed",
+    origin: "https://gmail.googleapis.com",
+    code: undefined,
+  });
+  expect([refused.status, await refused.text()]).toEqual([
+    403,
+    "itx.fetch: the pinned host https://gmail.googleapis.com could not be reached\n",
+  ]);
+  expect([carried.length, thrown.length]).toEqual([1, 1]);
+  expect(upstream).not.toHaveBeenCalled();
+});
+
+test("no head from the gateway in 50 seconds is a 504", async () => {
+  vi.useFakeTimers();
+  const { secret, upstream } = await vault();
+  // the gateway takes the request and never answers
+  const handed = Promise.withResolvers<void>();
+  gatewayOf(() => {
+    handed.resolve();
+    return new Promise(() => {});
+  });
+  const answered = secret.fetch(useRequest(MESSAGES, { method: "GET" }));
+  await handed.promise;
+  await vi.advanceTimersByTimeAsync(49_999);
+  await vi.advanceTimersByTimeAsync(1);
+  const answer = await answered;
+  expect(answer).toMatchObject({ status: 504 });
+  expect(await answer.text()).toContain("sent no answer within 50 s");
+  expect(upstream).not.toHaveBeenCalled();
+  vi.useRealTimers();
+});
+
+test("a secret's exchange code sends through the gateway, and an origin outside the pin is refused before it", async () => {
+  const platform = vi.fn(async () => new Response("by the platform's fetch"));
+  vi.stubGlobal("fetch", platform);
+  const carried = gatewayOf(() => new Response("through the gateway"));
+  // The Workers shim's entrypoint has no constructor: the test gives it its props, the pin.
+  const jail = Object.assign(new PinnedOutbound(undefined as never, undefined as never), {
+    ctx: { props: { urls: ["https://oauth.example.net"] } },
+    env: vaultEnv,
+  });
+  const exchanged = await jail.fetch(
+    new Request("https://oauth.example.net/token", { method: "POST", body: "code" }),
+  );
+  expect(await exchanged.text()).toBe("through the gateway");
+  const outside = await jail.fetch(new Request("https://example.org/token", { method: "POST" }));
+  expect(outside).toMatchObject({ status: 403 });
+  expect(carried).toMatchObject([{ url: "https://oauth.example.net/token", redirect: "manual" }]);
+  expect(platform).not.toHaveBeenCalled();
 });
 
 test("a rule with strings of the body lets a read go with its body whole, and holds a send", async () => {
@@ -1762,3 +1862,23 @@ function cloudWithGithubApp() {
       ),
   });
 }
+
+/** The stack's deploy named an egress gateway: the vault's `EGRESS_GATEWAY` for one test. It says
+ *  what it was handed, and answers `answer`. */
+function gatewayOf(answer: (request: Request) => Promise<Response> | Response) {
+  const carried: { url: string; authorization: string | null; redirect?: string }[] = [];
+  const bindings = vaultEnv as { EGRESS_GATEWAY?: unknown };
+  bindings.EGRESS_GATEWAY = {
+    fetch: async (request: Request, init?: RequestInit) => {
+      carried.push({
+        url: request.url,
+        authorization: request.headers.get("authorization"),
+        redirect: init?.redirect,
+      });
+      return answer(request);
+    },
+  };
+  onTestFinished(() => void delete bindings.EGRESS_GATEWAY);
+  return carried;
+}
+const MESSAGES = "https://gmail.googleapis.com/gmail/v1/users/me/messages";

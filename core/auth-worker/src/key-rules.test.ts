@@ -105,7 +105,11 @@ test("a service's key may lend one capability, with or without paths, and must a
   // the paths rule holds beside a capability too
   expect(ask({ ...bridge, provide: "whatsapp", paths: "/agents/" })).toHaveProperty("refused");
   // a name of the platform's own: a lent stub there would get what the mind sends to it
-  for (const provide of ["secrets", "secrets.set", "fetch", "email", "repos", "run", "config.x"])
+  for (const provide of [
+    ...["secrets", "secrets.set", "fetch", "email", "repos", "run", "config.x"],
+    // the boundary's name for a computer that provides the egress gateway: no lend has it
+    ...["egressGateway", "egressGateway.x"],
+  ])
     expect(ask({ ...bridge, provide })).toMatchObject({
       refused: expect.stringContaining("that name is this mind's own"),
     });
