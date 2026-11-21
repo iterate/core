@@ -11,9 +11,12 @@
 // The page has no API of its own. A member's page holds the member's `/itx` socket: a meeting
 // starts by `itx.config.startMeeting` (../meeting.ts), the one function an agent calls too. A
 // guest's page holds the platform's view of the one agent's context. The call is the kit's
-// (`useCall`, `CallHeaderControls`, `CallTiles`), and so is Share (`CallShare`): the Dash's agent
-// page draws the same header. Nothing polls. A press of the microphone, the camera, the screen or
-// the voice agent turns the call on when the meeting has none, joins, then does what it says.
+// (`useCall`, `CallHeaderControls`, `CallTiles`), and so is Share (`CallShare`). A meeting's page is
+// the Dash's agent page: the kit's one header row (`AgentPageHeader`: the way back to the meetings,
+// the title and path, who is here with the mind's face first, the call's button group, Share, and
+// Chat | Events), then the call's tiles, then the chat, which fills the rest of the page. Nothing
+// polls. A press of the microphone, the camera, the screen or the voice agent turns the call on
+// when the meeting has none, joins, then does what it says.
 //
 // What is said runs along the kit's caption strip over the composer, and opens to the whole
 // transcript. A member who shares a camera or a screen may turn on "Let the agent look" for it:
@@ -29,7 +32,12 @@ import {
   useRef,
   useState,
 } from "@iterate-com/ui/page";
+import { createPortal } from "react-dom";
 import { AgentChat } from "@iterate-com/ui/components/agent-chat/agent-chat";
+import {
+  AgentPageHeader,
+  heldRowsOf,
+} from "@iterate-com/ui/components/agent-chat/agent-page-header";
 import { CallHeaderControls } from "@iterate-com/ui/components/call/call-controls";
 import { CallPipButton, CallPipPlace, useCallPip } from "@iterate-com/ui/components/call/call-pip";
 import { CallShare } from "@iterate-com/ui/components/call/call-share";
@@ -38,6 +46,7 @@ import { CaptionStrip } from "@iterate-com/ui/components/call/caption-strip";
 import { TranscriptHistory } from "@iterate-com/ui/components/call/transcript-history";
 import { Button } from "@iterate-com/ui/components/ui/button";
 import { Input } from "@iterate-com/ui/components/ui/input";
+import { ChevronLeftIcon } from "@iterate-com/ui/icons";
 import { useCall } from "@iterate-com/ui/lib/call-engine";
 import {
   memberItx,
@@ -55,6 +64,30 @@ const GUEST_PAGE = ROUTE === "join" || ROUTE === "in";
 const ENDED = "This link has ended. Ask for a new one.";
 const messageOf = (error) => String(error?.message ?? error);
 const nameOf = (path) => path.split("/").pop();
+/** The zone this page is on: an app's hostname is one label under its zone. */
+const ZONE = location.hostname.split(".").slice(1).join(".");
+
+// The mind's name and icon, as its owner wrote them (profile.ts), which the zone's website answers
+// to anyone: the first face of who is here, as on the Dash. The page never waits for it: it draws
+// with the zone's name and iterate's mark at once, and takes the profile when it comes.
+const profile = fetch(`https://${ZONE}/.well-known/iterate-profile`)
+  .then((answer) => answer.json())
+  .catch(() => null);
+
+/** The mind's face for the header and the chat: `{ name, logo }`. */
+function useMindFace() {
+  const [said, setSaid] = useState(null);
+  useEffect(() => {
+    void profile.then((answer) => answer && setSaid(answer));
+  }, []);
+  return useMemo(
+    () => ({
+      name: said?.name || ZONE,
+      logo: said?.icon ? html`<img src=${said.icon} alt="" />` : undefined,
+    }),
+    [said],
+  );
+}
 
 // ── a member's front page ──
 function Front({ itx }) {
@@ -251,12 +284,29 @@ function LookButton({ look, ui }) {
   `;
 }
 
+/** The way back to the meetings, before a meeting's title: an arrow, named in its tooltip. */
+function AllMeetings() {
+  return html`
+    <${Button}
+      variant="ghost"
+      size="icon-sm"
+      nativeButton=${false}
+      render=${html`<a href="/" />`}
+      aria-label="All meetings"
+      title="All meetings"
+    >
+      <${ChevronLeftIcon} />
+    <//>
+  `;
+}
+
 // ── one meeting: the agent's chat with its call ──
 /** The chat and the call on `stub`, the agent's context: a member's `itx.cd(agent)`, or a guest's
  *  view's. `session` is what the page holds (the member's itx, or the guest's view), which sends
  *  the agent words. `start` turns the call on (a member's alone); `share` makes and ends the links
  *  for guests (a member's alone): Share in the header. */
 function Meeting({ stub, session, me, title, member, start, share }) {
+  const mind = useMindFace();
   const [state, setState] = useState({});
   const patch = useCallback((change) => setState((previous) => ({ ...previous, ...change })), []);
   const context = useIterateContext(stub.stub, AgentChat.contextOptions);
@@ -291,79 +341,114 @@ function Meeting({ stub, session, me, title, member, start, share }) {
     ui.joined || live?.voiceAgent || said.length > 0
       ? html`<div className="meet-transcript">${transcript}${strip}</div>`
       : undefined;
+  // the header's places, once it has drawn them: who is here (the chat draws it), the call's
+  // controls and Share (drawn here, into the header)
+  const [aside, setAside] = useState(null);
+  const [callIn, setCallIn] = useState(null);
+  const [shareIn, setShareIn] = useState(null);
+  const tabs = {
+    view: state.view,
+    hasChat: true,
+    // no count until the first read has answered
+    held: context.caughtUp || context.events.length ? heldRowsOf(context.events) : undefined,
+    wholeLogHeld: context.older?.exhausted ?? true,
+    onStateChange: patch,
+  };
+  const back = member ? html`<${AllMeetings} />` : html`<span className="meet-note">Guest</span>`;
+  const lookLine =
+    look.lookingNow.length > 0 &&
+    html`<span>The agent may look: ${look.lookingNow.join(", ")}</span>`;
+  const lookNotice =
+    look.notice &&
+    html`
+      <span className="meet-row">
+        ${look.notice}
+        <${Button} size="xs" variant="ghost" onClick=${() => look.setNotice("")}>Dismiss<//>
+      </span>
+    `;
   return html`
-    <div className="meet">
-      <header className="meet-head">
-        <div>
-          <h1 className="meet-title">${title}</h1>
-          ${
-            member
-              ? html`<a className="meet-note" href="/">All meetings</a>`
-              : html`<span className="meet-note">You are a guest here.</span>`
-          }
-        </div>
-        <div className="meet-actions">
-          <${CallHeaderControls}
+    <div className="meet-page">
+      <${AgentPageHeader}
+        path=${AGENT}
+        title=${title}
+        before=${back}
+        mind=${mind}
+        presence=${true}
+        aside=${setAside}
+        call=${true}
+        callIn=${setCallIn}
+        share=${Boolean(share)}
+        shareIn=${setShareIn}
+        tabs=${tabs}
+      />
+      ${
+        callIn &&
+        createPortal(
+          html`
+            <${CallHeaderControls}
+              call=${call}
+              ui=${ui}
+              live=${live}
+              member=${member}
+              start=${live ? undefined : start}
+            />
+          `,
+          callIn,
+        )
+      }
+      ${
+        share &&
+        shareIn &&
+        createPortal(
+          html`
+            <${CallShare}
+              share=${share}
+              title=${title}
+              pageUrl=${`${location.origin}/contexts${AGENT}`}
+              context=${context}
+              enable=${start}
+            />
+          `,
+          shareIn,
+        )
+      }
+      ${
+        live &&
+        html`
+          <div className="meet-call-strip">
+            ${member && html`<${LookButton} look=${look} ui=${ui} />`}
+            <${CallPipButton} pip=${pip} />
+            <span className="meet-row" role="status">${lookLine}${lookNotice}</span>
+          </div>
+        `
+      }
+      <div className="meet-tiles">
+        <${CallPipPlace} pip=${pip}>
+          <${CallTiles}
             call=${call}
             ui=${ui}
             live=${live}
             member=${member}
-            start=${live ? undefined : start}
+            className="mx-auto w-full max-w-3xl px-4 pt-2 md:px-6"
           />
-          ${member && html`<${LookButton} look=${look} ui=${ui} />`}
-          ${live && html`<${CallPipButton} pip=${pip} />`}
-          ${
-            share &&
-            html`
-              <${CallShare}
-                share=${share}
-                title=${title}
-                pageUrl=${`${location.origin}/contexts${AGENT}`}
-                context=${context}
-                enable=${start}
-              />
-            `
-          }
-        </div>
-      </header>
-      ${
-        (look.lookingNow.length > 0 || look.notice) &&
-        html`
-          <div className="meet-look-strip" role="status">
-            ${
-              look.lookingNow.length > 0 &&
-              html`<span>The agent may look: ${look.lookingNow.join(", ")}</span>`
-            }
-            ${
-              look.notice &&
-              html`
-                <span className="meet-row">
-                  ${look.notice}
-                  <${Button} size="xs" variant="ghost" onClick=${() => look.setNotice("")}>
-                    Dismiss
-                  <//>
-                </span>
-              `
-            }
-          </div>
-        `
-      }
-      <${CallPipPlace} pip=${pip}>
-        <${CallTiles} call=${call} ui=${ui} live=${live} member=${member} />
-      <//>
-      <div className="meet-chat-pane">
+        <//>
+      </div>
+      <div className="meet-chat">
         <${AgentChat}
           path=${AGENT}
           context=${chatContext}
           error=${stub.error}
           state=${state}
           onStateChange=${patch}
+          tabsInHeader=${true}
+          asideIn=${aside}
           onMessage=${({ message, files, key }) =>
             session.agents.get(AGENT).message({ message, files }, { key })}
           onAppend=${stub.stub ? (events) => stub.stub.append(...events) : undefined}
           signedUrl=${signedUrl}
           me=${me}
           presence=${true}
+          mind=${mind}
           aboveComposer=${aboveComposer}
           placeholder="Message this meeting's agent"
         />
@@ -395,7 +480,7 @@ function MemberMeeting({ itx }) {
       make: async (lifetimeMs) => {
         if (!stub.stub) throw new Error("The meeting is not open yet.");
         const { event, url, until, link } = await makeLink({
-          zone: location.hostname.split(".").slice(1).join("."),
+          zone: ZONE,
           agent: AGENT,
           lifetimeMs,
           now: Date.now(),

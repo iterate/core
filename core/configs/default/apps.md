@@ -120,7 +120,7 @@ only draws around one of iterate's pages needs the one line alone.
 
 **Who else is here, and Share.** The Agents row has `presence: true`: an agent's chat shows who
 else has it open and who is typing (from the context's own subscription rows; nothing durable is
-written for it). It has `share` too: Share, a button after the faces in the agent's header (the
+written for it). It has `share` too: Share, a button after the call's controls in the agent's header (the
 kit's `CallShare`, which Meet draws too), copies the members' link and makes links that let people who are not members into that one agent's chat and call, with
 a name and no account. Its first open turns the agent's call on (the call's facet holds the links,
 `call/share.ts`), and a link opens Meet's guest page, `https://meet.<zone>/join<agent>#<secret>`.
@@ -334,8 +334,8 @@ reason }`); never try again without asking. A request lives 20 s, one at a time,
 - **The page's parts** (the UI kit): `useCall(context, page, liveValue)` holds the call in the tab;
   `CallLobby` comes before a join on arrival (below): the person's camera picture, their microphone's level, the
   devices, a test sound, who is in the call, then Join now or Join muted; the tracks it opened go
-  to the call as they are. `CallHeaderControls` is its controls for a header, icon buttons with
-  tooltips: the microphone, the camera, the screen and the voice agent; out of the call, one press
+  to the call as they are. `CallHeaderControls` is its controls for a header, one button group of
+  icon buttons with tooltips: the microphone, the camera, the screen and the voice agent; out of the call, one press
   turns the call on, joins, and does what the button says. The Dash and Meet draw it, and Share
   (`CallShare`) beside it. `CallBar` is the older row with a main button in words. `CallTiles` is the cameras, the
   screens and what the call says, beside the chat. TURN over TLS on 443 where UDP is blocked,
@@ -358,11 +358,15 @@ chat with its call at `/contexts/<agent>`. It has no API of its own: the page ho
   or three random words). `itx.config.startMeeting({ title?, path? })` makes one and turns its call
   on, or turns the call on for the agent `path`; it answers `{ path }`. The page's button is this
   call, and an agent starts a meeting the same way (`apps/meet/meeting.ts`).
-- **A meeting's page** is the agent's chat (Chat | Events: Events is the raw log), and a header
-  with the call's controls, a pop-out of the tiles and Share (a member's): the members' link, the
+- **A meeting's page** is the Dash's agent page, drawn by the same kit part
+  (`AgentPageHeader`): one header row (a back arrow to the meetings, the title and path, who is
+  here with the mind's face first, the call's button group, Share, and Chat | Events), the call's
+  tiles, then the chat, which fills the window. Share (a member's) holds the members' link, the
   links for guests (7 days at most) and "Add to calendar" (Google Calendar's form, or an `.ics`
-  file built in the page). The Dash's agent page has the same header parts ("The Dash" above); a
-  guest always comes in here. The pop-out works in Chrome and
+  file built in the page). While the call is on, a line under the header holds the pop-out of the
+  tiles and "Let the agent look". The mind's face is its profile's icon and name
+  (`https://<zone>/.well-known/iterate-profile`, as the Dash reads it). A guest always comes in
+  here. The pop-out works in Chrome and
   Edge alone (Document Picture-in-Picture): other browsers get no button.
 - **Guests** come by a share link, `/join/<agent>#<secret>`: the page keeps the secret in the tab
   (in the address, when the tab cannot store it), the guest signs in with a name, and `app.ts`'s

@@ -1,16 +1,10 @@
 /* app.css — Meet's own layout, as plain CSS on the theme's variables (apps/theme.css):
    @iterate-com/ui's stylesheet holds the utility classes of its own components and no others. */
-.meet,
 .meet-narrow {
   margin: 0 auto;
   padding: 2rem 1rem 4rem;
   display: grid;
   gap: 1rem;
-}
-.meet {
-  max-width: 80rem;
-}
-.meet-narrow {
   max-width: 40rem;
 }
 .meet-title {
@@ -37,19 +31,6 @@
 .meet-grow {
   flex: 1 1 12rem;
 }
-.meet-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-/* the call's controls, the look switch, the pop-out and Share: one row at the head's right */
-.meet-actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.25rem;
-}
 .meet-call-row {
   display: flex;
   justify-content: space-between;
@@ -61,24 +42,38 @@
 .meet-call-row:hover {
   background: var(--accent);
 }
-/* the agent's chat takes the height it is given */
-.meet-chat-pane {
+/* A MEETING is the Dash's agent page: the whole window, one header row, then the call's tiles,
+   then the chat, which fills the rest with no frame around it. */
+.meet-page {
   display: flex;
   flex-direction: column;
-  height: 70vh;
-  min-height: 24rem;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  height: 100dvh;
 }
-/* who lets the agent look now, and the note that it took a picture: one quiet line under the head */
-.meet-look-strip {
+/* "Let the agent look", the pop-out, and who lets the agent look now: one quiet line under the
+   header while the call is on, as wide as the chat */
+.meet-call-strip {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem 0.75rem;
+  width: 100%;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 0.5rem 1rem 0;
   font-size: 0.875rem;
   color: var(--muted-foreground);
+}
+/* the call's tiles over the feed, which gives up the room: the composer stays where it is */
+.meet-tiles {
+  flex-shrink: 0;
+  max-height: 40dvh;
+  overflow-y: auto;
+}
+.meet-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 /* the transcript over the composer: the strip, and the whole transcript when it is open */
 .meet-transcript {
