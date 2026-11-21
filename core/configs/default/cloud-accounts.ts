@@ -113,7 +113,8 @@ const APPS: Record<string, CloudApp> = {
   },
   slack: {
     title: "Slack",
-    about: "A bot in your workspace: mention it or message it, and an agent answers in the thread.",
+    about:
+      "A bot in your workspace: an agent reads each thread of a channel it is in, and answers when it can help.",
     whoami: {
       // Slack answers 200 with `ok: false` to a token it refuses: no `team` is no name
       url: "https://slack.com/api/auth.test",

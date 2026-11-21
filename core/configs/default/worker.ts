@@ -678,8 +678,8 @@ async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs
     case "events.iterate.com/slack/webhook-received": {
       // What happened in a Slack workspace a member linked, on `/integrations/slack/<team>`,
       // relayed and signed by iterate Cloud (anything else of this type reaches no agent). One
-      // agent for each thread (slack.ts): a mention or a direct message starts it, and a later
-      // message of the thread reaches it only when it exists.
+      // agent for each thread (slack.ts): every member message reaches it, with or without a
+      // mention, and the agent decides whether to answer or stay silent.
       if (!cloudDeliveryOf(event)) break;
       const message = slackMessageOf(event.payload);
       if (!message) break;
@@ -691,8 +691,7 @@ async function cloudDeliveryEvent(itx: Itx, event: IterateConfigProcessEventArgs
       }
       // a member's `!debug`: the agent's path, its Dash link and a few facts, with no turn (debug.ts)
       if (await answerSlackDebug(itx, message)) break;
-      if (message.starts) await itx.agents.create(message.agent);
-      else if (!(await itx.agents.list()).some((agent) => agent.path === message.agent)) break;
+      await itx.agents.create(message.agent);
       await itx
         .cd(message.agent)
         .append({

@@ -38,14 +38,14 @@ const withFile = {
   files: [picture],
 };
 
-test("a mention starts the agent of its own thread", () => {
+test("a mention reaches the agent of its own thread, and is addressed to the bot", () => {
   const message = slackMessageOf(
     delivery({ type: "app_mention", ts: "17.000100", text: "<@UBOT> hi" }),
   );
   expect(message).toMatchObject({
     agent: "/agents/slack/T1/C1/17-000100",
     idempotencyKey: "slack:C1:17.000100",
-    starts: true,
+    addressed: true,
     thread: "17.000100",
   });
   expect(slackContentOf(message!)).toContain(
@@ -65,21 +65,31 @@ test("the agent is told to show Slack's status in its thread while it works, and
   expect(content).toContain('Clear it with `status: ""`');
 });
 
-test("a later message of the thread has the same agent, and starts none", () => {
+test("the agent is told that every member message reaches it, and that it may stay silent", () => {
+  const content = slackContentOf(
+    slackMessageOf(
+      delivery({ type: "message", ts: "18.000200", thread_ts: "17.000100", text: "lunch?" }),
+    )!,
+  );
+  expect(content).toContain("with or without a mention");
+  expect(content).toContain("stay silent: no answer, no status and no other call is needed");
+});
+
+test("a later message of the thread, with no mention, reaches the same agent", () => {
   const message = slackMessageOf(
     delivery({ type: "message", ts: "18.000200", thread_ts: "17.000100", text: "and this?" }),
   );
   expect(message).toMatchObject({
     agent: "/agents/slack/T1/C1/17-000100",
-    starts: false,
+    addressed: false,
     idempotencyKey: "slack:C1:18.000200",
   });
 });
 
-test("a direct message starts an agent with no mention", () => {
+test("a direct message is addressed to the bot with no mention", () => {
   expect(
     slackMessageOf(delivery({ type: "message", channel_type: "im", channel: "D1", ts: "19.1" })),
-  ).toMatchObject({ agent: "/agents/slack/T1/D1/19-1", starts: true });
+  ).toMatchObject({ agent: "/agents/slack/T1/D1/19-1", addressed: true });
 });
 
 test.for([
@@ -104,7 +114,7 @@ test("a member's message with a file reaches the agent of its thread, as the sam
   expect(message).toMatchObject({
     agent: without.agent,
     idempotencyKey: without.idempotencyKey,
-    starts: false,
+    addressed: false,
     text: plain.text,
     files: [{ id: "F0AAAAAAAAA", name: picture.name, mimetype: "image/png", size: 482113 }],
   });
@@ -127,12 +137,12 @@ test("a mention with a file arrives twice and is one message: one key, the same 
   const asMention = slackMessageOf(
     delivery({ ...withFile, text, type: "app_mention", subtype: undefined }),
   )!;
-  // only the mention starts an agent; whichever copy comes first, the agent reads the same words
-  expect(asMessage).toMatchObject({ idempotencyKey: "slack:C1:18.000200", starts: false });
+  // only the mention is addressed to the bot; whichever copy comes first, the agent reads the same words
+  expect(asMessage).toMatchObject({ idempotencyKey: "slack:C1:18.000200", addressed: false });
   expect(asMention).toMatchObject({
     idempotencyKey: asMessage.idempotencyKey,
     agent: asMessage.agent,
-    starts: true,
+    addressed: true,
     files: asMessage.files,
   });
   expect(slackContentOf(asMention)).toBe(slackContentOf(asMessage));
@@ -300,10 +310,10 @@ test("when Slack does not answer, nobody may, and the next message asks again", 
 
 test("a refused mention gets one short answer for its thread, and other words of a thread get none", async () => {
   const mind = slackMind(null);
-  const mention = { teamId: "T1", channel: "C1", thread: "17.000100", starts: true };
+  const mention = { teamId: "T1", channel: "C1", thread: "17.000100", addressed: true };
   await refuseSlackSender(mind, mention);
   await refuseSlackSender(mind, mention);
-  await refuseSlackSender(mind, { ...mention, thread: "18.000200", starts: false });
+  await refuseSlackSender(mind, { ...mention, thread: "18.000200", addressed: false });
   expect(mind.calls.map(({ method, form }) => [method, form.channel, form.thread_ts])).toEqual([
     ["chat.postMessage", "C1", "17.000100"],
   ]);
