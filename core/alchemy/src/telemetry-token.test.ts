@@ -12,61 +12,32 @@ import * as Redacted from "effect/Redacted";
 import {
   deleteLegacyAccountApiToken,
   isTelemetryTokenPersisted,
-  TELEMETRY_TOKEN,
-  TELEMETRY_TOKEN_IMMUTABLE,
   TelemetryToken,
   TelemetryTokenProvider,
   telemetryModeFromState,
   telemetryModeOf,
-  telemetryTokenValueOf,
 } from "./telemetry-token.ts";
 
-void test("first deploy with a provided token stores it redacted, and missing token dies with guidance", async () => {
-  const made = await Effect.runPromise(telemetryTokenValueOf("cf-telemetry-secret", undefined));
-  assert.equal(Redacted.value(made.value), "cf-telemetry-secret");
-  assert.doesNotMatch(JSON.stringify(made), /cf-telemetry-secret/);
-
-  const missing = await Effect.runPromiseExit(telemetryTokenValueOf(undefined, undefined));
-  assert.equal(missing._tag, "Failure");
-  assert.match(JSON.stringify(missing), new RegExp(TELEMETRY_TOKEN));
-});
-
-void test("later deploys reuse the kept token (omitted or identical) and refuse a changed token in both diff and reconcile", async () => {
+void test("a stack's telemetry token is the one its state keeps, and a stack with none in state takes no new one", async () => {
   const kept = { value: Redacted.make("cf-telemetry-v1") };
-
-  const reused = await Effect.runPromise(telemetryTokenValueOf(undefined, kept));
-  assert.equal(Redacted.value(reused.value), "cf-telemetry-v1");
-
-  const same = await Effect.runPromise(telemetryTokenValueOf("cf-telemetry-v1", kept));
-  assert.equal(Redacted.value(same.value), "cf-telemetry-v1");
-
-  const changedReconcile = await Effect.runPromiseExit(
-    telemetryTokenValueOf("cf-telemetry-v2", kept),
-  );
-  assert.equal(changedReconcile._tag, "Failure");
-  assert.ok(JSON.stringify(changedReconcile).includes(TELEMETRY_TOKEN_IMMUTABLE));
-
-  const diffWith = (token: string | undefined) =>
+  const reconcile = (output: typeof kept | undefined) =>
     Effect.gen(function* () {
       const provider = yield* TelemetryToken.Provider;
-      // TelemetryTokenProvider.diff inspects only `output`; omit unused Alchemy diff context fields.
-      return yield* provider.diff!({
+      // reconcile reads only `output`; the rest of Alchemy's context is left out
+      return yield* provider.reconcile({
         id: "TelemetryToken",
         news: { name: "iterate-ada-telemetry" },
-        olds: { name: "iterate-ada-telemetry" },
-        output: kept,
-      } as Parameters<NonNullable<typeof provider.diff>>[0]);
-    }).pipe(Effect.provide(TelemetryTokenProvider(token)));
-
-  assert.equal(await Effect.runPromise(diffWith(undefined)), undefined);
-  assert.equal(await Effect.runPromise(diffWith("cf-telemetry-v1")), undefined);
-
-  const changedDiff = await Effect.runPromiseExit(diffWith("cf-telemetry-v2"));
-  assert.equal(changedDiff._tag, "Failure");
-  assert.ok(JSON.stringify(changedDiff).includes(TELEMETRY_TOKEN_IMMUTABLE));
+        output,
+      } as Parameters<typeof provider.reconcile>[0]);
+    }).pipe(Effect.provide(TelemetryTokenProvider()));
+  const reused = await Effect.runPromise(reconcile(kept));
+  assert.equal(Redacted.value(reused.value), "cf-telemetry-v1");
+  const none = await Effect.runPromiseExit(reconcile(undefined));
+  assert.equal(none._tag, "Failure");
+  assert.match(JSON.stringify(none), /takes no new one/);
 });
 
-void test("telemetryModeOf resolves minted, given, and off across the three state fixtures and fails on state-store errors", async () => {
+void test("telemetryModeOf reads minted, given, and off from the state and fails on state-store errors", async () => {
   const rowOf = (
     fqn: string,
     resourceType: string,
@@ -95,24 +66,11 @@ void test("telemetryModeOf resolves minted, given, and off across the three stat
   assert.equal(isTelemetryTokenPersisted({ ...givenRow, status: "deleting" }), false);
   assert.equal(isTelemetryTokenPersisted({ ...givenRow, attr: {} }), false);
 
-  // Minted tokens in state stay in minted mode even when an env token is set
   assert.equal(
     telemetryModeFromState({ catalogToken: mintedCatalog, analyticsToken: mintedAnalytics }),
     "minted",
   );
-  assert.equal(
-    telemetryModeFromState(
-      { catalogToken: mintedCatalog, analyticsToken: mintedAnalytics },
-      "env-tok",
-    ),
-    "minted",
-  );
-
-  // Stored TelemetryToken or an env token selects given mode
   assert.equal(telemetryModeFromState({ givenToken: givenRow }), "given");
-  assert.equal(telemetryModeFromState({}, "env-tok"), "given");
-
-  // No stored token and no env token selects off mode
   assert.equal(telemetryModeFromState({}), "off");
 
   // State service integration across all three fixtures
@@ -154,14 +112,6 @@ void test("telemetryModeOf resolves minted, given, and off across the three stat
       telemetryModeOf("ada").pipe(Effect.provideService(State, Effect.succeed(stateWith({})))),
     ),
     "off",
-  );
-  assert.equal(
-    await Effect.runPromise(
-      telemetryModeOf("ada", "env-tok").pipe(
-        Effect.provideService(State, Effect.succeed(stateWith({}))),
-      ),
-    ),
-    "given",
   );
 
   // A state-store read failure must fail the deploy, never silently return "off"

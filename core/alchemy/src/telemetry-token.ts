@@ -1,11 +1,7 @@
-// telemetry-token.ts — THE STACK'S TELEMETRY API TOKEN, PROVIDED BY THE OWNER AND KEPT IN STATE.
-// One Cloudflare account-owned API token serves both the R2 Data Catalog / SQL queries and the
-// Analytics Engine queries of the telemetry Worker (./stack.ts). Because a Cloudflare OAuth
-// sign-in does not request "Account API Token Provisioning", the owner creates this single token
-// in Cloudflare's dashboard and passes it in `CLOUDFLARE_TELEMETRY_API_TOKEN` when turning
-// telemetry tables on. The stack keeps the redacted value in Alchemy's state so later deploys
-// and plans reuse it without asking again, and refuses a different token because Pipelines
-// catalog sinks keep the token they were made with.
+// telemetry-token.ts — THE TELEMETRY TOKEN THAT A STACK ALREADY KEEPS IN STATE. A stack whose
+// tables an earlier deploy made with a token keeps that token: its Pipelines catalog sinks keep
+// the token they were made with. A deploy takes no new token: a mind turns its tables on itself
+// (core/configs/default/telemetry.ts). The mode is read from the stack's state alone.
 //
 // `AccountApiTokenDeleteFallbackProvider` wraps Alchemy's `AccountApiTokenProvider` so deleting
 // an `AccountApiToken` resource succeeds even with a deploy sign-in that lacks API-token write
@@ -42,12 +38,12 @@ export type TelemetryToken = Resource<
 >;
 export const TelemetryToken = Resource<TelemetryToken>("Iterate.TelemetryToken");
 
-/** How the stack wires telemetry tables:
+/** How the stack wires telemetry tables, as its state says:
  *  - `"minted"`: state holds `TelemetryCatalogToken` or `TelemetryAnalyticsToken` — declare those
  *    two `AccountApiToken` resources so catalog sinks keep their original credentials.
- *  - `"given"`: state holds `TelemetryToken` or `CLOUDFLARE_TELEMETRY_API_TOKEN` is set — use the
- *    single owner-created token and refuse any different token.
- *  - `"off"`: neither stored nor provided — omit the telemetry bucket, catalog, sinks, and pipelines. */
+ *  - `"given"`: state holds `TelemetryToken` — use that one owner-created token.
+ *  - `"off"`: neither — the bucket and the streams are made, and no token, catalog, sink or
+ *    pipeline: the mind can make those itself (./mind-made-telemetry-tables.ts). */
 export type TelemetryMode = "minted" | "given" | "off";
 
 const isLiveResource = (persisted: PersistedState | undefined): persisted is ResourceState =>
@@ -57,72 +53,42 @@ const isLiveResource = (persisted: PersistedState | undefined): persisted is Res
 export const isTelemetryTokenPersisted = (persisted: PersistedState | undefined): boolean =>
   Boolean(isLiveResource(persisted) && persisted.attr && "value" in persisted.attr);
 
-/** Chooses the stack's telemetry mode from persisted state rows and an optional env token.
- *  Minted-token stacks stay in `minted` mode because catalog sinks keep the credentials they were
- *  created with. */
-export const telemetryModeFromState = (
-  rows: {
-    catalogToken?: PersistedState;
-    analyticsToken?: PersistedState;
-    givenToken?: PersistedState;
-  },
-  providedToken?: string,
-): TelemetryMode => {
+/** Chooses the stack's telemetry mode from persisted state rows. */
+export const telemetryModeFromState = (rows: {
+  catalogToken?: PersistedState;
+  analyticsToken?: PersistedState;
+  givenToken?: PersistedState;
+}): TelemetryMode => {
   if (isLiveResource(rows.catalogToken) || isLiveResource(rows.analyticsToken)) return "minted";
-  if (providedToken || isTelemetryTokenPersisted(rows.givenToken)) return "given";
+  if (isTelemetryTokenPersisted(rows.givenToken)) return "given";
   return "off";
 };
 
 /** Reads Alchemy's `State` once to determine the stack's telemetry mode for `stage`.
  *  Propagates `StateStoreError` so a store read failure stops the deploy rather than dropping
  *  existing telemetry resources. */
-export const telemetryModeOf = (stage: string, providedToken?: string) =>
+export const telemetryModeOf = (stage: string) =>
   Effect.gen(function* () {
     const stateOption = yield* Effect.serviceOption(State);
-    if (Option.isNone(stateOption)) return providedToken ? ("given" as const) : ("off" as const);
+    if (Option.isNone(stateOption)) return "off" as const;
     const state = yield* stateOption.value;
     const [catalogToken, analyticsToken, givenToken] = yield* Effect.all([
       state.get({ stack: "mind", stage, fqn: "TelemetryCatalogToken" }),
       state.get({ stack: "mind", stage, fqn: "TelemetryAnalyticsToken" }),
       state.get({ stack: "mind", stage, fqn: "TelemetryToken" }),
     ]);
-    return telemetryModeFromState({ catalogToken, analyticsToken, givenToken }, providedToken);
+    return telemetryModeFromState({ catalogToken, analyticsToken, givenToken });
   });
 
-/** Environment variable carrying the owner-created Cloudflare telemetry API token. */
-export const TELEMETRY_TOKEN = "CLOUDFLARE_TELEMETRY_API_TOKEN";
-
-/** Refusal when a different telemetry token is passed to a mind whose tables already hold one.
- *  Cloudflare Pipelines catalog sinks keep the credentials they were created with and refuse a
- *  replacement sink on an existing catalog table. */
-export const TELEMETRY_TOKEN_IMMUTABLE =
-  "This mind's telemetry token cannot be changed: its tables keep the token they were made with.";
-
-/** Resolves the telemetry token value from existing Alchemy state or the provided env value,
- *  refusing any token that differs from the stored one. */
-export const telemetryTokenValueOf = (
-  provided: string | undefined,
-  output: { value: Redacted.Redacted<string> } | undefined,
-) => {
-  if (provided && output && Redacted.value(output.value) !== provided)
-    return Effect.die(TELEMETRY_TOKEN_IMMUTABLE);
-  const value = output?.value || (provided ? Redacted.make(provided) : undefined);
-  if (!value)
-    return Effect.die(
-      `${TELEMETRY_TOKEN} is not set: create an account-owned Cloudflare API token with "Workers R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2 SQL Read", and "Account Analytics Read", then pass it in ${TELEMETRY_TOKEN} (iterate deploy opens a pre-filled dashboard link for it).`,
-    );
-  return Effect.succeed({ value });
-};
-
-/** Provider for `TelemetryToken`. Stores `token` in state on creation, reuses the stored value on
- *  later deploys, and refuses a different token so catalog sinks are never left with dead credentials. */
-export const TelemetryTokenProvider = (token?: string) =>
+/** Provider for `TelemetryToken`: it answers the value that the stack's state keeps. */
+export const TelemetryTokenProvider = () =>
   Provider.succeed(TelemetryToken, {
-    diff: ({ output }) =>
-      token && output && Redacted.value(output.value) !== token
-        ? Effect.die(TELEMETRY_TOKEN_IMMUTABLE)
-        : Effect.succeed(undefined),
-    reconcile: ({ output }) => telemetryTokenValueOf(token, output),
+    reconcile: ({ output }) =>
+      output
+        ? Effect.succeed({ value: output.value })
+        : Effect.die(
+            "This stack holds no telemetry token in its state, and a deploy takes no new one: a mind turns its telemetry tables on itself (core/configs/default/onboarding/telemetry.md).",
+          ),
     // The token was created by the person in Cloudflare's dashboard, not by the deploy.
     delete: () => Effect.void,
   });

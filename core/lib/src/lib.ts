@@ -37,6 +37,7 @@ type ErrorCode =
   | "SECRET_NOT_SET" // itx.secrets.delete of a path that holds no secret: already gone, or never set; or a set that a delete came in during, whose value is not kept
   | "NOT_CREATED" // a verb or delete on an agent, repo, workspace or sandbox whose path has no creation certificate (never created, or its create is still running or failed): create it first; `data` is { path }; never retried
   | "NO_ITX_EXPRESSION_MATCH" // no rewrite rule matches the call (default-deny)
+  | "TELEMETRY_TOKEN_HELD" // itx.telemetry.cut on a stack that holds its telemetry token: ask telemetry.query
   | "IDEMPOTENCY_CONFLICT"
   | "OFFSET_CONFLICT" // an input's expected `offset` is not the offset it would land at
   | "EVENT_TOO_LARGE" // one event's serialized body is over the append ceiling (stream.ts EVENT_BODY_MAX_CHARS)

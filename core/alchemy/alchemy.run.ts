@@ -11,20 +11,18 @@ import { ArtifactsNamespaceProvider } from "./src/artifacts-namespace.ts";
 import { ArtifactsRepoSubscriptionProvider } from "./src/artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinksProvider } from "./src/catalog-tables-of-sinks.ts";
 import { loadMindConfig, namesOf } from "./src/config.ts";
-import { DataCatalogProviderThatWaitsForItsToken } from "./src/data-catalog-token-wait.ts";
+import { MindMadeTelemetryTablesProvider } from "./src/mind-made-telemetry-tables.ts";
 import { ContainerSnapshotProviders } from "./src/container-snapshots.ts";
 import { CallsWithoutWriteProviders } from "./src/realtime.ts";
 import { RetiredCloudflareOAuthClientProvider } from "./src/retired-cloudflare-oauth-client.ts";
 import { mindStack, refuseDeploy } from "./src/stack.ts";
 import {
   AccountApiTokenDeleteFallbackProvider,
-  TELEMETRY_TOKEN,
   telemetryModeOf,
   TelemetryTokenProvider,
 } from "./src/telemetry-token.ts";
 
 const config = loadMindConfig();
-const providedTelemetryToken = process.env[TELEMETRY_TOKEN]?.trim() || undefined;
 
 /** Ends a command that is for another stage or another Cloudflare account than the config's. */
 const refuseAnotherStageOrAccount = Effect.gen(function* () {
@@ -50,14 +48,16 @@ export default Alchemy.Stack(
       ArtifactsNamespaceProvider(),
       ArtifactsRepoSubscriptionProvider(),
       CatalogTablesOfSinksProvider(),
+      // the telemetry tables that a mind made itself: a destroy removes them
+      // (src/mind-made-telemetry-tables.ts)
+      MindMadeTelemetryTablesProvider(),
       // the stack's former OAuth client: its row leaves the state with no call
       // (src/retired-cloudflare-oauth-client.ts)
       RetiredCloudflareOAuthClientProvider(),
-      // with the owner-created telemetry API token when enabling or rotating telemetry tables; kept in state after
-      TelemetryTokenProvider(providedTelemetryToken),
+      // the telemetry token that a stack keeps in state from an earlier deploy
+      TelemetryTokenProvider(),
       // legacy AccountApiToken cleanup succeeds even without API-token write scope on fresh sign-ins
       AccountApiTokenDeleteFallbackProvider(),
-      DataCatalogProviderThatWaitsForItsToken(),
       // Alchemy's own providers of the SFU app and TURN key, where a credential without "Calls
       // Write" leaves them not made (src/realtime.ts): these win over `Cloudflare.providers()`
       CallsWithoutWriteProviders(),
@@ -90,9 +90,7 @@ export default Alchemy.Stack(
   },
   // the check again: a deploy runs the program, and none may take the placeholder stage
   refuseAnotherStageOrAccount.pipe(
-    Effect.andThen(
-      telemetryModeOf(config.alchemy.stageName, providedTelemetryToken).pipe(Effect.orDie),
-    ),
+    Effect.andThen(telemetryModeOf(config.alchemy.stageName).pipe(Effect.orDie)),
     Effect.flatMap((telemetryMode) => mindStack(config, { telemetryMode })),
   ),
 );

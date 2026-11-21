@@ -185,6 +185,7 @@ member makes a token with "Billing Read" alone, and gives it to the mind.
 
 ## Telemetry
 
-When telemetry is turned on for a mind that exists, each context starts to send its events at
-its next wake, with its whole log from the first event. A context that never wakes again sends
-nothing: touch it (any read of it) to send its history.
+A mind deployed with no telemetry token turns its tables on and reads them itself, with a token
+at `/secrets/cloudflare-telemetry` (telemetry.ts; onboarding/telemetry.md).
+
+The streams keep what they received since the deploy that made them.

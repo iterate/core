@@ -1629,7 +1629,17 @@ export interface InstalledAppRoots {}
  *  (`itx as IterateContextApiWith<"myApp">`) where it knows the app is installed. */
 /** What `itx.telemetry.query` answers: the rows, the SQL that ran for the mind, and an optional
  *  plain notice (e.g. when telemetry tables are off). */
-export type TelemetryRows = { rows: Record<string, unknown>[]; sql: string; notice?: string };
+export type TelemetryRows = {
+  rows: Record<string, unknown>[];
+  sql: string;
+  notice?: string;
+  send?: TelemetrySend;
+};
+
+/** Where a query's SQL goes: there when the stack holds no telemetry token. The mind's own code
+ *  can then send the SQL itself, with a token of its own (core/configs/default/telemetry.ts).
+ *  `tables` is R2 SQL over the bucket's data catalog, `metrics` the account's Analytics Engine. */
+export type TelemetrySend = { engine: "tables" | "metrics"; accountId: string; bucket: string };
 
 export type IterateContextApiWith<App extends keyof InstalledAppRoots> = IterateContextApi &
   Pick<InstalledAppRoots, App>;
@@ -2166,7 +2176,13 @@ export interface IterateContextApi {
    *  `events`, `logs` and `spans` (Basin SQL), or over `metrics` alone (Workers Analytics Engine),
    *  each cut to this mind's rows of the last `hours` (default 24, at most 720), and answers the
    *  rows with the SQL that ran. Throws on a deployment with no warehouse. */
-  telemetry: { query(sql: string, options?: { hours?: number }): Promise<TelemetryRows> };
+  telemetry: {
+    query(sql: string, options?: { hours?: number }): Promise<TelemetryRows>;
+    /** The cut SQL and where it goes, under a name that no rule points away: after a mind turns its
+     *  tables on itself, `query` is its own code's (core/configs/default/telemetry.ts), which calls
+     *  this. Never rows: on a stack that holds its telemetry token it throws TELEMETRY_TOKEN_HELD. */
+    cut(sql: string, options?: { hours?: number }): Promise<{ sql: string; send: TelemetrySend }>;
+  };
   /** WHO IS A MEMBER OF THE MIND NOW, as the stack's sign-in knows it: the addresses its config
    *  names and the members an owner added. `has(email)` answers true or false. The mind's own
    *  code asks it to decide whose words from outside, such as a chat message, are a member's. */

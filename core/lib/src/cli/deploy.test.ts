@@ -3,15 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
-import {
-  DEPLOY_SCOPES,
-  RECOVER_SCOPES,
-  scopesLacking,
-  STACK_SCOPES,
-  TELEMETRY_TOKEN_ENV,
-  TELEMETRY_TOKEN_PERMISSIONS,
-  telemetryTokenPage,
-} from "./cloudflare-access.ts";
+import { DEPLOY_SCOPES, RECOVER_SCOPES, scopesLacking, STACK_SCOPES } from "./cloudflare-access.ts";
 import {
   boundaryCheck,
   boundaryRead,
@@ -52,9 +44,7 @@ import {
   WAITING_FOR_STORE,
   WAITING_FOR_BOUNDARY,
   stageNameOf,
-  telemetryTokenStep,
   unfinishedDeployIn,
-  verifyTelemetryToken,
   zeroTrustStep,
 } from "./deploy.ts";
 
@@ -254,7 +244,7 @@ test("the key's line names the key file only when it is here, and only when this
   expect(identityKeyLineOf(keyFile, { gaveTheId: false })).toBeUndefined();
 });
 
-test("sign-in never asks for Account API Token Provisioning, stack uses TelemetryToken, and telemetryTokenPage pre-fills the four telemetry permissions", () => {
+test("sign-in never asks for Account API Token Provisioning, and the stack makes a telemetry token only in minted mode", () => {
   expect(STACK_SCOPES).not.toContain("account_api_tokens:create");
   expect(DEPLOY_SCOPES).not.toContain("account_api_tokens:create");
   expect(STACK_SCOPES).not.toContain("workers-r2-bucket-item.write");
@@ -273,15 +263,6 @@ test("sign-in never asks for Account API Token Provisioning, stack uses Telemetr
   // AccountApiToken is declared only in minted mode; given mode uses TelemetryToken
   expect(script).toContain('if (telemetryMode === "minted")');
   expect(script).toContain('TelemetryToken("TelemetryToken"');
-
-  const url = telemetryTokenPage("ada-labs-com");
-  expect(url).toMatchObject({ origin: "https://dash.cloudflare.com" });
-  expect(url.searchParams.get("to")).toBe("/:account/api-tokens");
-  expect(url.searchParams.get("name")).toBe("iterate-ada-labs-com-telemetry");
-  expect(JSON.parse(url.searchParams.get("permissionGroupKeys") || "")).toEqual(
-    TELEMETRY_TOKEN_PERMISSIONS,
-  );
-  expect(TELEMETRY_TOKEN_ENV).toBe("CLOUDFLARE_TELEMETRY_API_TOKEN");
 });
 
 test("what a sign-in did not grant is read from the token answer's scope, and an answer with none granted all", () => {
@@ -358,113 +339,6 @@ test("redactMindConfig and formatMindConfigForStdout print full MindConfig while
   expect(printed).not.toContain("cf-secret-123");
   expect(printed).not.toContain("shh");
   expect(JSON.parse(printed)).toEqual(redacted);
-});
-
-test("verifyTelemetryToken accepts active account-owned tokens and rejects user-owned or invalid tokens", async () => {
-  const accountId = "0".repeat(32);
-  const ok = (result: unknown) => ({ status: 200, result, total: 0, error: "" });
-  const unauthorized = { status: 401, result: null, total: 0, error: "Invalid access token" };
-
-  expect(
-    await verifyTelemetryToken(accountId, "tok-acct", async (_method, path) =>
-      path === `/accounts/${accountId}/tokens/verify` ? ok({ status: "active" }) : unauthorized,
-    ),
-  ).toEqual({ ok: true });
-
-  const userToken = await verifyTelemetryToken(accountId, "tok-user", async (_method, path) =>
-    path === "/user/tokens/verify" ? ok({ status: "active" }) : unauthorized,
-  );
-  expect(userToken).toMatchObject({ ok: false });
-  expect("error" in userToken && userToken.error).toMatch(/user-owned API token/i);
-
-  const invalid = await verifyTelemetryToken(accountId, "tok-bad", async () => unauthorized);
-  expect(invalid).toEqual({ ok: false, error: "Invalid access token" });
-});
-
-test("telemetryTokenStep skips by default, uses env token when set, stops cleanly on minted, refuses changes on given, and warns not to delete or roll the token", async () => {
-  const account = { id: "a".repeat(32), name: "iterate (dev/preview)" };
-  const okVerify = async () => ({ ok: true as const });
-  const noTelemetryWorker = async () => ({
-    status: 404,
-    result: undefined,
-    total: 0,
-    error: "not found",
-  });
-  const mintedTelemetryWorker = async () => ({
-    status: 200,
-    result: {
-      bindings: [
-        { type: "secret_text", name: "ITERATE__CATALOG_TOKEN" },
-        { type: "secret_text", name: "ITERATE__ANALYTICS_TOKEN" },
-      ],
-    },
-    total: 1,
-    error: "",
-  });
-  const givenTelemetryWorker = async () => ({
-    status: 200,
-    result: {
-      bindings: [
-        { type: "secret_text", name: "ITERATE__CATALOG_TOKEN" },
-        { type: "secret_text", name: "ITERATE__ANALYTICS_TOKEN" },
-        { type: "plain_text", name: "TELEMETRY_TOKEN_SOURCE", text: "provided" },
-      ],
-    },
-    total: 1,
-    error: "",
-  });
-
-  // Default deploy (no env var, no --telemetry-token): goes through with no prompt and no stop
-  await expect(
-    telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
-      env: {},
-      isInteractive: false,
-      verify: okVerify,
-    }),
-  ).resolves.toEqual({});
-
-  // Env token provided: verified and returned even without --telemetry-token
-  await expect(
-    telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
-      env: { CLOUDFLARE_TELEMETRY_API_TOKEN: "tok-from-env" },
-      isInteractive: false,
-      verify: okVerify,
-    }),
-  ).resolves.toEqual({ token: "tok-from-env" });
-
-  // --telemetry-token on a minted mind reports mintedAlready without prompting
-  await expect(
-    telemetryTokenStep(mintedTelemetryWorker, account, "ada-labs-com", {
-      env: {},
-      prompt: true,
-      isInteractive: false,
-      verify: okVerify,
-    }),
-  ).resolves.toEqual({ mintedAlready: true });
-
-  // --telemetry-token on a given mind refuses because its sinks keep the token they were made with
-  await expect(
-    telemetryTokenStep(givenTelemetryWorker, account, "ada-labs-com", {
-      env: {},
-      prompt: true,
-      isInteractive: false,
-      verify: okVerify,
-    }),
-  ).rejects.toThrow(
-    "This mind's telemetry token cannot be changed: its tables keep the token they were made with.",
-  );
-
-  // --telemetry-token with no terminal and no env var prints dashboard link and do-not-delete warning
-  await expect(
-    telemetryTokenStep(noTelemetryWorker, account, "ada-labs-com", {
-      env: {},
-      prompt: true,
-      isInteractive: false,
-      verify: okVerify,
-    }),
-  ).rejects.toThrow(
-    /dash\.cloudflare\.com.*Do not delete or roll this token.*CLOUDFLARE_TELEMETRY_API_TOKEN/s,
-  );
 });
 
 test("CLI color palette respects NO_COLOR/TERM/TTY and styles Cloudflare account names, codes, domains, URLs, and headings", () => {
@@ -740,17 +614,7 @@ test("deploy has no OAuth-client token prompt or Account API Token Provisioning,
   expect(source).toContain("CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken");
   expect(source).toContain("CLOUDFLARE_TELEMETRY_API_TOKEN: _droppedTelemetryToken");
   expect(source).toContain(
-    "await telemetryTokenStep(cf, account, stageName, {\n      plan: input.plan,\n      prompt: input.telemetryToken,\n    })",
-  );
-  expect(source).toContain(
     'p.log.info(`${c.callout("MindConfig:")}\\n${formatMindConfigForStdout(deployedConfig)}`)',
-  );
-  expect(source).toContain(
-    "Telemetry is off (no token). The Dash's Analytics page stays empty until you run",
-  );
-  // telemetry mode read must happen before endAccess revokes the Cloudflare sign-in token
-  expect(source.indexOf("const deployedTelemetryMode =")).toBeLessThan(
-    source.lastIndexOf("await endAccess(access);"),
   );
   // iconic 𝑖 is printed on its own very first line before p.intro
   expect(source).toContain('console.log(c.mark("𝑖"));');
@@ -763,13 +627,6 @@ test("deploy has no OAuth-client token prompt or Account API Token Provisioning,
   expect(source).toContain("Press Enter to open in browser...");
   expect(source.indexOf("Press Enter to open in browser...")).toBeLessThan(
     source.indexOf("openPageCommand(new URL(url)"),
-  );
-  // telemetry token is collected before buying a domain or erasing zone holdings
-  expect(source.indexOf("await telemetryTokenStep(")).toBeLessThan(
-    source.indexOf("const zone = await zoneOf("),
-  );
-  expect(source.indexOf("await telemetryTokenStep(")).toBeLessThan(
-    source.indexOf("await eraseHoldings("),
   );
 });
 

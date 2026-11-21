@@ -1,4 +1,5 @@
 import type { ItxHostRoot } from "core-itx";
+import { codedError } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { Door } from "iterate/workers";
 import { assertDeliveryCaller } from "./webhooks.ts";
@@ -7,11 +8,24 @@ export const telemetryRoots = (egress: () => Pick<Door, "queryTelemetry" | "send
   ({
     telemetry: {
       description:
-        'the mind\'s telemetry as SQL, its last day unless `{ hours }` says (at most 720): `telemetry.query("SELECT type, count(*) FROM events GROUP BY type")` over `events`, `logs`, `spans`, or `metrics` alone',
-      build: () => ({
-        query: (sql: string, options?: { hours?: number }) =>
-          egress().queryTelemetry(String(sql), options?.hours),
-      }),
+        "the mind's telemetry as SQL, its last day unless `{ hours }` says (at most 720): `telemetry.query(\"SELECT type, count(*) FROM events GROUP BY type\")` over `events`, `logs`, `spans`, or `metrics` alone; `telemetry.cut(sql, { hours })` answers `{ sql, send }`, the cut SQL and where it goes, on a stack that holds no telemetry token, for a mind's own read (core/configs/default/telemetry.ts)",
+      build: () => {
+        const query = (sql: string, options?: { hours?: number }) =>
+          egress().queryTelemetry(String(sql), options?.hours);
+        // `cut` is under a name that no rule points away, for the mind's own read of the tables it
+        // made (core/configs/default/telemetry.ts). It never gives rows: a rule that holds
+        // `query` for approval holds every read.
+        const cut = async (sql: string, options?: { hours?: number }) => {
+          const { send, sql: cutSql } = await query(sql, options);
+          if (!send)
+            throw codedError(
+              "TELEMETRY_TOKEN_HELD",
+              "itx.telemetry.cut: the stack holds its telemetry token: ask telemetry.query",
+            );
+          return { sql: cutSql, send };
+        };
+        return { query, cut };
+      },
     },
     platformHook: {
       description:

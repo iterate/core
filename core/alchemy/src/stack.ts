@@ -17,9 +17,11 @@
 // the boundary, the same build, holds the connection in a Durable Object of its own.
 //
 // The stack generates four keys (three with an external mind) and keeps one owner-created
-// telemetry API token in state. It makes no OAuth client: a member connects the mind to the
-// account through Cloudflare's MCP server, for which the mind is its own client
-// (core/configs/default/cloudflare.ts).
+// telemetry API token in state, when it is given one. With a token it makes the telemetry
+// tables; with none it makes their bucket and streams, and the mind can make the tables itself
+// with a secret of its own (core/configs/default/telemetry.ts). It makes no OAuth client: a
+// member connects the mind to the account through Cloudflare's MCP server, for which the mind is
+// its own client (core/configs/default/cloudflare.ts).
 // An owner signs in first with a code mailed to their address, by the mind or by Cloudflare
 // Access, and adds a passkey.
 import { readFileSync } from "node:fs";
@@ -38,6 +40,7 @@ import { ArtifactsNamespace } from "./artifacts-namespace.ts";
 import { ArtifactsRepoSubscription } from "./artifacts-repo-subscription.ts";
 import { CatalogTablesOfSinks } from "./catalog-tables-of-sinks.ts";
 import { type MindConfig, namesOf } from "./config.ts";
+import { MindMadeTelemetryTables, telemetryTableNames } from "./mind-made-telemetry-tables.ts";
 import { REALTIME_SFU, realtimeConfigOf, TURN_KEY } from "./realtime.ts";
 import { type TelemetryMode, TelemetryToken } from "./telemetry-token.ts";
 
@@ -80,7 +83,6 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     const { accountId, zones } = config.cloudflare;
     const mindIsInTheStack = config.topology === "full-cloudflare";
     const telemetryMode = options.telemetryMode || "given";
-    const telemetryTables = telemetryMode !== "off";
 
     // ── keys, generated once and kept in the stack's state: each is a secret of its Worker ──
     const atRestKey = yield* Alchemy.makeRandom("SecretsAtRestKey", KEY);
@@ -91,30 +93,56 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // Three modes (./telemetry-token.ts `telemetryModeOf`):
     //   - "minted": two stack-managed AccountApiToken resources.
     //   - "given": one owner-created TelemetryToken kept in state.
-    //   - "off": no telemetry bucket, catalog, sinks, pipelines, or OTLP destinations.
-    let telemetryTableBindings:
+    //   A deploy takes no new token, so a stack's mode never changes from "off".
+    //   - "off": no token. The bucket, the streams and the OTLP destinations are made, and no
+    //     catalog, sink or pipeline: the mind can make those itself, with a secret of its own
+    //     (core/configs/default/telemetry.ts). A stream with no pipeline keeps what it is sent,
+    //     and a pipeline made later writes it into the table (measured on 20 Nov 2026).
+    const telemetryBucket = yield* Cloudflare.R2.Bucket("TelemetryBucket", {
+      name: names.telemetryBucket,
+      forceDestroy: true,
+      // A sink leaves multipart uploads open, and a destroy can abort them only with a token
+      // that it can read. With this rule R2 aborts them itself after a day.
+      lifecycleRules: [
+        {
+          id: "abort-stale-uploads",
+          abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 86_400 } },
+        },
+      ],
+    });
+    /** The stream that a Worker writes, one for each table. A changed schema replaces the stream,
+     *  and what the old one still held is lost: a column change is a new table. */
+    const streamOf = (table: "events" | "logs" | "spans") =>
+      Cloudflare.Pipelines.Stream(`Telemetry_${table}_stream`, {
+        name: telemetryTableNames(names.telemetryTables, table).stream,
+        format: { type: "json" },
+        http: false,
+        workerBinding: { enabled: true },
+        schema: TelemetryStreamFields.parse(
+          JSON.parse(readFileSync(core(`telemetry-worker/schemas/${table}.json`), "utf8")),
+        ),
+      });
+    const streams = {
+      EVENTS: yield* streamOf("events"),
+      LOGS: yield* streamOf("logs"),
+      SPANS: yield* streamOf("spans"),
+    };
+    // The tables that the mind made itself, which a destroy removes before the bucket and the
+    // streams go. A stack's mode never changes, so a live stack never loses this resource.
+    if (telemetryMode === "off")
+      yield* MindMadeTelemetryTables("TelemetryTablesOfTheMind", {
+        accountId,
+        bucket: telemetryBucket.bucketName,
+        streams: [streams.EVENTS.name, streams.LOGS.name, streams.SPANS.name],
+        tables: names.telemetryTables,
+      });
+    let telemetryTokenBindings:
       | {
           ITERATE__CATALOG_TOKEN: Output.Output<Redacted.Redacted<string>>;
           ITERATE__ANALYTICS_TOKEN: Output.Output<Redacted.Redacted<string>>;
-          TELEMETRY_TOKEN_SOURCE?: "provided";
-          EVENTS: Cloudflare.Pipelines.Stream;
-          LOGS: Cloudflare.Pipelines.Stream;
-          SPANS: Cloudflare.Pipelines.Stream;
         }
       | undefined;
-    if (telemetryTables) {
-      const telemetryBucket = yield* Cloudflare.R2.Bucket("TelemetryBucket", {
-        name: names.telemetryBucket,
-        forceDestroy: true,
-        // A sink leaves multipart uploads open, and a destroy can abort them only with a token
-        // that it can read. With this rule R2 aborts them itself after a day.
-        lifecycleRules: [
-          {
-            id: "abort-stale-uploads",
-            abortMultipartUploadsTransition: { condition: { type: "Age", maxAge: 86_400 } },
-          },
-        ],
-      });
+    if (telemetryMode !== "off") {
       let catalogTokenValue: Output.Output<Redacted.Redacted<string>>;
       let analyticsTokenValue: Output.Output<Redacted.Redacted<string>>;
       if (telemetryMode === "minted") {
@@ -179,43 +207,30 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         namespace: "telemetry",
         tables: ["events", "logs", "spans"],
       });
-      /** One table of the catalog: the stream that a Worker writes, the sink that writes the
-       *  stream's rows into the table as Parquet, and the pipeline between the two. Answers the
-       *  stream. A changed schema replaces the stream, and what the old one still held is lost:
-       *  a column change is a new table. */
-      const telemetryTable = (table: "events" | "logs" | "spans") =>
-        Effect.gen(function* () {
-          const stream = yield* Cloudflare.Pipelines.Stream(`Telemetry_${table}_stream`, {
-            name: `${names.telemetryTables}_${table}_stream`,
-            format: { type: "json" },
-            http: false,
-            workerBinding: { enabled: true },
-            schema: TelemetryStreamFields.parse(
-              JSON.parse(readFileSync(core(`telemetry-worker/schemas/${table}.json`), "utf8")),
-            ),
-          });
-          const sink = yield* Cloudflare.Pipelines.Sink(`Telemetry_${table}_sink`, {
-            name: `${names.telemetryTables}_${table}_sink`,
-            type: "basin_catalog",
-            catalog: telemetryCatalog,
-            table: { namespace: sinkTables.namespace, name: table },
-            token: catalogTokenValue,
-            format: { type: "parquet", compression: "zstd", rowGroupBytes: 32 * 1024 * 1024 },
-            rollingPolicy: { intervalSeconds: 60 },
-          });
-          yield* Cloudflare.Pipelines.Pipeline(`Telemetry_${table}_pipeline`, {
-            name: `${names.telemetryTables}_${table}`,
-            sql: Output.interpolate`INSERT INTO ${sink.name} SELECT * FROM ${stream.name}`,
-          });
-          return stream;
+      // Each table's sink, which writes its stream's rows into the table as Parquet, and the
+      // pipeline between the two.
+      for (const [table, stream] of [
+        ["events", streams.EVENTS],
+        ["logs", streams.LOGS],
+        ["spans", streams.SPANS],
+      ] as const) {
+        const sink = yield* Cloudflare.Pipelines.Sink(`Telemetry_${table}_sink`, {
+          name: telemetryTableNames(names.telemetryTables, table).sink,
+          type: "basin_catalog",
+          catalog: telemetryCatalog,
+          table: { namespace: sinkTables.namespace, name: table },
+          token: catalogTokenValue,
+          format: { type: "parquet", compression: "zstd", rowGroupBytes: 32 * 1024 * 1024 },
+          rollingPolicy: { intervalSeconds: 60 },
         });
-      telemetryTableBindings = {
+        yield* Cloudflare.Pipelines.Pipeline(`Telemetry_${table}_pipeline`, {
+          name: telemetryTableNames(names.telemetryTables, table).pipeline,
+          sql: Output.interpolate`INSERT INTO ${sink.name} SELECT * FROM ${stream.name}`,
+        });
+      }
+      telemetryTokenBindings = {
         ITERATE__CATALOG_TOKEN: catalogTokenValue,
         ITERATE__ANALYTICS_TOKEN: analyticsTokenValue,
-        ...(telemetryMode === "given" && { TELEMETRY_TOKEN_SOURCE: "provided" as const }),
-        EVENTS: yield* telemetryTable("events"),
-        LOGS: yield* telemetryTable("logs"),
-        SPANS: yield* telemetryTable("spans"),
       };
     }
     const telemetryMetrics = yield* Cloudflare.AnalyticsEngine.Dataset("TELEMETRY_METRICS", {
@@ -227,9 +242,9 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
       compatibility: { date: COMPATIBILITY_DATE },
       // never exported to itself: a failure to land would make more of what failed to land
       observability: { ...KEEP_ALL, logs: { ...KEEP_ALL, invocationLogs: true }, traces: KEEP_ALL },
-      // Cloudflare's export posts to this workers.dev address when telemetry tables are enabled.
-      // The other Workers name the export's destinations, so the intake cannot be behind one of them.
-      workersDev: { enabled: telemetryTables, previewsEnabled: false },
+      // Cloudflare's export posts to this workers.dev address. The other Workers name the
+      // export's destinations, so the intake cannot be behind one of them.
+      workersDev: { enabled: true, previewsEnabled: false },
       env: {
         ITERATE: JSON.stringify({
           ...sharedConfigOf(config),
@@ -243,7 +258,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           eventsWriterName: mindIsInTheStack ? names.mind : "external-mind",
         }),
         ITERATE__OTLP_SECRET: otlpSecret,
-        ...telemetryTableBindings,
+        ...telemetryTokenBindings,
+        ...streams,
         METRICS: telemetryMetrics,
       },
     });
@@ -261,8 +277,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         // a fresh workers.dev hostname is not routed everywhere yet (1042)
         skipPreflightCheck: true,
       });
-    const logsDestination = telemetryTables ? yield* telemetryDestination("logs") : undefined;
-    const tracesDestination = telemetryTables ? yield* telemetryDestination("traces") : undefined;
+    const logsDestination = yield* telemetryDestination("logs");
+    const tracesDestination = yield* telemetryDestination("traces");
 
     // ── the settings that the four Workers below share ──
     const sharedWorkerProps = {
@@ -271,11 +287,11 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         logs: {
           ...KEEP_ALL,
           invocationLogs: true,
-          ...(logsDestination && { destinations: [logsDestination.slug] }),
+          destinations: [logsDestination.slug],
         },
         traces: {
           ...KEEP_ALL,
-          ...(tracesDestination && { destinations: [tracesDestination.slug] }),
+          destinations: [tracesDestination.slug],
         },
       },
       // a Durable Object runs a deploy's code at once, as the Worker in front of it does

@@ -75,6 +75,7 @@ import {
   slackMessageOf,
   slackSenderIsMember,
 } from "./slack.ts";
+import { telemetryQuery, telemetryToken, telemetryTurnOn } from "./telemetry.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: apps.md, and the recipes at https://github.com/jonastemplestein/iterategrations. A
@@ -580,6 +581,24 @@ export default class extends IterateConfigEntrypoint {
   async cloudflareBilling(account: string, path: string) {
     using itx = this.getItx();
     return await cloudflareBilling(itx, account, path);
+  }
+
+  /** `itx.config.telemetryToken()`, `itx.config.telemetryTurnOn()`,
+   *  `itx.config.telemetryQuery(sql, { hours })`: the mind turns its telemetry tables on and reads
+   *  them itself, with a token a member gives (telemetry.ts; onboarding/telemetry.md). */
+  async telemetryToken(options?: { again?: boolean }) {
+    using itx = this.getItx();
+    return await telemetryToken(itx, options);
+  }
+
+  async telemetryTurnOn() {
+    using itx = this.getItx();
+    return await telemetryTurnOn(itx);
+  }
+
+  async telemetryQuery(sql: string, options?: { hours?: number }) {
+    using itx = this.getItx();
+    return await telemetryQuery(itx, sql, options);
   }
 }
 

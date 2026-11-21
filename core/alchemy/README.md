@@ -113,24 +113,18 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   `STACK_SCOPES` in [cloudflare-access.ts](../lib/src/cli/cloudflare-access.ts). A sign-in's
   scope is an API token's permission under another spelling (`workers-scripts.write` is "Workers
   Scripts Write").
-- Telemetry tables (`events`, `logs`, `spans`, and `metrics` SQL) are optional (`src/telemetry-token.ts`,
-  `telemetryModeOf`):
-  - **Stack-managed tokens (`minted`):** a stack whose Alchemy state holds `TelemetryCatalogToken`
-    or `TelemetryAnalyticsToken` declares those two `AccountApiToken` resources, sinks, and bindings
-    so existing catalog sinks keep their credentials (`alchemy plan` is `noop` for telemetry, with
-    no deletes and no token asked).
-  - **Owner-provided token (`given`):** passing `CLOUDFLARE_TELEMETRY_API_TOKEN` (one account-owned
-    token with "Workers R2 Data Catalog Write", "Workers R2 Storage Bucket Item Write", "Workers R2
-    SQL Read", and "Account Analytics Read", or `iterate deploy --telemetry-token`) turns telemetry
-    tables on and keeps the redacted token in Alchemy's state so later deploys and plans keep every
-    telemetry resource with no changes. **Do not delete or roll this token:** the mind's Pipelines
-    catalog sinks keep the token they were made with, and a `given` mind refuses a changed token.
-    When `iterate-<alchemy.stageName>-telemetry` exists, you can narrow "Workers R2 Storage Bucket
-    Item Write" and "Workers R2 SQL Read" on that token to that bucket alone.
-  - **No token (`off`):** a deploy with no token in the environment and none in state succeeds
-    without creating the telemetry R2 bucket, Data Catalog, sink tables, Pipelines
-    streams/sinks/pipelines, or OTLP observability destinations; `itx.telemetry.query` answers
-    `"telemetry tables are off: add a telemetry token"`.
+- Telemetry tables (`events`, `logs`, `spans`, and `metrics` SQL) have three modes, read from the
+  stack's state (`src/telemetry-token.ts`, `telemetryModeOf`). A deploy takes no telemetry token.
+  - **`minted`:** the state holds `TelemetryCatalogToken` or `TelemetryAnalyticsToken`: the stack
+    declares those two `AccountApiToken` resources, the catalog, sinks and pipelines, so its sinks
+    keep their credentials.
+  - **`given`:** the state holds `TelemetryToken`, an owner-created token: the stack keeps using
+    it. **Do not delete or roll it:** the sinks keep the token they were made with.
+  - **`off`:** neither. The stack makes the telemetry bucket, the three streams and the OTLP
+    destinations, and no catalog, sink, pipeline or token. The mind makes and reads its tables
+    itself, with a token kept as its secret `/secrets/cloudflare-telemetry`
+    (core/configs/default/telemetry.ts); the streams keep what they are sent until then. A
+    destroy removes what the mind made (`src/mind-made-telemetry-tables.ts`).
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,
@@ -145,10 +139,6 @@ Two refusals of a first deploy are known:
   requests in its first seconds ("State store request failed"), also in the middle of the
   apply. It did so for every new store in the proofs of 18 Nov 2026. Nothing is made without
   state: run the deploy again.
-- **The catalog's new token.** Cloudflare's data catalog does not know a new API token at once
-  ("InvalidCredential"). `src/data-catalog-token-wait.ts` tries again for two minutes. A deploy
-  that still fails there leaves a catalog that is on and is not in the stack's state: the next
-  deploy needs `--adopt`.
 - **Another stack's records in the store.** The live minds' earlier stack used the same store's
   name. A deploy over such a stack's records, not moved by hand, stops in its plan with
   "OwnedBySomeoneElse" for the zone's records and routes, and changes nothing. Destroy that

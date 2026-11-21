@@ -55,10 +55,8 @@ import {
   SIGN_IN_ENDED_EXIT,
   SIGN_IN_FILE,
   SignInEnded,
-  TELEMETRY_TOKEN_ENV,
   parsed,
   resultOf,
-  telemetryTokenPage,
 } from "./cloudflare-access.ts";
 import { loginFlowFor } from "./device-login/flow.ts";
 import {
@@ -88,8 +86,6 @@ export type DeployInput = {
   source?: string;
   ref?: string;
   setup?: boolean;
-  /** turn on telemetry tables with an account-owned Cloudflare telemetry API token */
-  telemetryToken?: boolean;
   /** the stack's plan alone, over a mind that is there: nothing changes (`planArgsOf`) */
   plan?: boolean;
 };
@@ -958,8 +954,6 @@ type Run = {
   /** the file that holds the script's one input */
   config: string;
   token: string;
-  /** owner-created Cloudflare telemetry API token, passed when creating or rotating it */
-  telemetryToken?: string;
   log: string;
   children: Set<ChildProcess>;
   say?: (line: string) => void;
@@ -1007,6 +1001,9 @@ function deployOnce(
   return new Promise((done, failed) => {
     const file = createWriteStream(run.log, { flags: "a" });
     const { command, first } = run.source.pnpm;
+    // A source of an earlier version (`--ref`) still turns telemetry tables on with a token in
+    // CLOUDFLARE_TELEMETRY_API_TOKEN: dropped, so a token of the shell never makes a mind's
+    // tables beside the ones that the mind makes itself.
     const {
       CLOUDFLARE_OAUTH_CLIENT_API_TOKEN: _droppedOAuthToken,
       CLOUDFLARE_TELEMETRY_API_TOKEN: _droppedTelemetryToken,
@@ -1020,7 +1017,6 @@ function deployOnce(
         NO_COLOR: "1",
         FORCE_COLOR: "0",
         CLOUDFLARE_API_TOKEN: run.token,
-        ...(run.telemetryToken && { [TELEMETRY_TOKEN_ENV]: run.telemetryToken }),
         ITERATE_MIND_CONFIG: run.config,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -1053,12 +1049,10 @@ function deployOnce(
 
 /** A line of the deploy's output with the text of any token replaced. */
 const hidden = (line: string, run: Run) =>
-  [
-    run.token,
-    run.telemetryToken,
-    process.env[TELEMETRY_TOKEN_ENV],
-    process.env.CLOUDFLARE_OAUTH_CLIENT_API_TOKEN,
-  ].reduce<string>((text, token) => (token ? text.replaceAll(token, "[token]") : text), line);
+  [run.token, process.env.CLOUDFLARE_OAUTH_CLIENT_API_TOKEN].reduce<string>(
+    (text, token) => (token ? text.replaceAll(token, "[token]") : text),
+    line,
+  );
 
 /** The deploy. When the state store refused it (`saysTheStateStoreRefused`), it waits until
  *  Cloudflare serves the store (`waitForStore`); when Alchemy did not yet see the queue's
@@ -1715,164 +1709,6 @@ export function unfinishedDeployIn(
   return undefined;
 }
 
-/** Verifies that a pasted or env-provided Cloudflare telemetry API token is an active
- *  account-owned token for `accountId`. Rejects user-owned tokens (which stop working when that
- *  user leaves the account) with a specific message. */
-export async function verifyTelemetryToken(
-  accountId: string,
-  token: string,
-  api: Cloudflare = cloudflare(token),
-) {
-  const Active = z.object({ status: z.string() });
-  try {
-    const accountAnswer = await api("GET", `/accounts/${accountId}/tokens/verify`);
-    if (accountAnswer.status === 200 && resultOf(Active, accountAnswer)?.status === "active")
-      return { ok: true as const };
-    const userAnswer = await api("GET", "/user/tokens/verify");
-    if (userAnswer.status === 200 && resultOf(Active, userAnswer)?.status === "active")
-      return {
-        ok: false as const,
-        error:
-          "that is a user-owned API token, which stops working if that user leaves the account. Create an account-owned API token using the dashboard link above instead",
-      };
-    return {
-      ok: false as const,
-      error: accountAnswer.error || userAnswer.error || `HTTP ${accountAnswer.status}`,
-    };
-  } catch (error) {
-    return {
-      ok: false as const,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-/** Reads the deployed telemetry Worker's bindings to identify its token mode:
- *  - `"given"`: carries `TELEMETRY_TOKEN_SOURCE: "provided"`
- *  - `"minted"`: carries `ITERATE__CATALOG_TOKEN` without `TELEMETRY_TOKEN_SOURCE: "provided"`
- *  - `"off"`: no telemetry Worker or no catalog token binding */
-async function stackTelemetryTokenMode(
-  cf: Cloudflare,
-  account: string,
-  stageName: string,
-): Promise<"minted" | "given" | "off"> {
-  const settings = await cf(
-    "GET",
-    `/accounts/${account}/workers/scripts/iterate-${stageName}-telemetry/settings`,
-  );
-  if (settings.status === 404) return "off";
-  if (settings.status !== 200)
-    throw new Error(
-      `Cloudflare did not answer with the telemetry Worker's settings (${settings.status}: ${settings.error}). Nothing was changed. Run the command again.`,
-    );
-  const bindings = WorkerSettings.safeParse(settings.result).data?.bindings || [];
-  const hasProvidedMarker = bindings.some(
-    (binding) =>
-      binding.type === "plain_text" &&
-      binding.name === "TELEMETRY_TOKEN_SOURCE" &&
-      binding.text === "provided",
-  );
-  if (hasProvidedMarker) return "given";
-  const hasCatalogToken = bindings.some((binding) => binding.name === "ITERATE__CATALOG_TOKEN");
-  return hasCatalogToken ? "minted" : "off";
-}
-
-/** Collects and verifies the optional account-owned Cloudflare telemetry API token:
- *  - With `--telemetry-token` on a `minted` mind, stops with nothing changed (`mintedAlready`);
- *  - With `--telemetry-token` on a `given` mind, refuses because catalog sinks keep the token they
- *    were made with;
- *  - Uses `CLOUDFLARE_TELEMETRY_API_TOKEN` from the environment when set (for deploy and `--plan`);
- *  - Otherwise skips with no prompt and no stop unless `--telemetry-token` was passed;
- *  - With `--telemetry-token` on an `off` mind, opens Cloudflare's pre-filled dashboard link (after
- *    Enter) and reads the token, or prints the link and stops cleanly with no terminal attached. */
-export async function telemetryTokenStep(
-  cf: Cloudflare,
-  account: Account,
-  stageName: string,
-  options: {
-    plan?: boolean;
-    prompt?: boolean;
-    env?: NodeJS.ProcessEnv;
-    isInteractive?: boolean;
-    verify?: typeof verifyTelemetryToken;
-  } = {},
-): Promise<{ token?: string; mintedAlready?: boolean }> {
-  if (options.prompt) {
-    const mode = await stackTelemetryTokenMode(cf, account.id, stageName);
-    if (mode === "minted") return { mintedAlready: true };
-    if (mode === "given")
-      throw new Error(
-        "This mind's telemetry token cannot be changed: its tables keep the token they were made with.",
-      );
-  }
-  const verify = options.verify || verifyTelemetryToken;
-  const env = options.env || process.env;
-  const fromEnv = env[TELEMETRY_TOKEN_ENV]?.trim();
-  if (fromEnv) {
-    const checked = await verify(account.id, fromEnv);
-    if (!checked.ok)
-      throw new Error(
-        `Cloudflare rejected ${TELEMETRY_TOKEN_ENV} (${checked.error}). Create a valid account-owned telemetry token at ${telemetryTokenPage(stageName).href} and run again.`,
-      );
-    p.log.info(`Using Cloudflare telemetry API token from ${TELEMETRY_TOKEN_ENV}.`);
-    return { token: fromEnv };
-  }
-  if (options.plan || !options.prompt) return {};
-  const url = telemetryTokenPage(stageName).href;
-  const canPrompt = options.isInteractive ?? interactive();
-  if (!canPrompt)
-    throw new Error(
-      [
-        `To turn on telemetry tables, create one account-owned Cloudflare API token at:`,
-        url,
-        `Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
-        `Then run again with ${TELEMETRY_TOKEN_ENV}=<token>. Nothing was changed.`,
-      ].join("\n"),
-    );
-  const c = palette();
-  await page(
-    [
-      `Create one account-owned telemetry API token for ${c.account(account.name)} to enable SQL over events, logs, spans, and metrics.`,
-      `Open this link (select account ${c.account(account.name)} if asked), click ${c.callout('"Continue to summary" → "Create Token"')}, and copy it:`,
-      `Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
-    ].join("\n"),
-    url,
-  );
-  for (;;) {
-    const pasted = await readTelemetryTokenInput();
-    const checked = await verify(account.id, pasted);
-    if (checked.ok) {
-      p.log.success("Verified the Cloudflare telemetry API token.");
-      return { token: pasted };
-    }
-    p.log.warn(
-      `Cloudflare rejected that token (${checked.error}). Paste an active account-owned API token.`,
-    );
-  }
-}
-
-/** Reads a pasted token from the terminal, throwing cleanly if stdin ends before a token arrives. */
-async function readTelemetryTokenInput(): Promise<string> {
-  let onEnd: (() => void) | undefined;
-  try {
-    const answer = await Promise.race([
-      ask<string>(`set ${TELEMETRY_TOKEN_ENV}=<token>`, () =>
-        p.password({
-          message: "Paste the account-owned Cloudflare telemetry API token",
-          validate: (value) => (value?.trim() ? undefined : "Paste the API token from Cloudflare"),
-        }),
-      ),
-      new Promise<never>((_, reject) => {
-        onEnd = () => reject(new Error("No token was pasted. Nothing was changed."));
-        process.stdin.once("end", onEnd);
-      }),
-    ]);
-    return answer.trim();
-  } finally {
-    if (onEnd) process.stdin.off("end", onEnd);
-  }
-}
-
 // ---------------------------------------------------------------------------------------------
 // The mind's identity.
 
@@ -2243,20 +2079,6 @@ export async function deployMind(input: DeployInput) {
       ? await holdingsToErase(pick.zone.uses || [], pick.zone.id)
       : undefined;
 
-    // Collect the optional telemetry API token only when `CLOUDFLARE_TELEMETRY_API_TOKEN` is set
-    // or `--telemetry-token` was requested, before mutating the account or buying a domain so
-    // stopping here leaves nothing changed.
-    const telemetryStep = await telemetryTokenStep(cf, account, stageName, {
-      plan: input.plan,
-      prompt: input.telemetryToken,
-    });
-    if (telemetryStep.mintedAlready) {
-      p.log.info("This mind already has its telemetry tokens; nothing was changed.");
-      p.outro(`Nothing was changed. Done in ${seconds(began)}.`);
-      return;
-    }
-    const telemetryToken = telemetryStep.token;
-
     // the account's workers.dev name: a new account has none, and a Worker needs one
     let workersSubdomain =
       resultOf(z.object({ subdomain: z.string().min(1) }), subdomain)?.subdomain ?? "";
@@ -2361,7 +2183,6 @@ export async function deployMind(input: DeployInput) {
         stageName,
         config: configFile,
         token: access.token,
-        telemetryToken,
         log: plan,
         children,
       };
@@ -2424,7 +2245,6 @@ export async function deployMind(input: DeployInput) {
         storeAddress: stateStoreAddress(stageName, workersSubdomain),
         config: configFile,
         token: access.token,
-        telemetryToken,
         log,
         children,
         say: onDeployLine,
@@ -2506,9 +2326,6 @@ export async function deployMind(input: DeployInput) {
       if (!again) break;
     }
 
-    const deployedTelemetryMode = telemetryToken
-      ? "given"
-      : await stackTelemetryTokenMode(cf, account.id, stageName).catch(() => undefined);
     await endAccess(access);
     const posted = await identityPublished({ mindId, controlPlaneHostname });
     p.log.success(
@@ -2522,16 +2339,6 @@ export async function deployMind(input: DeployInput) {
       posted,
     });
     if (keyLine) p.log.info(keyLine);
-    if (telemetryToken) {
-      const bucket = `iterate-${stageName}-telemetry`;
-      p.log.info(
-        `Telemetry bucket ${c.callout(bucket)} is ready: you can now narrow "Workers R2 Storage Bucket Item Write" and "Workers R2 SQL Read" on that token to ${c.callout(bucket)} in Cloudflare. Do not delete or roll this token: this mind's telemetry tables keep the token they were made with.`,
-      );
-    } else if (deployedTelemetryMode === "off") {
-      p.log.info(
-        `Telemetry is off (no token). The Dash's Analytics page stays empty until you run ${c.code(`npx iterate deploy --domain ${domain} --telemetry-token`)}.`,
-      );
-    }
     // the pages that did not answer end the command non-zero, with setup's address and no open
     if (unanswered) throw new Error(unanswered);
     if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);

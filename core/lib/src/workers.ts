@@ -7,6 +7,7 @@ import type {
   SecretProxy,
   SecretRefresh,
   StackClientName,
+  TelemetryRows,
 } from "./api.ts";
 import type { EmailHookArgs } from "./email.ts";
 import type { Facts } from "./facts.ts";
@@ -109,7 +110,7 @@ export interface Door {
    *  provided mind's Door and the home lab relay it for the mind that they are. */
   fetchForMind(signFor: string, request: Request): Promise<Response>;
   /** The mind's telemetry, through the telemetry Worker (`TelemetryService`). */
-  queryTelemetry(sql: string, hours?: number): Promise<TelemetryAnswer>;
+  queryTelemetry(sql: string, hours?: number): Promise<TelemetryRows>;
   sendEvents(events: StreamEvent[]): Promise<void>;
   writeMetrics(points: MetricPoint[]): Promise<void>;
 }
@@ -117,12 +118,12 @@ export interface Door {
 /** As workers-types' `AnalyticsEngineDataPoint` spells it. */
 export type MetricPoint = { indexes?: string[]; blobs?: string[]; doubles?: number[] };
 
-export type TelemetryAnswer = { rows: Record<string, unknown>[]; sql: string; notice?: string };
-
-/** It holds the warehouse's tokens, so the mind, which may be hostile, never holds one. */
+/** It holds the warehouse's tokens, so the mind, which may be hostile, never holds one. A mind
+ *  that made its tables itself holds a token of its own: for it the cut of a query is a
+ *  convenience, not a boundary (core/configs/default/telemetry.ts). */
 export interface TelemetryService {
   /** `hours` is 24 by default and at most 720; at most 1,000 rows. */
-  query(sql: string, hours?: number): Promise<TelemetryAnswer>;
+  query(sql: string, hours?: number): Promise<TelemetryRows>;
   sendEvents(events: StreamEvent[]): Promise<void>;
   /** For a mind with no metrics binding of its own, a home lab's. */
   writeMetrics(points: MetricPoint[]): Promise<void>;

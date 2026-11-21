@@ -26,13 +26,10 @@ export async function otlpResponse(request: Request, env: Env) {
     console.warn({ event: "telemetry.secret-refused", pathname });
     return new Response(null, { status: 503 });
   }
-  if (pathname === "/v1/logs") {
-    if (!env.LOGS) return Response.json({});
+  if (pathname === "/v1/logs")
     return land(request, pathname, env.LOGS, "rejectedLogRecords", (payload) =>
       logRows(OtlpLogs.parse(payload)),
     );
-  }
-  if (!env.SPANS) return Response.json({});
   return land(request, pathname, env.SPANS, "rejectedSpans", (payload) =>
     spanRows(OtlpTraces.parse(payload)),
   );

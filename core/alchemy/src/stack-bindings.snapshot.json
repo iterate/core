@@ -8,8 +8,7 @@
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
       "METRICS:Cloudflare.AnalyticsEngine.Dataset",
-      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
-      "TELEMETRY_TOKEN_SOURCE:plain_text"
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
     ],
     "Auth": [
       "DB:Cloudflare.D1Database AuthDb",
@@ -65,8 +64,7 @@
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
       "METRICS:Cloudflare.AnalyticsEngine.Dataset",
-      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
-      "TELEMETRY_TOKEN_SOURCE:plain_text"
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
     ],
     "Auth": [
       "DB:Cloudflare.D1Database AuthDb",
@@ -121,8 +119,7 @@
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
       "METRICS:Cloudflare.AnalyticsEngine.Dataset",
-      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
-      "TELEMETRY_TOKEN_SOURCE:plain_text"
+      "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream"
     ],
     "Auth": [
       "DB:Cloudflare.D1Database AuthDb",

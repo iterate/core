@@ -41,33 +41,10 @@ const KEPT = join(dirname(CONFIG_PATH), "cloudflare-access.json");
 /** A kept token must live this long still: a run needs it for its checks and its deploy. */
 const LEAST_LEFT_MS = 20 * 60_000;
 
-/** Environment variable carrying the owner-created Cloudflare telemetry API token
- *  (core/alchemy/src/telemetry-token.ts). */
-export const TELEMETRY_TOKEN_ENV = "CLOUDFLARE_TELEMETRY_API_TOKEN";
-
-/** The four permission groups for the single account-owned telemetry API token: Workers R2 Data
- *  Catalog Write, Workers R2 Storage Bucket Item Write, Workers R2 SQL Read, and Account Analytics
- *  Read. */
-export const TELEMETRY_TOKEN_PERMISSIONS = [
-  { key: "r2_catalog", type: "edit" },
-  { key: "workers_r2_bucket_item", type: "edit" },
-  { key: "r2_catalog_sql", type: "read" },
-  { key: "account_analytics", type: "read" },
-] as const;
-
-/** Pre-filled Cloudflare dashboard link for creating the single account-owned telemetry API token
- *  (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/). */
-export function telemetryTokenPage(stageName: string): URL {
-  const page = new URL("https://dash.cloudflare.com/?to=/:account/api-tokens");
-  page.searchParams.set("permissionGroupKeys", JSON.stringify(TELEMETRY_TOKEN_PERMISSIONS));
-  page.searchParams.set("name", `iterate-${stageName}-telemetry`);
-  return page;
-}
-
 /** WHAT ONE DEPLOY OF THE STACK NEEDS: a scope for each kind of resource that
  *  core/alchemy/src/stack.ts declares, and for nothing else. A Worker's bindings to Workers AI,
  *  Browser Rendering, Images and Analytics Engine are part of its upload and need no scope of
- *  their own. Telemetry uses an owner-created API token instead of minting tokens through OAuth. */
+ *  their own. The deploy makes no telemetry token: the mind turns its tables on itself. */
 export const STACK_SCOPES = [
   // the five Workers with their Durable Objects, the Worker that holds the stack's state, and
   // the telemetry Worker's workers.dev address

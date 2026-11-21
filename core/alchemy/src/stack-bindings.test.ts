@@ -155,7 +155,7 @@ void test("each Worker of the stack holds what stack-bindings.snapshot.json says
     );
 });
 
-void test("telemetry modes: minted keeps both AccountApiToken resources, given uses TelemetryToken, and off leaves out tables/tokens while keeping other Workers identical", async () => {
+void test("telemetry modes: minted keeps both AccountApiToken resources, given uses TelemetryToken, and off makes the bucket and streams but no token, catalog, sink or pipeline, while other Workers stay identical", async () => {
   const config = MindConfig.parse(CASES["full-cloudflare, no mail forward"]);
   const runMode = (telemetryMode: TelemetryMode) =>
     Effect.runPromise(
@@ -185,7 +185,7 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
   assert.equal(minted.resources.TelemetryAnalyticsToken, "Cloudflare.ApiToken.AccountApiToken");
   assert.equal(minted.resources.TelemetryToken, undefined);
 
-  // Given mode declares TelemetryToken and the TELEMETRY_TOKEN_SOURCE marker
+  // Given mode declares TelemetryToken
   assert.deepEqual(given.workers.Telemetry, [
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
@@ -195,36 +195,46 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
     "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
     "METRICS:Cloudflare.AnalyticsEngine.Dataset",
     "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
-    "TELEMETRY_TOKEN_SOURCE:plain_text",
   ]);
   assert.equal(given.resources.TelemetryToken, "Iterate.TelemetryToken");
   assert.equal(given.resources.TelemetryCatalogToken, undefined);
   assert.equal(given.resources.TelemetryAnalyticsToken, undefined);
+  // the tables that a mind made itself are only an "off" stack's
+  assert.equal(given.resources.TelemetryTablesOfTheMind, undefined);
+  assert.equal(minted.resources.TelemetryTablesOfTheMind, undefined);
 
-  // Off mode omits telemetry-table resources and bindings while keeping METRICS and OTLP secret
+  // Off mode binds the three streams and declares the bucket, the streams and the destinations,
+  // and no token, catalog, sink or pipeline: the mind can make those itself
   assert.deepEqual(off.workers.Telemetry, [
+    "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
     "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
+    "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
     "METRICS:Cloudflare.AnalyticsEngine.Dataset",
+    "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
   ]);
-  for (const omitted of [
+  for (const declared of [
     "TelemetryBucket",
+    "Telemetry_events_stream",
+    "Telemetry_logs_stream",
+    "Telemetry_spans_stream",
+    "Telemetry_logs",
+    "Telemetry_traces",
+    "TelemetryTablesOfTheMind",
+  ])
+    assert.ok(off.resources[declared], `${declared} should be declared when off`);
+  for (const omitted of [
     "TelemetryToken",
     "TelemetryCatalogToken",
     "TelemetryAnalyticsToken",
     "TelemetryCatalog",
     "TelemetrySinkTables",
-    "Telemetry_events_stream",
     "Telemetry_events_sink",
     "Telemetry_events_pipeline",
-    "Telemetry_logs_stream",
     "Telemetry_logs_sink",
     "Telemetry_logs_pipeline",
-    "Telemetry_spans_stream",
     "Telemetry_spans_sink",
     "Telemetry_spans_pipeline",
-    "Telemetry_logs",
-    "Telemetry_traces",
   ]) {
     assert.equal(off.resources[omitted], undefined, `${omitted} should be omitted when off`);
   }

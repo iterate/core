@@ -11,8 +11,9 @@ import type { Env } from "./env.ts";
 import { type EventsRow, eventsRow } from "./events-row.ts";
 import { scoped } from "./query.ts";
 
-/** Plain sentence returned instead of an error when telemetry tables have no token configured. */
-const TELEMETRY_TABLES_OFF = "telemetry tables are off: add a telemetry token";
+/** Plain sentence returned instead of an error when the stack holds no telemetry token. */
+const TELEMETRY_TABLES_OFF =
+  "telemetry tables are off: your mind can turn them on itself (onboarding/telemetry.md)";
 
 export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService {
   async query(...[sql, hours]: Parameters<TelemetryService["query"]>) {
@@ -28,7 +29,13 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
       const token = run.engine === "metrics" ? config.analyticsToken : config.catalogToken;
       if (!token) {
         outcome = "off";
-        return { rows: [], sql: run.sql, notice: TELEMETRY_TABLES_OFF };
+        // where this query goes, so the mind's own code can send it (iterate/api `TelemetrySend`)
+        const send = {
+          engine: run.engine === "metrics" ? ("metrics" as const) : ("tables" as const),
+          accountId: config.accountId,
+          bucket: config.telemetryBucketName,
+        };
+        return { rows: [], sql: run.sql, notice: TELEMETRY_TABLES_OFF, send };
       }
       const rows = await this.#rows(run, token.exposeSecret());
       outcome = rows.length;
@@ -45,7 +52,6 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
   /** A failed send throws and the whole batch comes again, so a row may land twice (dedupe on path
    *  and offset). A row over ROW_MAX_BYTES would hold every later event back: it is dropped. */
   async sendEvents(events: Parameters<TelemetryService["sendEvents"]>[0]) {
-    if (!this.env.EVENTS) return;
     const worker = telemetryWorkerConfigOf(this.env).eventsWriterName;
     const rows: { row: EventsRow; bytes: number }[] = [];
     let dropped = 0;
