@@ -2,11 +2,15 @@
 // - `callSnapshot(itx, input, { callerPath })`: `itx.config.callSnapshot({ source, of? })` (worker.ts).
 //   It acts ONLY on the calling agent's own call (`callerPath()`): it takes no `agent`.
 // - `handleSnapshotUpload(request, host, agent)`: Meet's `POST /snapshot<agent>` (apps/meet/app.ts),
-//   where the page that shares the source sends the picture. A member's alone. It asks the call
-//   facet whether the upload is the open request's BEFORE it reads a byte of the body, reads at
-//   most `SNAPSHOT.maxBytes`, checks the JPEG's first bytes, stores it at
-//   `/call-snapshots<agent>/<id>-<source>.jpg` (outside `<agent>/`, so no guest of a share link of
-//   `<agent>` reads it through their view), and deletes the file when the call does not settle it.
+//   where the page that shares the source sends the picture. A member's alone. It calls no
+//   context that the mind's catalog does not list (a call to a path makes its context), and no
+//   call facet that is not on: both answer 404. It asks the call facet whether the upload is the
+//   open request's BEFORE it reads a byte of the body, reads at most `SNAPSHOT.maxBytes`, checks
+//   the JPEG's first bytes, stores it at `/call-snapshots<agent>/<id>-<source>.jpg` (outside
+//   `<agent>/`, so no guest of a share link of `<agent>` reads it through their view), and deletes
+//   the file when the call does not settle it. AN UPLOAD OF THE REQUEST'S OWN PAGE THAT IS REFUSED
+//   (no JPEG, no length, too long) FAILS THE REQUEST: the agent hears why at once, and no second
+//   upload is taken for it.
 // The rules (who may be pictured, the bounds, the audit trail) are call/rules.ts.
 import type { IterateContextApi } from "iterate/api";
 import type { IterateConfigEntrypoint } from "iterate/sdk";
@@ -198,11 +202,14 @@ const dimensionOf = (request: Request, header: string) =>
   Math.min(Math.max(Math.round(Number(request.headers.get(header)) || 0), 0), 10_000);
 
 /** `POST /snapshot<AGENT>` in apps/meet/app.ts: one JPEG from the consenting participant's own page.
- *  Checks auth, headers, declared length, and facet authorization BEFORE reading any body byte. */
+ *  Checks auth, headers, that the agent is there with its call on (`agentListed`: whether the
+ *  mind's catalog lists the agent, asked with no call to the agent's own context), the facet's
+ *  authorization, and the declared type and length BEFORE reading any body byte. */
 export async function handleSnapshotUpload(
   request: Request,
   host: Pick<IterateConfigEntrypoint, "auth" | "getItx">,
   agent: string,
+  agentListed: (itx: IterateContextApi, agent: string) => Promise<boolean>,
 ): Promise<Response> {
   const denied = host.auth.require(request);
   if (denied) return denied;
@@ -216,6 +223,12 @@ export async function handleSnapshotUpload(
     return json({ error: "x-request and x-page headers are required." }, 400);
 
   using itx = host.getItx();
+  // a call to a context that is not there makes it, and a facet that is not on throws: neither
+  // has a snapshot request, so both are refused before the agent's context is called
+  if (!(await agentListed(itx, agent))) return json({ error: "No such agent." }, 404);
+  const rows = await itx.cd(agent).processors.list();
+  if (!rows.some((row) => row.name === "call"))
+    return json({ error: "This agent has no call, so no snapshot request." }, 404);
   const call = itx.cd(agent).facets.get<CallFacet>("call");
   // the page's own word that it could not take the picture: its reason may be empty
   if (request.headers.has("x-declined")) {
@@ -228,30 +241,39 @@ export async function handleSnapshotUpload(
     return json(answer.ok ? { ok: true } : { error: answer.error }, answer.status);
   }
 
-  // the content type, the declared length and the call's word, BEFORE any byte of the body
+  // the call's word, then the content type and the declared length, BEFORE any byte of the body
+  const authorized = await call.authorizeSnapshot({ id, page, actor: person.userId });
+  if (!authorized.ok) return json({ error: authorized.error }, authorized.status);
+  // the upload is the open request's own page's: one that is refused from here on fails the request
+  const refuse = async (status: number, error: string, reason: string) => {
+    await call.declineSnapshot({ id, page, actor: person.userId, reason }).catch(() => {});
+    return json({ error }, status);
+  };
   const contentType = (request.headers.get("content-type") || "")
     .split(";")[0]!
     .trim()
     .toLowerCase();
-  if (contentType !== "image/jpeg") return json({ error: "A JPEG is required." }, 415);
+  const noJpeg = "what the page sent is no JPEG";
+  if (contentType !== "image/jpeg") return refuse(415, "A JPEG is required.", noJpeg);
   const declared = declaredLength(request);
   if (declared === null)
-    return json({ error: "An upload must declare its length (content-length or x-length)." }, 411);
+    return refuse(
+      411,
+      "An upload must declare its length (content-length or x-length).",
+      "upload refused: it did not say its length",
+    );
+  const tooLong = `A picture is at most ${SNAPSHOT.maxBytes} bytes.`;
   if (declared > SNAPSHOT.maxBytes)
-    return json({ error: `A picture is at most ${SNAPSHOT.maxBytes} bytes.` }, 413);
-
-  const authorized = await call.authorizeSnapshot({ id, page, actor: person.userId });
-  if (!authorized.ok) return json({ error: authorized.error }, authorized.status);
+    return refuse(413, tooLong, `upload refused: at most ${SNAPSHOT.maxBytes} bytes`);
 
   const read = await readCapped(request, SNAPSHOT.maxBytes);
-  if (!read.ok || !isJpeg(read.bytes)) {
-    const reason = read.ok ? "what the page sent is no JPEG" : `upload refused: ${read.error}`;
-    await call.declineSnapshot({ id, page, actor: person.userId, reason }).catch(() => {});
-    return json(
-      { error: read.ok ? "A JPEG is required." : read.error },
-      read.ok ? 415 : read.status,
+  if (!read.ok)
+    return refuse(
+      read.status,
+      read.status === 413 ? tooLong : read.error,
+      `upload refused: ${read.error}`,
     );
-  }
+  if (!isJpeg(read.bytes)) return refuse(415, "A JPEG is required.", noJpeg);
 
   const file = itx.files.get(snapshotFilePath(agent, id, authorized.snapshot.source));
   const stored = await file.put({ contentType: "image/jpeg", data: read.bytes });

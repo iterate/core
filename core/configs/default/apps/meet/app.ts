@@ -13,10 +13,13 @@
 //   POST /guest/join/<agent>        anyone signed in: { secret } → the guest on the link
 //   GET  /guest/itx/<agent>         a guest of a live link: the WebSocket of their view of the agent
 //   POST /snapshot/<agent>          a member: the one picture their page took for the agent's
-//                                   request ("Let the agent look", ../../call/snapshot.ts)
+//                                   request ("Let the agent look", ../../call/snapshot.ts); 404
+//                                   for an agent that is not there or has no call
 //
 // `<agent>` is the agent's path (`/agents/meet/2026-11-19-1030-standup`). Before anyone who is no
 // member reaches an agent's context, the mind's catalog must list it: a stranger makes no context.
+// A member's upload is held to the same: a call to a path makes its context, so no route here calls
+// a path that the catalog does not list.
 // Only the guest's routes take a guest (`{ guests: true }`); each counts before it reads.
 import { type AppDescription, type IterateConfigEntrypoint, serveFiles } from "iterate/sdk";
 import { errorCode, reportIssue } from "iterate/lib";
@@ -66,21 +69,27 @@ export function meetApp({ joinFoldMs = JOIN_FOLD_MS }: { joinFoldMs?: number } =
     counts.set(key, { minute, count });
     return count > limit;
   };
-  /** Agents this isolate saw in the catalog; misses are asked again after 10 s. */
+  /** Agents this isolate saw in the catalog. */
   const known = new Set<string>();
-  const missed = new Map<string, number>();
-  async function exists(itx: Itx, agent: string) {
+  /** Whether the catalog lists the agent, asked now unless this isolate saw it before. It calls
+   *  nothing on the agent's own context, so it makes none. */
+  async function listed(itx: Pick<Itx, "contexts">, agent: string) {
     if (known.has(agent)) return true;
-    if (Date.now() - (missed.get(agent) || 0) < 10_000) return false;
     // the catalog has no exact read: the agent's subtree, the most recently active first, in its
     // largest page, so that a busy agent's own children do not push it out
     const rows = await itx.contexts.list({ under: agent, limit: 1_000 });
     if (rows.some((row) => row.path === agent)) known.add(agent);
-    else {
-      if (missed.size >= 1_000) missed.clear();
-      missed.set(agent, Date.now());
-    }
     return known.has(agent);
+  }
+  /** `listed`, for the routes that anyone reaches: a miss is asked again only after 10 s. */
+  const missed = new Map<string, number>();
+  async function exists(itx: Itx, agent: string) {
+    if (known.has(agent)) return true;
+    if (Date.now() - (missed.get(agent) || 0) < 10_000) return false;
+    if (await listed(itx, agent)) return true;
+    if (missed.size >= 1_000) missed.clear();
+    missed.set(agent, Date.now());
+    return false;
   }
   /** The agent's share links, folded through its log now (the call facet's state); none when the
    *  agent has no call. */
@@ -204,7 +213,7 @@ export function meetApp({ joinFoldMs = JOIN_FOLD_MS }: { joinFoldMs?: number } =
       if (route === "snapshot") {
         if (!AGENT.test(agent)) return notFound();
         if (request.method !== "POST") return new Response("Method not allowed\n", { status: 405 });
-        return handleSnapshotUpload(request, host, agent);
+        return handleSnapshotUpload(request, host, agent, listed);
       }
       if (route.startsWith("guest/")) {
         if (!AGENT.test(agent)) return notFound();

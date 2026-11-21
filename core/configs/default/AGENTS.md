@@ -198,10 +198,13 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
 - **Links for guests, as the member's agent.** When a member asks you to let someone into an
   agent's conversation or call, make a link and give the member its URL:
   `const { url, until, link } = await itx.config.shareAgent({ agent: "/agents/standup", lifetimeMs: 3_600_000 })`.
-  The link lives a day when you give no `lifetimeMs`, and 7 days at most. It turns the agent's call
+  The link lives a day when you give no `lifetimeMs`; more than 7 days is refused, so ask for 7
+  days or less. It turns the agent's call
   on when it is off. The URL holds the secret, and nothing else does: give it to the member, and
   write it nowhere else. `await itx.config.shareLinks({ agent })` lists the live links with who
-  made each and the guests who came by it. `await itx.config.endShare({ agent, link })` ends one.
+  made each and the guests who came by it. The maker is the person your turn runs for, as the
+  platform names them; a link from a call that it names nobody for says "this mind's own code".
+  `await itx.config.endShare({ agent, link })` ends one.
   A guest reads the whole conversation and can write to the agent, so make a link only on a
   member's word.
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding

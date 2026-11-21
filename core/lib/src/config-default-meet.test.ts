@@ -171,6 +171,15 @@ test("a guest is refused on a member's page, and taken on the pages for guests",
   // a picture for the agent is a POST alone, for an agent's path
   expect(await mind.get(member, `/snapshot${AGENT}`)).toMatchObject({ status: 405 });
   expect(await mind.get(member, "/snapshot/repos/config")).toMatchObject({ status: 404 });
+  // a member's picture for an agent that the catalog does not list: 404, and its context is never
+  // called (a call would make it); a guest is refused before the catalog is read
+  const upload = { "x-request": "request-1", "x-page": "page-1" };
+  expect(await mind.post(member, "/snapshot/agents/meet/no-such-meeting", {}, upload)).toEqual([
+    404,
+    { error: "No such agent." },
+  ]);
+  expect((await mind.post(guest, `/snapshot${AGENT}`, {}, upload))[0]).toBe(401);
+  expect(mind).toMatchObject({ called: [] });
   // the app describes itself: a guest's sign-in, or a member's passkey
   expect(await (await mind.get(nobody, "/.well-known/iterate-app")).json()).toEqual({
     name: "Meet",
@@ -317,6 +326,8 @@ function fakeMind() {
     appendThrows: null as unknown,
     /** The call does not fold a join. */
     holdFold: false,
+    /** Each path that `itx.cd` was asked for. */
+    called: [] as string[],
   };
   const itx = {
     [Symbol.dispose]() {},
@@ -331,6 +342,7 @@ function fakeMind() {
           : [],
     },
     cd: (path: string) => ({
+      called: mind.called.push(path),
       append: async (event: unknown) => {
         if (mind.appendThrows) throw mind.appendThrows;
         mind.appended.push({ path, event });
@@ -378,8 +390,13 @@ function fakeMind() {
       who: Record<string, string>,
       path: string,
       body: unknown,
+      headers: Record<string, string> = {},
     ): Promise<[number, unknown]> {
-      const answer = await fetch(who, path, { method: "POST", body: JSON.stringify(body) });
+      const answer = await fetch(who, path, {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers,
+      });
       return [answer.status, await answer.json().catch(() => null)];
     },
   });

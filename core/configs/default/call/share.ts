@@ -100,11 +100,19 @@ export function admitsAsMade(event: Pick<ShareEvent, "source" | "createdAt" | "p
   return made.success && made.data.until - at <= LONGEST_LIFETIME_MS + CLOCK_SLACK_MS;
 }
 
+/** What a page shows as the maker of a link that the mind's config appended for nobody it could
+ *  name: `itx.config.shareAgent` called straight from a member's own script (./share-api.ts). */
+const MADE_BY_THE_MIND = "this mind's own code";
+
 /** Who wrote an event: the person by their id and a name (the stamp's own, else the part of the
- *  address before the "@"), else the context it was written from. Never the address. */
+ *  address before the "@"), else the context it was written from, and for the root, which is where
+ *  the config writes from, `MADE_BY_THE_MIND`. Never the address. */
 function byOf(event: Pick<ShareEvent, "source">) {
   const person = event.source.principal || event.source.onBehalfOf?.principal;
-  if (!person?.actor) return { actor: null, name: event.source.origin || "unknown" };
+  if (!person?.actor) {
+    const origin = event.source.origin || "unknown";
+    return { actor: null, name: origin === "/" ? MADE_BY_THE_MIND : origin };
+  }
   const name = person.name || person.email?.split("@", 1)[0] || person.actor;
   return { actor: person.actor, name };
 }

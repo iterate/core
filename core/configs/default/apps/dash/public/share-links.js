@@ -44,17 +44,22 @@ export const hashOfSecret = async (secret) =>
     .join("");
 
 /** A new link to `agent`, on the zone `zone`: 32 random bytes as its secret (base64url), its hash,
- *  a UUID as its id. It lives `lifetimeMs`, at most `LONGEST_LIFETIME`. Answers the ONE event to
- *  append, and the link to show once, `https://meet.<zone>/join<agent>#<secret>`, with its id and
- *  its end: the secret is in the fragment alone, which no request carries, and the log keeps its
- *  hash alone. A path that is no agent's, or a life that is no positive number, throws. */
+ *  a UUID as its id. It lives `lifetimeMs`. Answers the ONE event to append, and the link to show
+ *  once, `https://meet.<zone>/join<agent>#<secret>`, with its id and its end: the secret is in the
+ *  fragment alone, which no request carries, and the log keeps its hash alone. A path that is no
+ *  agent's, a life that is no positive number, or one longer than `LONGEST_LIFETIME`, throws: a
+ *  link never lives another time than the one its maker asked for. */
 export async function makeLink({ zone, agent, lifetimeMs, now }) {
   if (!agentPathOf(agent)) throw new Error(`${agent} is no agent's path.`);
   if (!(lifetimeMs > 0)) throw new Error("A link lives a positive number of milliseconds.");
+  if (lifetimeMs > LONGEST_LIFETIME)
+    throw new Error(
+      `A link lives 7 days at most (${LONGEST_LIFETIME} ms); ${lifetimeMs} ms was asked for.`,
+    );
   const secret = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const secretHash = await hashOfSecret(secret);
   const link = crypto.randomUUID();
-  const until = now + Math.min(lifetimeMs, LONGEST_LIFETIME);
+  const until = now + lifetimeMs;
   return {
     event: {
       type: LINK_MADE,

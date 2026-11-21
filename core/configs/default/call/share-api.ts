@@ -5,9 +5,13 @@
 // a guest are ./share.ts's. Nothing here is a new rule: a link this appends admits only when
 // ./share.ts folds it, so this function waits for that fold and answers only a link that admits.
 //
-// What a link made here names as its maker is the stamp the platform puts on the config's append:
-// the person a script or an agent's turn runs for, when there is one. The Dash's own button
-// appends through the member's stub, so its link names the member.
+// WHO A LINK MADE HERE NAMES AS ITS MAKER is the stamp the platform puts on the config's append,
+// never a word of the caller's: the person a script or an agent's turn runs for, when the platform
+// names one. It names nobody for a call that a member's own script makes straight on its socket
+// (`itx.config.shareAgent(…)` with no script run between): the append is then the config's own,
+// from `/`, and the link says "this mind's own code" (./share.ts `MADE_BY_THE_MIND`), with
+// `madeBy.actor` null. The link admits all the same. The Dash's own button appends through the
+// member's stub, so its link names the member.
 import { reportIssue } from "iterate/lib";
 import { CALL_FACET } from "../call.ts";
 // @ts-expect-error -- a plain browser module of the Dash, with no types; `Links` below says what it exports
@@ -29,9 +33,11 @@ type Links = {
 };
 const links = untypedLinks as Links;
 
-/** What these functions reach of the mind: one agent's context, its call, and the zone. */
+/** What these functions reach of the mind: the catalog, one agent's context, its call, and the
+ *  zone. */
 export type ShareItx = {
   url(): Promise<string>;
+  contexts: { list(options: { under: string; limit: number }): Promise<{ path: string }[]> };
   cd(path: string): {
     append(event: object): Promise<unknown>;
     processors: {
@@ -46,10 +52,17 @@ export type ShareItx = {
 const FOLD_MS = 3_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The agent's path as written, when it is an agent of this mind; else it throws. */
+/** The agent's path as written, when it is an agent of this mind; else it throws. The mind's
+ *  catalog is asked first: a call to a path makes its context, so a path that the catalog does not
+ *  list is refused with no call to it (the catalog lists a new agent at its creation: measured,
+ *  21 Nov 2026). */
 async function agentOf(itx: ShareItx, agent: unknown) {
   const path = links.agentPathOf(agent);
   if (!path) throw new Error(`${String(agent)} is no agent's path.`);
+  // the catalog has no exact read: the agent's subtree in its largest page (apps/meet/app.ts)
+  const listed = await itx.contexts.list({ under: path, limit: 1_000 });
+  if (!listed.some((row) => row.path === path))
+    throw new Error(`${path} is no agent of this mind.`);
   const rows = (await itx.cd(path).processors.list()).map((row) => row.name);
   // a guest's message goes to the `agent` facet: a link to a context with none opens a chat whose
   // every message fails
@@ -71,8 +84,10 @@ const shareOf = (itx: ShareItx, path: string): Promise<ShareState> =>
 /**
  * A NEW LINK FOR GUESTS to the agent `agent`: anyone who has it comes into that one agent's chat
  * and call, with a name and no account, until `until` or until a member ends it. It lives
- * `lifetimeMs` (a day when not given; 7 days at most). The call is turned on for the agent first
- * when it is off: its facet holds the links and admits a guest. Answers `{ url, until, link }`:
+ * `lifetimeMs` (a day when not given). More than 7 days is refused, before anything is turned on
+ * or written: a link never lives another time than the one asked for. The call is turned on for
+ * the agent first when it is off: its facet holds the links and admits a guest. Answers
+ * `{ url, until, link }`:
  * `url` is the one place the secret is, so give it to the person and keep it nowhere else.
  */
 export async function shareAgent(
@@ -82,14 +97,15 @@ export async function shareAgent(
 ) {
   const { path, callOn } = await agentOf(itx, input.agent);
   const agent = itx.cd(path);
-  if (!callOn) await agent.processors.enable("call", CALL_FACET);
   const zone = new URL(await itx.url()).hostname;
+  // the link first: a life that is refused (over 7 days, or no positive number) turns no call on
   const made = await links.makeLink({
     zone,
     agent: path,
     lifetimeMs: input.lifetimeMs ?? links.DEFAULT_LIFETIME,
     now: Date.now(),
   });
+  if (!callOn) await agent.processors.enable("call", CALL_FACET);
   await agent.append(made.event);
   // the call admits by its own fold of the link (./share.ts `admitsAsMade`): answer once it shows
   // the link live, or end the link and say so
@@ -119,7 +135,8 @@ export async function shareLinks(itx: ShareItx, input: { agent: string }) {
     .map(({ link, until, madeAt, madeBy, guests }) => ({ link, until, madeAt, madeBy, guests }));
 }
 
-/** ENDS THE LINK `link` to the agent `agent`: its guests are out at the call's next look. */
+/** ENDS THE LINK `link` to the agent `agent`: its guests are out at the call's next look. Ending
+ *  a link that has ended, or one that never was, changes nothing and answers the same. */
 export async function endShare(itx: ShareItx, input: { agent: string; link: string }) {
   const { path } = await agentOf(itx, input.agent);
   if (!UUID.test(String(input.link))) throw new Error(`${String(input.link)} is no link's id.`);

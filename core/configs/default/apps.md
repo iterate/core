@@ -285,7 +285,10 @@ Meet (below) is the template's page for it.
   (or `"camera"`, and `of: "<name>"` to choose a person), from the agent's own context alone. The
   member's page takes the picture and sends it to Meet (`POST /snapshot<agent>`); it comes to the
   agent as a quiet note with the JPEG attached, stored at `/call-snapshots<agent>/`, outside the
-  agent's path, so a guest's view cannot read it. A refusal says why (`{ status: "refused",
+  agent's path, so a guest's view cannot read it. An upload that is refused (no JPEG, too long)
+  fails its request, and one for an agent that is not there or has no call answers 404 and makes
+  nothing (`itx.config.shareAgent`, `shareLinks` and `endShare` refuse a path with no agent the
+  same way: by the mind's catalog, with no call to the path). A refusal says why (`{ status: "refused",
 reason }`); never try again without asking. A request lives 20 s, one at a time, 10 a minute;
   each step is on `<agent>/call` (`call/snapshot-requested`, `-taken`, `-failed`, `-refused`).
 - **What is said shows in Meet**, from the call's notes: a caption strip over the composer, which

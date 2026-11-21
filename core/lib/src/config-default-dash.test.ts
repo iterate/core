@@ -63,8 +63,15 @@ test("the Dash's Share makes a link that the call's share rules take: Meet's gue
   expect(isLive(made.links[0]!, now + 1)).toBe(true);
   const ended = reduceShare(made, { ...links.endLink(event.payload.link), createdAt, source });
   expect(isLive(ended.links[0]!, now + 1)).toBe(false);
-  // the longest life is the share rules' own limit
+  // the longest life is the share rules' own limit: exactly that is made, more is refused
   expect(links).toMatchObject({ LONGEST_LIFETIME: LONGEST_LIFETIME_MS });
+  const week = { zone: "example.com", agent: "/agents/standup", now };
+  const longest = await links.makeLink({ ...week, lifetimeMs: LONGEST_LIFETIME_MS });
+  expect(longest.event.payload).toMatchObject({ until: now + LONGEST_LIFETIME_MS });
+  for (const lifetimeMs of [LONGEST_LIFETIME_MS + 1, 8 * 86_400_000, Infinity])
+    await expect(links.makeLink({ ...week, lifetimeMs })).rejects.toThrow(
+      "A link lives 7 days at most",
+    );
   // an agent's path only, as written
   expect(
     ["/agents/standup", "/agents/meet/a-b", "/", "/agents", "/agents/../x", "/docs/a"].map(
@@ -81,11 +88,16 @@ test("the Dash and Meet make a link with one module: their two share-links.js ar
   expect(read("meet").equals(read("dash"))).toBe(true);
 });
 
-test("itx.config.shareAgent makes the pages' link: the call turned on, the hash alone in the log, 7 days at most, admitted by the call; endShare ends it", async () => {
+test("itx.config.shareAgent makes the pages' link: the call turned on, the hash alone in the log, more than 7 days refused, admitted by the call; endShare ends it", async () => {
   const mind = fakeShareMind();
+  // 8 days asked for: refused in words, and nothing is turned on or written
+  await expect(
+    shareAgent(mind.itx, { agent: "/agents/standup", lifetimeMs: 8 * 24 * 3_600_000 }),
+  ).rejects.toThrow("A link lives 7 days at most (604800000 ms); 691200000 ms was asked for.");
+  expect(mind).toMatchObject({ enabled: [], appended: [] });
   const answer = await shareAgent(mind.itx, {
     agent: "/agents/standup",
-    lifetimeMs: 30 * 24 * 3_600_000,
+    lifetimeMs: LONGEST_LIFETIME_MS,
   });
   const [page, secret] = answer.url.split("#");
   expect(page).toBe("https://meet.example.com/join/agents/standup");
@@ -97,7 +109,7 @@ test("itx.config.shareAgent makes the pages' link: the call turned on, the hash 
     payload: { link: answer.link, secretHash: await shareLinks.hashOfSecret(secret!) },
   });
   expect(JSON.stringify(mind.appended)).not.toContain(secret);
-  // a month asked for, 7 days given: the share rules' own limit
+  // 7 days asked for, 7 days given
   expect(answer.until - mind.madeAt).toBeLessThanOrEqual(LONGEST_LIFETIME_MS);
   expect(answer.until - mind.madeAt).toBeGreaterThan(LONGEST_LIFETIME_MS - 60_000);
   expect(await listShares(mind.itx, { agent: "/agents/standup" })).toEqual([
@@ -108,12 +120,30 @@ test("itx.config.shareAgent makes the pages' link: the call turned on, the hash 
   );
   await endShare(mind.itx, { agent: "/agents/standup", link: answer.link });
   expect(await listShares(mind.itx, { agent: "/agents/standup" })).toEqual([]);
+  // a link that the config appended for nobody the platform names (a member's own script, straight
+  // on its socket): it admits, and its maker is said in words, not as the path "/"
+  mind.stamp = { origin: "/" };
+  const unnamed = await shareAgent(mind.itx, { agent: "/agents/standup" });
+  expect(await listShares(mind.itx, { agent: "/agents/standup" })).toEqual([
+    expect.objectContaining({
+      link: unnamed.link,
+      madeBy: { actor: null, name: "this mind's own code" },
+    }),
+  ]);
+  await endShare(mind.itx, { agent: "/agents/standup", link: unnamed.link });
   // no link to a context that is no agent, nor to a path that is no agent's
   await expect(shareAgent(mind.itx, { agent: "/repos/config" })).rejects.toThrow(
     "/repos/config is no agent's path.",
   );
-  await expect(shareAgent(mind.itx, { agent: "/agents/nobody" })).rejects.toThrow(
-    "/agents/nobody is no agent of this mind.",
+  // a path that the catalog does not list is never called: a call would make its context
+  mind.called.length = 0;
+  for (const call of [shareAgent, listShares, endShare])
+    await expect(call(mind.itx, { agent: "/agents/nobody", link: answer.link })).rejects.toThrow(
+      "/agents/nobody is no agent of this mind.",
+    );
+  expect(mind).toMatchObject({ called: [] });
+  await expect(shareAgent(mind.itx, { agent: "/agents/no-agent-facet" })).rejects.toThrow(
+    "/agents/no-agent-facet is no agent of this mind.",
   );
   // a link the call does not admit (made for a guest) is ended and refused
   // a guest's stamp, which the fold reads as no member's (iterate/principal `kind`)
@@ -209,10 +239,20 @@ function fakeShareMind() {
     stamp: { principal: { actor: "user_1", name: "jonas" } } as ShareEvent["source"],
     state: { links: [] } as ShareState,
     callOn: false,
+    /** Each path that `itx.cd` was asked for. */
+    called: [] as string[],
   };
   const itx: ShareItx = {
     url: async () => "https://example.com/",
+    // the catalog lists the agent, and a context that is no agent
+    contexts: {
+      list: async ({ under }) =>
+        ["/agents/standup", "/agents/no-agent-facet"]
+          .filter((path) => path === under)
+          .map((path) => ({ path })),
+    },
     cd: (path) => ({
+      called: mind.called.push(path),
       append: async (event) => {
         const typed = event as (typeof mind.appended)[number];
         if (typed.type === "share/link-made") mind.madeAt = Date.now();

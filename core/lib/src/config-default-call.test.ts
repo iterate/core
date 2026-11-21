@@ -1398,10 +1398,17 @@ test("a snapshot's upload: a member's, checked and capped before it is read, sto
     declineSnapshot: (input: unknown) => room.call.declineSnapshot(input),
     expireSnapshot: (input: unknown) => room.call.expireSnapshot(input),
   };
+  /** The contexts whose facet was reached: an upload for no call reaches none. */
+  const reached: string[] = [];
   const itx = {
     cd: (path: string) => ({
       processors: { list: async () => (path === A ? [{ name: "call" }] : []) },
-      facets: { get: () => facet },
+      facets: {
+        get: () => {
+          reached.push(path);
+          return facet;
+        },
+      },
       waitForEvent: async () => {
         throw new Error("no event in this test");
       },
@@ -1431,12 +1438,12 @@ test("a snapshot's upload: a member's, checked and capped before it is read, sto
   expect(
     await callSnapshot(fakeItx, { source: "screen" }, { callerPath: () => `${A}/other` }),
   ).toEqual({ status: "refused", reason: "This agent has no active call." });
-  const askedId = requestedId(await room.call.requestSnapshot({ source: "screen" }));
+  let askedId = requestedId(await room.call.requestSnapshot({ source: "screen" }));
   const jpeg = new Uint8Array(256);
   jpeg.set([0xff, 0xd8, 0xff, 0xe0]);
-  const send = (userId: string | null, headers: Record<string, string> = {}) =>
+  const send = (userId: string | null, headers: Record<string, string> = {}, agent = A) =>
     handleSnapshotUpload(
-      new Request(`https://meet.example.com/snapshot${A}`, {
+      new Request(`https://meet.example.com/snapshot${agent}`, {
         method: "POST",
         headers: {
           "x-request": askedId,
@@ -1448,13 +1455,37 @@ test("a snapshot's upload: a member's, checked and capped before it is read, sto
         body: jpeg,
       }),
       host(userId),
-      A,
+      agent,
+      // the catalog lists the agent A, and one more agent that has no call
+      async (_, listed) => [A, `${A}/other`].includes(listed),
     );
   expect(await send(null)).toMatchObject({ status: 401 });
-  expect(await send("user_owner", { "content-type": "image/png" })).toMatchObject({ status: 415 });
-  expect(await send("user_owner", { "x-length": "3000000" })).toMatchObject({ status: 413 });
-  // another person's upload for the request is refused, unread
-  expect(await send("user_ada")).toMatchObject({ status: 403 });
+  // an agent that is not there, and one with no call: 404 in words, and no call to its context's
+  // facet (a call to a path makes its context)
+  reached.length = 0;
+  const nowhere = await send("user_owner", {}, "/agents/meet/no-such-meeting");
+  expect([nowhere.status, await nowhere.json()]).toEqual([404, { error: "No such agent." }]);
+  const noCall = await send("user_owner", {}, `${A}/other`);
+  expect([noCall.status, await noCall.json()]).toEqual([
+    404,
+    { error: "This agent has no call, so no snapshot request." },
+  ]);
+  expect(reached).toEqual([]);
+  // another person's upload for the request is refused, unread, and the request stays open
+  expect(await send("user_ada", { "x-length": "3000000" })).toMatchObject({ status: 403 });
+  // an upload of the request's own page that is refused fails the request: no second one is taken
+  for (const [headers, status, reason] of [
+    [{ "content-type": "image/png" }, 415, "what the page sent is no JPEG"],
+    [{ "x-length": "3000000" }, 413, "upload refused: at most 2000000 bytes"],
+  ] as const) {
+    expect(await send("user_owner", headers)).toMatchObject({ status });
+    expect(room.audits.findLast(([type]) => type === "call/snapshot-failed")?.[1]).toMatchObject({
+      id: askedId,
+      reason,
+    });
+    expect(await send("user_owner")).toMatchObject({ status: 409 });
+    askedId = requestedId(await room.call.requestSnapshot({ source: "screen" }));
+  }
   const answer = await send("user_owner");
   const path = `/call-snapshots${A}/${askedId}-screen.jpg`;
   expect(answer).toMatchObject({ status: 200 });

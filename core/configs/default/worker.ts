@@ -486,9 +486,9 @@ export default class extends IterateConfigEntrypoint {
 
   /** `itx.config.shareAgent({ agent, lifetimeMs? })`: a link that lets people who are not members
    *  into the agent's chat and call as guests, as the Dash's Share and Meet's Guests make one. It
-   *  turns the agent's call on when it is off, lives a day unless `lifetimeMs` says otherwise (7
-   *  days at most), and answers `{ url, until, link }` once the call admits by it. The secret is
-   *  in `url` alone: the log keeps its hash (call/share-api.ts). */
+   *  turns the agent's call on when it is off, lives a day unless `lifetimeMs` says otherwise
+   *  (more than 7 days is refused), and answers `{ url, until, link }` once the call admits by it.
+   *  The secret is in `url` alone: the log keeps its hash (call/share-api.ts). */
   async shareAgent(input: { agent: string; lifetimeMs?: number }) {
     using itx = this.getItx();
     return await shareAgent(shareItx(itx), input);
@@ -587,7 +587,7 @@ type Itx = IterateConfigProcessEventArgs<"agents">["itx"];
 
 /** The root's `itx` as call/share-api.ts reads it. A cast, needed and safe: the root's types say
  *  that some calls (`processors.list`) answer a value where the call over RPC answers its promise,
- *  and that file awaits each. It calls only `url`, `cd(path).append`, `processors.list`,
+ *  and that file awaits each. It calls only `url`, `contexts.list`, `cd(path).append`, `processors.list`,
  *  `processors.enable` and the call facet's `snapshot`, which the root's itx has. */
 const shareItx = (itx: object) => itx as ShareItx;
 
