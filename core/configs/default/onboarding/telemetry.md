@@ -14,8 +14,11 @@ The owner should come away with: the mind sees every request, error and event of
   `{ makeTheTokenAt, pasteItAt, account, bucket }`; `{ needed: false }` on a stack that holds its
   own token; `{ set: true, wide, bucket }` once it is set (after an interrupted turn-on, call
   `telemetryTurnOn()` directly). `telemetryToken({ again: true })` replaces a wrong token. Give a
-  member both links in ONE message: pick `account`, create the token from the first link (it
-  fills in the six permissions), paste it into the second. Say plainly: as made, this token
+  member both links in ONE message: pick `account` at the first link, which fills in five
+  permissions for the entire account. Before they create the token, they select "Add policy",
+  choose "R2 Buckets" in place of "Entire Account", select `bucket`, and tick "Edit" for
+  "Workers R2 Storage Bucket Item": without it the tables stop when the token is narrowed. Then
+  they paste the token into the second link. Say plainly: as made, this token
   reads and writes every R2 bucket of the account, the mind's files too, makes and deletes
   buckets and can set one public. WAIT until the member
   says it is done. Then `await itx.config.telemetryTurnOn()` (safe to call again; it answers
@@ -23,10 +26,8 @@ The owner should come away with: the mind sees every request, error and event of
   you say it works: a table answers a notice until its first rows land. Events the streams got
   before the turn-on are there too.
 - Right after the turn-on, ask the member to narrow the token in Cloudflare's dashboard, in one
-  message: take "Pipelines Write" and "Workers R2 Storage Write" off, AND change "Workers R2
-  Storage Bucket Item Write" from all buckets to `bucket` alone. Both steps are needed: with the
-  two permissions off, the token still reads and writes the objects of every bucket until the
-  third is narrowed. The token's value stays; they must never delete or roll it. Check with
+  message: take "Pipelines Write" and "Workers R2 Storage Write" off the first policy, and leave
+  the policy for `bucket` as it is. The token's value stays; they must never delete or roll it. Check with
   `telemetryToken()`: ask again while `wide` is true. A destroy of the stack leaves the token
   in the account: its member deletes it then. A repair needs the two permissions back: `telemetryTurnOn()` then
   fails on a list call with a 403.

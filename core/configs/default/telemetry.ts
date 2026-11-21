@@ -18,18 +18,19 @@ import { z } from "zod";
 
 const TELEMETRY_SECRET = "/secrets/cloudflare-telemetry";
 const BEARER = `Bearer getSecret("${TELEMETRY_SECRET}")`;
-/** Cloudflare's form for a new API token of the account, with the token's six permissions filled
- *  in by their permission group ids, which a template link for an account token takes
- *  (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/). The
- *  Pipelines API asks for "Workers R2 Storage Write" beside "Pipelines Write" (measured on
- *  20 Nov 2026); a member may take those two off the token once the tables are on. */
+/** Cloudflare's form for a new API token of the account, with the five permissions of the whole
+ *  account filled in by their permission group ids, which a template link for an account token
+ *  takes (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
+ *  The sixth, "Workers R2 Storage Bucket Item Write", is a permission of a bucket: the form drops
+ *  it from the link (seen on 21 Nov 2026), so a member adds it as a second policy, for the
+ *  telemetry bucket alone. The Pipelines API asks for "Workers R2 Storage Write" beside
+ *  "Pipelines Write" (measured on 20 Nov 2026); a member takes those two off the token once the
+ *  tables are on. */
 const TOKEN_LINK = `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${encodeURIComponent(
   JSON.stringify(
     [
       // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Workers R2 Data Catalog Write"
       "d229766a2f7f4d299f20eaa8c9b1fde9",
-      // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Workers R2 Storage Bucket Item Write"
-      "2efd5506f9c8494dacb1fa10a3e7d5b6",
       // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Workers R2 SQL Read"
       "f45430d92e2b4a6cb9f94f2594c141b8",
       // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Account Analytics Read"
@@ -49,13 +50,12 @@ type TelemetryItx = Pick<
 
 /** `itx.config.telemetryToken({ again? })`: the two links a member needs, Cloudflare's form and
  *  the page of this mind that takes the token, with the `account` to pick and the `bucket` that
- *  "Workers R2 Storage Bucket Item Write" may be narrowed to later. No agent sees the token.
+ *  the token's second policy names (onboarding/telemetry.md). No agent sees the token.
  *  `{ needed: false }` on a stack that holds its own telemetry token. Once it is set:
  *  `{ set: true, wide, bucket }`. As made, the token reads and writes every R2 bucket of the
  *  account, makes and deletes buckets and can set one public. `wide` says that it still reaches
  *  past the telemetry bucket: after the turn-on, ask a member to take "Pipelines Write" and
- *  "Workers R2 Storage Write" off AND to narrow "Bucket Item Write" to `bucket`,
- *  until `wide` is false. `again` collects it anew: the one way to replace a wrong token, since the Dash's secrets
+ *  "Workers R2 Storage Write" off, until `wide` is false. `again` collects it anew: the one way to replace a wrong token, since the Dash's secrets
  *  page would set it without the uses that the turn-on needs. */
 export async function telemetryToken(
   itx: Pick<TelemetryItx, "secrets" | "telemetry" | "fetch">,
@@ -66,7 +66,7 @@ export async function telemetryToken(
   if (!options?.again && (await itx.secrets.describe(TELEMETRY_SECRET)).set) {
     // Two reads say how far the token still reaches: the Pipelines API
     // answers it while it holds its two wide permissions, and the mind's files bucket lists for
-    // it until "Bucket Item Write" is the telemetry bucket's alone.
+    // it when its bucket policy names more than the telemetry bucket.
     const reaches = async (path: string) => {
       const answer = await itx.fetch(
         new Request(`${accountUrl(send)}${path}`, {
@@ -104,7 +104,7 @@ export async function telemetryToken(
       { method: "POST", url: `${accountUrl(send)}/pipelines/v1/sinks`, field: "config.token" },
     ],
     description:
-      'A Cloudflare API token of the account, to make the mind\'s telemetry tables and read them. As made, it reads and writes every R2 bucket of the account, and the mind\'s own code can use it. Once the tables are on, narrow it in Cloudflare\'s dashboard: take "Pipelines Write" and "Workers R2 Storage Write" off, and set "Workers R2 Storage Bucket Item Write" to the telemetry bucket alone.',
+      'A Cloudflare API token of the account, to make the mind\'s telemetry tables and read them. As made, it reads and writes every R2 bucket of the account, and the mind\'s own code can use it. Once the tables are on, narrow it in Cloudflare\'s dashboard: take "Pipelines Write" and "Workers R2 Storage Write" off.',
   });
   return {
     set: false as const,
