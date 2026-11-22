@@ -42,7 +42,7 @@
 //   who is no member, signed in or not, is OUTSIDE: far smaller bounds and smaller texts than a
 //   member (`BOUNDS`, `TEXTS`).
 // - THE DAY'S BUDGET OF THE OUTSIDE FOR THE WHOLE MIND (`outsideReserved`): 20,000 records a day,
-//   reserved in the facet `outside-days` on /pages (./outside-days.ts) BEFORE any record from
+//   reserved in the facet `outside-days` on /pages (./backend.ts) BEFORE any record from
 //   outside is appended, then none until the next day: a HARD limit, whatever the number of
 //   isolates. A batch that does not fit, or a reservation that fails, appends nothing. A flood
 //   ends by itself, with no person. One person outside can spend it on purpose and blind the
@@ -75,13 +75,14 @@ const TEXTS = {
   outside: { title: 80, values: 6 },
 } as const;
 /** THE FACET THAT HOLDS THE DAY'S BUDGET of the outside's records, for the whole mind
- *  (./outside-days.ts): one at a fixed context, loaded from this repo's own files. */
+ *  (./backend.ts, the one file of an app that a publication offers a facet's class from): one at
+ *  a fixed context, loaded from this repo's own files. */
 export const OUTSIDE_DAYS = {
   path: "/pages",
   name: "outside-days",
   spec: {
     className: "OutsideDaysDurableObject",
-    mainModule: "apps/telemetry/outside-days.ts",
+    mainModule: "apps/telemetry/backend.ts",
     source: ["itx", ["cd", "/"], "config"],
   },
 };
@@ -616,7 +617,7 @@ export function forgetHosts(): void {
  *  no record from outside until the next UTC day, and asks the facet nothing. */
 let spentDay: string | null = null;
 /** RESERVE `records` records from outside in today's budget, in the facet `outside-days`
- *  (./outside-days.ts): true when they fit, and then they are counted. Call it before the append:
+ *  (./backend.ts): true when they fit, and then they are counted. Call it before the append:
  *  a batch whose reservation is refused is dropped whole. It throws when the facet cannot be
  *  asked: the caller drops the records then too. */
 async function outsideReserved(itx: Pick<Itx, "cd">, records: number): Promise<boolean> {

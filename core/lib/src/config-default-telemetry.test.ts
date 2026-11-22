@@ -4,7 +4,7 @@
 // over the platform's `iterate/lib`, the folder import and `HTMLRewriter` with Node's module
 // hooks. This runs them in this repo's test run, and fails with their output.
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { defaultConfigInstance, stubHtmlRewriter } from "./test-support/config-default-instance.ts";
@@ -106,4 +106,29 @@ test("the crash job runs for the platform's tick alone: the same type elsewhere,
     schedule: { key: "crash-sweep", scheduledAtOffset: 3, at: "2026-11-22T12:00:00.000Z" },
   });
   expect(queries).toHaveLength(1);
+});
+
+test("the day's budget facet is in a module that a publication offers a facet's class from", async () => {
+  // the platform's rule (core/mind-worker/src/mind/publication.ts `publishedModules`, not exported):
+  // a module at the config's root, or an app's backend.ts. From apps/telemetry/outside-days.ts the
+  // facet failed at its first call on the home lab (22 Nov 2026), and every record from outside was
+  // dropped, while the class's own tests passed: they loaded it directly.
+  const source = readFileSync(
+    new URL("../../mind-worker/src/mind/publication.ts", import.meta.url),
+    "utf8",
+  );
+  expect(source).toContain(
+    '.filter((path) => !path.includes("/") || /^apps\\/[^/]+\\/backend\\.[a-z]+$/.test(path))',
+  );
+  const { OUTSIDE_DAYS } = await import("../../configs/default/apps/telemetry/page-events.ts");
+  expect(OUTSIDE_DAYS.spec.mainModule).toMatch(/^apps\/[^/]+\/backend\.[a-z]+$/);
+  expect(
+    existsSync(new URL(`../../configs/default/${OUTSIDE_DAYS.spec.mainModule}`, import.meta.url)),
+  ).toBe(true);
+  // and that module exports the class the spec names
+  const exported = (await import("../../configs/default/apps/telemetry/backend.ts")) as Record<
+    string,
+    unknown
+  >;
+  expect(typeof exported[OUTSIDE_DAYS.spec.className]).toBe("function");
 });

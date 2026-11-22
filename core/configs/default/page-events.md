@@ -252,14 +252,15 @@ member's visitor 60 records of any kind, all members 600; an outside visitor 20,
 member's 1,024 and 4,000), a title 80 (120), a captured event 6 values (12).
 
 **The day's budget of the outside, for the whole mind, a HARD limit:** the facet `outside-days` on
-`/pages` (`apps/telemetry/outside-days.ts`) holds a SQLite table with one row for each UTC day. A
+`/pages` (`apps/telemetry/backend.ts`) holds a SQLite table with one row for each UTC day. A
 send from outside reserves all its records there in ONE STATEMENT before anything is appended: it
 adds them only when the day's sum stays at most 20,000, and a send that does not fit is dropped
 whole. A Durable Object runs one call at a time, so the day never passes 20,000, however many
 isolates send. After one refusal an isolate asks nothing more that day. A reservation that fails
 drops the send. A view counted from its request (`how: "request"`) from outside asks the same
-bounds and budget. The facet needs no line in `worker.ts`: the platform loads it from this repo at
-its first call, by `mainModule` and `className`.
+bounds and budget. The facet's class is in the app's `backend.ts`, the one file of an app that a
+publication offers a facet's class from (apps.md, "A backend class"); the platform loads it from
+this repo at its first call, by `mainModule` and `className`, and `worker.ts` needs no line.
 
 A record over a bound is dropped silently; the answer stays 204. The page events of a send are one
 `appendOffsets` call. ORDER: every record is read and bounded, then the outside's are reserved,

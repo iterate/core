@@ -1,4 +1,4 @@
-// outside-days.ts — THE DAY'S BUDGET OF THE PAGE RECORDS FROM OUTSIDE, for the whole mind
+// backend.ts — THE TELEMETRY APP'S BACKEND: THE DAY'S BUDGET OF THE PAGE RECORDS FROM OUTSIDE, for the whole mind
 // (page-events.md, "Bounds"): the facet `outside-days` on /pages, a SQLite table of its own with
 // one row for each UTC day. page-events.ts asks it before it appends ANY record from someone who
 // is no member, on both paths: what a page sends (`pageEventsRoute`) and a page counted from its
@@ -12,8 +12,11 @@
 // deleted as a batch is counted. The same statement as the auth Worker's
 // (core/auth-worker/src/page-events.ts `outsideReserved`), in this mind's own storage.
 //
-// Nothing loads this file but the platform, when page-events.ts names it (`OUTSIDE_DAYS` there):
-// worker.ts imports nothing of it.
+// WHY THIS FILE IS backend.ts: a publication offers a facet's class only from a module at the
+// config's root or from an app's `backend.ts` (core/mind-worker/src/mind/publication.ts
+// `publishedModules`, apps.md "A backend class"). From any other file the facet fails at its first
+// call ("publishes no module"), and every record from outside is dropped. page-events.ts names it
+// (`OUTSIDE_DAYS`); worker.ts imports nothing of it.
 import { FacetDurableObject } from "iterate/sdk";
 
 /** THE DAY'S BUDGET of the outside's records, for the whole mind. */

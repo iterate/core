@@ -17,7 +17,7 @@ registerHooks({
         shortCircuit: true,
         url: "data:text/javascript,export const forwardIssues = (forward) => { globalThis.forwardIssue = forward; }; export const errorCode = (error) => (typeof error === 'object' %26%26 error %26%26 'code' in error ? error.code : undefined);",
       };
-    // the facet shell, as much of it as outside-days.ts asks: `ctx` and `publicMethods`
+    // the facet shell, as much of it as backend.ts asks: `ctx` and `publicMethods`
     if (specifier === "iterate/sdk")
       return {
         shortCircuit: true,
@@ -32,7 +32,7 @@ registerHooks({
   },
 });
 const pe = await import("./page-events.ts");
-const { OutsideDaysDurableObject, OUTSIDE_A_DAY, reserveDay } = await import("./outside-days.ts");
+const { OutsideDaysDurableObject, OUTSIDE_A_DAY, reserveDay } = await import("./backend.ts");
 const {
   vitalsOf,
   marksOf,
