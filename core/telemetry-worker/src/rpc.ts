@@ -1,7 +1,8 @@
 // rpc.ts — TELEMETRY AS THE BOUNDARY CALLS IT: the `Telemetry` entrypoint, which is
-// `TelemetryService` (iterate/workers). It answers a mind's query, lands its events and writes its
-// metrics. A query over Cloudflare's own datasets (./store-query.ts) runs on the Analytics SQL
-// binding with no token; one over the telemetry tables (./query.ts) needs the stack's token.
+// `TelemetryService` (iterate/workers). It answers a mind's query, lands its events, counts them in
+// `metrics` (./event-points.ts) and writes its metrics. A query over Cloudflare's own datasets
+// (./store-query.ts) runs on the Analytics SQL binding with no token; one over the telemetry
+// tables (./query.ts) needs the stack's token.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { z } from "zod";
 import { isTelemetryDatasetQuery } from "iterate/api";
@@ -10,6 +11,7 @@ import type { TelemetryService } from "iterate/workers";
 import { readBounded, ROW_MAX_BYTES, sends, sized } from "./bounds.ts";
 import { telemetryWorkerConfigOf } from "./config.ts";
 import type { Env } from "./env.ts";
+import { writeEventPoints } from "./event-points.ts";
 import { type EventsRow, eventsRow } from "./events-row.ts";
 import { MAX_ROWS, scoped } from "./query.ts";
 import { type StoreRun, storeQuery } from "./store-query.ts";
@@ -76,13 +78,15 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
   }
 
   /** A failed send throws and the whole batch comes again, so a row may land twice (dedupe on path
-   *  and offset). A row over ROW_MAX_BYTES would hold every later event back: it is dropped. */
+   *  and offset). A row over ROW_MAX_BYTES would hold every later event back: it is dropped from the
+   *  stream, and still counted in `metrics`. The points go after the stream's sends, so a batch
+   *  that comes again is counted once. */
   async sendEvents(events: Parameters<TelemetryService["sendEvents"]>[0]) {
     const worker = telemetryWorkerConfigOf(this.env).eventsWriterName;
+    const all = events.map((event) => eventsRow(event, worker));
     const rows: { row: EventsRow; bytes: number }[] = [];
     let dropped = 0;
-    for (const event of events) {
-      const row = sized(eventsRow(event, worker));
+    for (const row of all.map(sized)) {
       if (row.bytes > ROW_MAX_BYTES) dropped++;
       else rows.push(row);
     }
@@ -93,6 +97,7 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
         count: dropped,
       });
     for (const chunk of sends(rows)) await this.env.EVENTS.send(chunk);
+    writeEventPoints(this.env.METRICS, all);
   }
 
   async writeMetrics(points: Parameters<TelemetryService["writeMetrics"]>[0]) {
