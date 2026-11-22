@@ -10,6 +10,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import {
+  deleteAnalyticsToken,
   deleteLegacyAccountApiToken,
   isTelemetryTokenPersisted,
   TelemetryToken,
@@ -178,4 +179,28 @@ void test("legacy AccountApiToken delete succeeds when permitted, logs and conti
     ),
   );
   assert.equal(serverErrorExit._tag, "Failure");
+});
+
+void test("a refused delete of the analytics token fails the deploy, and its line names the token and how to delete it", async () => {
+  const accountId = "a".repeat(32);
+  const token = { accountId, name: "iterate-ada-telemetry-analytics", tokenId: "tok-456" };
+  const quiet: string[] = [];
+  await Effect.runPromise(deleteAnalyticsToken(Effect.void, token, (line) => quiet.push(line)));
+  assert.deepEqual(quiet, []);
+  for (const refusal of [
+    new Unauthorized({ message: "Authentication error" }),
+    new Forbidden({ message: "Method not allowed for token" }),
+    new InternalServerError({ message: "internal error" }),
+  ]) {
+    const lines: string[] = [];
+    const exit = await Effect.runPromiseExit(
+      deleteAnalyticsToken(Effect.fail(refusal), token, (line) => lines.push(line)),
+    );
+    // a failed delete keeps the row in Alchemy's state (Apply.ts deletes the row after it)
+    assert.equal(exit._tag, "Failure");
+    assert.equal(lines.length, 1);
+    assert.match(lines[0]!, /iterate-ada-telemetry-analytics \(tok-456\)/);
+    assert.match(lines[0]!, /stays in the stack's state, and this deploy fails/);
+    assert.match(lines[0]!, new RegExp(`https://dash\\.cloudflare\\.com/${accountId}/api-tokens`));
+  }
 });

@@ -5,23 +5,25 @@
 //
 //   telemetryToken    the two links a member needs to make the token and give it
 //   telemetryTurnOn   the bucket's data catalog, and each table's sink and pipeline
-//   telemetryQuery    `itx.telemetry.query`, sent with the token when the stack holds none
+//   telemetryQuery    a query over the tables, sent with the token when the stack holds none
 //
-// The built-in query (`itx.telemetry.cut`) cuts each query to this mind's rows and, with no token in
-// the stack, answers where the query would go (`send`). This file sends it. After the turn-on,
-// `itx.telemetry.query` is this file's `telemetryQuery`. The token is the mind's own, so the cut is
-// a convenience here, not a boundary. Every request goes through `itx.fetch`: each use of the
-// secret is recorded, and an approval rule of the secret holds it.
+// `itx.telemetry.query` is the platform's alone, under that one name: Cloudflare's own datasets
+// with no token, and the tables with the stack's token. A mind that made its tables with its own
+// token reads them by `itx.config.telemetryQuery(sql, { hours })`. The built-in
+// `itx.telemetry.cut` cuts each query to this mind's rows and, with no token in the stack,
+// answers where the query would go (`send`). This file sends it. The token is the mind's own, so
+// the cut is a convenience here, not a boundary. Every request goes through `itx.fetch`: each use
+// of the secret is recorded, and an approval rule of the secret holds it.
 import type { IterateContextApi } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 
 const TELEMETRY_SECRET = "/secrets/cloudflare-telemetry";
 const BEARER = `Bearer getSecret("${TELEMETRY_SECRET}")`;
-/** Cloudflare's form for a new API token of the account, with the five permissions of the whole
+/** Cloudflare's form for a new API token of the account, with the four permissions of the whole
  *  account filled in by their permission group ids, which a template link for an account token
  *  takes (https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
- *  The sixth, "Workers R2 Storage Bucket Item Write", is a permission of a bucket: the form drops
+ *  The fifth, "Workers R2 Storage Bucket Item Write", is a permission of a bucket: the form drops
  *  it from the link (seen on 21 Nov 2026), so a member adds it as a second policy, for the
  *  telemetry bucket alone. The Pipelines API asks for "Workers R2 Storage Write" beside
  *  "Pipelines Write" (measured on 20 Nov 2026); a member takes those two off the token once the
@@ -33,8 +35,6 @@ const TOKEN_LINK = `https://dash.cloudflare.com/?to=/:account/api-tokens&permiss
       "d229766a2f7f4d299f20eaa8c9b1fde9",
       // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Workers R2 SQL Read"
       "f45430d92e2b4a6cb9f94f2594c141b8",
-      // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Account Analytics Read"
-      "b89a480218d04ceb98b4fe57ca29dc1f",
       // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Pipelines Write"
       "e34111af393449539859485aa5ddd5bd",
       // allow-high-entropy-next-line: Cloudflare's public id of the permission group "Workers R2 Storage Write"
@@ -198,19 +198,6 @@ export async function telemetryTurnOn(itx: TelemetryItx) {
       made.push(pipeline);
     }
   }
-  // From now on `itx.telemetry.query`, at every context that reaches the root's rules, is
-  // `telemetryQuery` with the call's arguments. Set again when a member removed it.
-  const root = itx.cd("/");
-  if (!(await root.rewriteRules.get("itx.telemetry.query"))?.target)
-    await root.append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: {
-        match: "itx.telemetry.query",
-        target: "itx.config.telemetryQuery",
-        description:
-          "the mind's telemetry as SQL, read by its own code from the tables it made (core/configs/default/telemetry.ts)",
-      },
-    });
   // a pipeline whose status is not running shows here, before any query finds no rows
   return {
     on: true as const,
@@ -218,6 +205,24 @@ export async function telemetryTurnOn(itx: TelemetryItx) {
     pipelines: pipelines.filter(({ name }) => name.startsWith(`${tables}_`)),
   };
 }
+
+/** The row that the turn-on wrote until 22 Nov 2026: `itx.telemetry.query` pointed at
+ *  `telemetryQuery`. It made a second name for the platform's query, which an approval rule on one
+ *  name missed. The publish hook removes it at each publish (worker.ts, the `mind/worker-updated`
+ *  case); a row that a member pointed elsewhere stays. Answers whether it removed one. */
+export async function removeOwnTelemetryQueryRule(itx: Pick<TelemetryItx, "cd">) {
+  const root = itx.cd("/");
+  const row = await root.rewriteRules.get(OWN_QUERY_RULE.match);
+  if (row?.context !== "/" || row.target !== OWN_QUERY_RULE.target) return false;
+  // a compare-and-set delete: a row pointed elsewhere meanwhile is not removed
+  await root.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: OWN_QUERY_RULE.match, target: null, ifTarget: OWN_QUERY_RULE.target },
+  });
+  return true;
+}
+
+const OWN_QUERY_RULE = { match: "itx.telemetry.query", target: "itx.config.telemetryQuery" };
 
 /** The account's address at Cloudflare's API. The token's two body fields name URLs under it
  *  exactly, so every request builds its URL from here. */
@@ -236,30 +241,25 @@ async function whereTheTablesGo(itx: Pick<TelemetryItx, "telemetry">) {
   return cut?.send;
 }
 
-/** `itx.config.telemetryQuery(sql, { hours })`, which `itx.telemetry.query` is after the turn-on,
- *  on a mind whose stack holds no token. The built-in (`cut`) cuts `sql` to this mind's rows and
- *  says where to send it, and this sends it with the mind's token. */
+/** `itx.config.telemetryQuery(sql, { hours })`: a query over the tables that the turn-on made, on
+ *  a mind whose stack holds no token. The built-in (`cut`) cuts `sql` to this mind's rows and says
+ *  where to send it, and this sends it with the mind's token. Cloudflare's own datasets need no
+ *  token: `itx.telemetry.query` reads them. */
 export async function telemetryQuery(itx: TelemetryItx, sql: string, options?: { hours?: number }) {
   const { send, sql: cutSql } = await itx.telemetry.cut(sql, options);
-  // as the built-in sends each: R2 SQL takes the query as JSON, Analytics Engine as the body's text
-  const [url, body] =
-    send.engine === "tables"
-      ? [
-          `https://api.sql.cloudflarestorage.com/api/v1/accounts/${send.accountId}/basin-sql/query/${send.bucket}`,
-          JSON.stringify({ query: cutSql }),
-        ]
-      : [`${accountUrl(send)}/analytics_engine/sql`, cutSql];
-  const request = new Request(url, {
-    method: "POST",
-    headers: { authorization: BEARER },
-    body,
-    redirect: "manual",
-  });
+  // as the built-in sends it: R2 SQL takes the query as JSON
+  const request = new Request(
+    `https://api.sql.cloudflarestorage.com/api/v1/accounts/${send.accountId}/basin-sql/query/${send.bucket}`,
+    {
+      method: "POST",
+      headers: { authorization: BEARER },
+      body: JSON.stringify({ query: cutSql }),
+      redirect: "manual",
+    },
+  );
   const sent = await itx.fetch(request);
   const text = await boundedText(sent);
-  const read = (send.engine === "tables" ? TablesRows : MetricsRows).safeParse(
-    sent.ok ? jsonOrUndefined(text) : undefined,
-  );
+  const read = TablesRows.safeParse(sent.ok ? jsonOrUndefined(text) : undefined);
   if (!read.success) {
     // R2 SQL's own codes (measured on 20 Nov 2026): 40006, the bucket has no catalog yet; 40010,
     // the table has no rows yet, in the first minutes after the turn-on
@@ -273,9 +273,12 @@ export async function telemetryQuery(itx: TelemetryItx, sql: string, options?: {
             ? "telemetry tables are not made yet: call itx.config.telemetryTurnOn()"
             : "this telemetry table has no rows yet: its first rows land a few minutes after the turn-on",
       };
-    throw new Error(`telemetryQuery: Cloudflare answered ${sent.status}: ${text.slice(0, 300)}`);
+    // a fixed sentence with the status and the code: R2 SQL's own words never go on
+    throw new Error(
+      `telemetryQuery: R2 SQL answered HTTP ${sent.status}${code === undefined ? "" : ` (Cloudflare's code ${code})`}`,
+    );
   }
-  const rows = "result" in read.data ? read.data.result.rows : read.data.data;
+  const rows = read.data.result.rows;
   // as the built-in says it: the cut holds every answer to 1,000 rows, and more may match
   return { rows, sql: cutSql, ...(rows.length >= 1000 && { truncated: true as const }) };
 }
@@ -315,8 +318,7 @@ function jsonOrUndefined(text: string): unknown {
 const Answer = z.object({ result: z.unknown() });
 /** A list of sinks or pipelines; a sink has no status. */
 const Listed = z.array(z.object({ name: z.string(), status: z.string().optional() }));
-/** R2 SQL's rows (`result.rows`), and Analytics Engine's (`data`). */
+/** R2 SQL's rows (`result.rows`). */
 const TablesRows = z.object({
   result: z.object({ rows: z.array(z.record(z.string(), z.unknown())) }),
 });
-const MetricsRows = z.object({ data: z.array(z.record(z.string(), z.unknown())) });

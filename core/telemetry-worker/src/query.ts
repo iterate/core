@@ -85,13 +85,9 @@ const BASIN: Record<string, (own: string, since: string) => string> = {
     `SELECT * FROM telemetry.logs WHERE worker IN (${own}) AND __ingest_ts > ${since}`,
 };
 
-/** Each table becomes the subquery of its cut. `metrics` runs alone on the Analytics SQL API, which
- *  has no subqueries, so its time bound joins the WHERE. */
-export function scoped(
-  sql: string,
-  { own, metricsDataset }: { own: readonly string[]; metricsDataset: string },
-  hours = 24,
-) {
+/** Each table becomes the subquery of its cut. Cloudflare's own datasets, `metrics` among them,
+ *  are ./store-query.ts's. */
+export function scoped(sql: string, { own }: { own: readonly string[] }, hours = 24) {
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_HOURS)
     throw refused(`hours is a whole number from 1 to ${MAX_HOURS}`);
   // oxlint-disable-next-line iterate/simple-truthiness-check -- `sql` is the mind's word over RPC: a non-string is refused here, not parsed
@@ -107,49 +103,27 @@ export function scoped(
   const [statement] = statements;
   if (statements.length !== 1 || statement?.type !== "select") throw refused("one SELECT only");
   const ownList = own.map((name) => `'${name.replaceAll("'", "''")}'`).join(", ");
-  // a name the caller cannot write, replaced once printed
-  const metricsName = `metrics_${crypto.randomUUID().replaceAll("-", "")}`;
   const inner = Object.fromEntries(
     Object.entries(BASIN).map(([table, rows]) => [table, parse(rows(ownList, since))[0]!]),
   );
-  const tables: string[] = [];
-  let selects = 0;
   // every property of every node, so no clause can hide a table
   const walk = (node: unknown, parent?: unknown, key?: string): unknown => {
     if (Array.isArray(node)) return node.map((child) => walk(child, parent, key));
     if (!(node instanceof Object)) return node;
     const { type, ...rest } = node as Record<string, unknown>;
     check(node as Record<string, unknown>, parent, key);
-    if (type === "select") selects++;
-    // The parser folds an unquoted `sampleInterval`. Over HTTP the Analytics Engine SQL API names
-    // that column `_sample_interval`.
-    if (type === "ref" && (rest.name === "sampleinterval" || rest.name === "_sample_interval"))
-      return { type, ...rest, name: "_sample_interval" };
     if (type !== "table")
       return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, walk(v, node, k)]));
     const { name, schema, alias, columnNames } = rest.name as QNameMapped;
     const table = !schema || schema === "telemetry" ? name : `${schema}.${name}`;
-    tables.push(table);
     const join = walk(rest.join, node, "join");
-    if (table === "metrics") return { type, name: { name: metricsName, alias, columnNames }, join };
-    if (!Object.hasOwn(inner, table))
-      throw refused(`no table ${table}: events, logs, spans or metrics`);
+    if (!Object.hasOwn(inner, table)) throw refused(`no table ${table}: events, logs or spans`);
     return { type: "statement", statement: inner[table], alias: alias || name, columnNames, join };
   };
   const select = walk(statement) as Statement & { type: "select" };
   const limit = select.limit?.limit;
   const rows = limit?.type === "integer" ? Math.min(limit.value, MAX_ROWS) : MAX_ROWS;
   select.limit = { ...select.limit, limit: { type: "integer", value: rows } };
-  const metrics = tables.includes("metrics");
-  if (metrics) {
-    if (tables.length > 1 || selects > 1 || select.from?.[0]?.join)
-      throw refused("metrics alone: the Analytics SQL API has no subqueries or joins");
-    // the Analytics SQL API asks a time bound of every query
-    const bound = parse(`timestamp > ${since}`, "expr");
-    select.where = select.where
-      ? { type: "binary", op: "AND", left: bound, right: select.where }
-      : bound;
-  }
   const printed = toSql.statement(select);
   // The printer writes a few fields raw: the SQL that runs must re-parse to exactly the tree checked.
   const reread = parse(printed);
@@ -169,25 +143,8 @@ export function scoped(
     Object.values(inner).map((s) => JSON.stringify(parse(toSql.statement(s))[0])),
   );
   const read = tablesOutside(again, cuts);
-  if (read.join() !== (metrics ? metricsName : ""))
-    throw refused(`cannot scope ${read.join(", ")}`);
-  if (!metrics) return { engine: "basin" as const, sql: printed };
-  // The Analytics Engine SQL API answers the printer's forms 422: it wants `INTERVAL '1' HOUR` and
-  // bare numbers (`LIMIT 1000`). The patterns are the pinned printer's exact forms, strings skipped.
-  const sqlApi = printed
-    .replace(
-      /'(?:[^']|'')*'|"(?:[^"]|"")*"|\(\('((?:[^']|'')*)'\)::interval \)|\((\d+(?:\.\d+)?)\)/g,
-      (match, interval?: string, number?: string) => {
-        if (number) return number;
-        if (!interval) return match;
-        const spelled = /^(\d+) (second|minute|hour|day|week|month|year)s?$/i.exec(interval.trim());
-        if (!spelled)
-          throw refused(`an interval over metrics is a whole number and a unit, like '6 hours'`);
-        return `INTERVAL '${spelled[1]}' ${spelled[2]!.toUpperCase()}`;
-      },
-    )
-    .replace(metricsName, metricsDataset);
-  return { engine: "metrics" as const, sql: sqlApi };
+  if (read.length > 0) throw refused(`cannot scope ${read.join(", ")}`);
+  return { engine: "basin" as const, sql: printed };
 }
 
 const sameTree = (tree: unknown) =>
@@ -212,6 +169,6 @@ function refuse(what: string): never {
 function refused(why: string) {
   return codedError(
     "INVALID_INPUT",
-    `itx.telemetry.query: ${why} (one SELECT over events, logs, spans or metrics; docs/telemetry.md)`,
+    `itx.telemetry.query: ${why} (one SELECT over events, logs and spans, or over one of Cloudflare's datasets; docs/telemetry.md)`,
   );
 }

@@ -109,7 +109,7 @@ const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMod
       name: "mind",
       stage: config.alchemy.stageName,
       resources: {} as Record<string, any>,
-      bindings: {},
+      bindings: {} as Record<string, { sid: string; data: { bindings?: { type?: string }[] } }[]>,
       actions: {},
     };
     const inStack = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -140,6 +140,12 @@ const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMod
         lines.push(
           `${name}:${kindOf(Effect.isEffect(value) && !("~alchemy/Kind" in value) ? yield* inStack(value as Effect.Effect<unknown, unknown, never>) : value)}`,
         );
+      // a binding that the stack adds beside `env` with the Worker's own `bind`
+      // (./analytics-sql-binding.ts), by its name and Cloudflare's type
+      const env = resource.Props.env ?? {};
+      for (const { sid, data } of stack.bindings[resource.FQN] ?? [])
+        if (!Object.hasOwn(env, sid))
+          lines.push(`${sid}:${(data.bindings || []).map((binding) => binding.type).join(" ")}`);
       workers[resource.LogicalId] = lines.sort();
     }
     const resources = Object.fromEntries(
@@ -262,9 +268,9 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
 
   // Minted mode declares both AccountApiToken resources and their Worker bindings
   assert.deepEqual(minted.workers.Telemetry, [
+    "ANALYTICS:analytics",
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
-    "ITERATE__ANALYTICS_TOKEN:output of TelemetryAnalyticsToken.value",
     "ITERATE__CATALOG_TOKEN:output of TelemetryCatalogToken.value",
     "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
     "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
@@ -272,14 +278,15 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
     "SPANS:Cloudflare.Pipelines.Stream Telemetry_spans_stream",
   ]);
   assert.equal(minted.resources.TelemetryCatalogToken, "Cloudflare.ApiToken.AccountApiToken");
-  assert.equal(minted.resources.TelemetryAnalyticsToken, "Cloudflare.ApiToken.AccountApiToken");
+  // the analytics token is gone: `metrics` is read on the Analytics SQL binding, with no token
+  assert.equal(minted.resources.TelemetryAnalyticsToken, undefined);
   assert.equal(minted.resources.TelemetryToken, undefined);
 
   // Given mode declares TelemetryToken
   assert.deepEqual(given.workers.Telemetry, [
+    "ANALYTICS:analytics",
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
-    "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
     "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
     "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
     "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
@@ -296,6 +303,7 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
   // Off mode binds the three streams and declares the bucket, the streams and the destinations,
   // and no token, catalog, sink or pipeline: the mind can make those itself
   assert.deepEqual(off.workers.Telemetry, [
+    "ANALYTICS:analytics",
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
     "ITERATE:plain_text",
     "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",

@@ -504,9 +504,10 @@ export async function keptSignInOf(
   };
 }
 
-/** WHETHER AN API TOKEN OF AN ACCOUNT IS ONE THAT A DEPLOY MADE: the stack's two telemetry tokens,
- *  `iterate-<stage>-telemetry-catalog` and `-analytics` (core/alchemy src/stack.ts). A token that a
- *  sign-in made outlives the sign-in's revocation: only a delete ends it. */
+/** WHETHER AN API TOKEN OF AN ACCOUNT IS ONE THAT A DEPLOY MADE: the stack's telemetry token
+ *  `iterate-<stage>-telemetry-catalog` (core/alchemy src/stack.ts), and `-analytics`, which a
+ *  deploy made until 22 Nov 2026. A token that a sign-in made outlives the sign-in's revocation:
+ *  only a delete ends it. */
 export const madeByTheDeploy = (name: string) =>
   /^iterate-[a-z0-9-]+-telemetry-(catalog|analytics)$/.test(name);
 

@@ -75,7 +75,12 @@ import {
   slackMessageOf,
   slackSenderIsMember,
 } from "./slack.ts";
-import { telemetryQuery, telemetryToken, telemetryTurnOn } from "./telemetry.ts";
+import {
+  removeOwnTelemetryQueryRule,
+  telemetryQuery,
+  telemetryToken,
+  telemetryTurnOn,
+} from "./telemetry.ts";
 
 // The integration packages this mind hosts (a Telegram bot, your own GitHub App, …), one element
 // each: apps.md, and the recipes at https://github.com/jonastemplestein/iterategrations. A
@@ -132,6 +137,9 @@ export default class extends IterateConfigEntrypoint {
         // (cloud-deliveries.ts, and `processMindEvent` below). Keep both, or the Cloud sends the
         // key form alone.
         await publishStep("mind-form", () => sayMindForm(itx));
+        // `itx.telemetry.query` is the platform's alone: the row an earlier turn-on wrote, which
+        // pointed it at `itx.config.telemetryQuery`, goes (telemetry.ts).
+        await publishStep("telemetry-query-rule", () => removeOwnTelemetryQueryRule(itx));
         // Voice devices, when they are on: the service at `itx.voice` (apps.md, "Voice devices").
         // await installVoice(itx);
         // A heartbeat, for a mind that should wake on its own (to check on itself and repair what
@@ -585,7 +593,8 @@ export default class extends IterateConfigEntrypoint {
 
   /** `itx.config.telemetryToken()`, `itx.config.telemetryTurnOn()`,
    *  `itx.config.telemetryQuery(sql, { hours })`: the mind turns its telemetry tables on and reads
-   *  them itself, with a token a member gives (telemetry.ts; onboarding/telemetry.md). */
+   *  them itself, with a token a member gives (telemetry.ts; onboarding/telemetry.md). Called by
+   *  that name: `itx.telemetry.query` is the platform's. */
   async telemetryToken(options?: { again?: boolean }) {
     using itx = this.getItx();
     return await telemetryToken(itx, options);

@@ -1,9 +1,9 @@
 {
   "full-cloudflare, mail forward": {
     "Telemetry": [
+      "ANALYTICS:analytics",
       "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
       "ITERATE:plain_text",
-      "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
       "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
@@ -57,9 +57,9 @@
   },
   "full-cloudflare, no mail forward": {
     "Telemetry": [
+      "ANALYTICS:analytics",
       "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
       "ITERATE:plain_text",
-      "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
       "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",
@@ -112,9 +112,9 @@
   },
   "external mind, no mail forward": {
     "Telemetry": [
+      "ANALYTICS:analytics",
       "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",
       "ITERATE:plain_text",
-      "ITERATE__ANALYTICS_TOKEN:output of TelemetryToken.value",
       "ITERATE__CATALOG_TOKEN:output of TelemetryToken.value",
       "ITERATE__OTLP_SECRET:output of TelemetryOtlpSecret.text",
       "LOGS:Cloudflare.Pipelines.Stream Telemetry_logs_stream",

@@ -4,20 +4,26 @@ The owner should come away with: the mind sees every request, error and event of
 
 ## Ready today
 
-- `await itx.telemetry.query(sql, { hours })` runs one `SELECT` over `events`, `logs` or `spans`
-  (or `metrics` alone), cut to this mind's rows of the last `hours` (24 by default, 720 at most),
+- `await itx.telemetry.query(sql, { hours })` over Cloudflare's own datasets needs no token:
+  `logs.workersLogs`, `logs.traces`, `logs.issues`, `events.workersInvocations` and `metrics`, in
+  Cloudflare's Analytics SQL, cut to this mind's rows (168 hours at most over the three logs, 768
+  over the rest). Start there: it answers rows on every mind, tables on or off.
+- `await itx.telemetry.query(sql, { hours })` runs one `SELECT` over `events`, `logs` or `spans`,
+  cut to this mind's rows of the last `hours` (24 by default, 720 at most),
   1,000 rows at most (`truncated: true` says the answer is full and more may match: aggregate,
   or page with `LIMIT` and `OFFSET`). It answers `{ rows, sql, notice?, truncated?, send? }`. A
-  refused query throws with Cloudflare's own words. A JSON function works in the `SELECT` list
-  alone: filter text with `LIKE` or `regexp_match`. After the turn-on below, the
-  mind's own code answers it (`telemetry.ts`), with the same spelling and answer.
+  refused query throws a fixed sentence with Cloudflare's code. A JSON function works in the
+  `SELECT` list alone: filter text with `LIKE` or `regexp_match`. After the turn-on below, read
+  the tables with `await itx.config.telemetryQuery(sql, { hours })`, the mind's own code
+  (`telemetry.ts`): the same SQL and answer, sent with the mind's token. `itx.telemetry.query`
+  stays the platform's, under that one name.
 - When the tables are off, the query answers `{ rows: [], sql, notice, send }`. A subagent of the
   first sitting reports that the tables are off and stops there. The mind's agent turns them on
   when the owner asks, in this order: `await itx.config.telemetryToken()` answers
   `{ makeTheTokenAt, pasteItAt, account, bucket }`; `{ needed: false }` on a stack that holds its
   own token; `{ set: true, wide, bucket }` once it is set (after an interrupted turn-on, call
   `telemetryTurnOn()` directly). `telemetryToken({ again: true })` replaces a wrong token. Give a
-  member both links in ONE message: pick `account` at the first link, which fills in five
+  member both links in ONE message: pick `account` at the first link, which fills in four
   permissions for the entire account. Before they create the token, they select "Add policy",
   choose "R2 Buckets" in place of "Entire Account", select `bucket`, and tick "Edit" for
   "Workers R2 Storage Bucket Item": without it the tables stop when the token is narrowed. Then
@@ -25,8 +31,8 @@ The owner should come away with: the mind sees every request, error and event of
   reads and writes every R2 bucket of the account, the mind's files too, makes and deletes
   buckets and can set one public. WAIT until the member
   says it is done. Then `await itx.config.telemetryTurnOn()` (safe to call again; it answers
-  what it made and each pipeline's status). Wait a few minutes and query a recent event before
-  you say it works: a table answers a notice until its first rows land. Events the streams got
+  what it made and each pipeline's status). Wait a few minutes and query a recent event with
+  `itx.config.telemetryQuery` before you say it works: a table answers a notice until its first rows land. Events the streams got
   before the turn-on are there too.
 - Right after the turn-on, ask the member to narrow the token in Cloudflare's dashboard, in one
   message: take "Pipelines Write" and "Workers R2 Storage Write" off the first policy, and leave
@@ -61,7 +67,8 @@ rpc_method, http_status`, and for the mind's own Workers (`iterate-<slug>-mind`,
 
 ## How
 
-The visits to `/` in the last hour:
+On a mind that turned its tables on itself, write `itx.config.telemetryQuery` where these write
+`itx.telemetry.query`. The visits to `/` in the last hour:
 
 ```ts
 const { rows, notice } = await itx.telemetry.query(

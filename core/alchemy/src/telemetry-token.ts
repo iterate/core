@@ -7,6 +7,7 @@
 // an `AccountApiToken` resource succeeds even with a deploy sign-in that lacks API-token write
 // permission: when Cloudflare refuses deletion for missing permission, it verifies the credential
 // is valid, logs the token name and dashboard URL for manual removal, and lets Alchemy clear state.
+// The one exception is `TelemetryAnalyticsToken` (`ANALYTICS_TOKEN`): a refusal fails the deploy.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Retry from "@distilled.cloud/cloudflare/Retry";
@@ -39,8 +40,9 @@ export type TelemetryToken = Resource<
 export const TelemetryToken = Resource<TelemetryToken>("Iterate.TelemetryToken");
 
 /** How the stack wires telemetry tables, as its state says:
- *  - `"minted"`: state holds `TelemetryCatalogToken` or `TelemetryAnalyticsToken` — declare those
- *    two `AccountApiToken` resources so catalog sinks keep their original credentials.
+ *  - `"minted"`: state holds `TelemetryCatalogToken` or `TelemetryAnalyticsToken` — declare the
+ *    catalog token's `AccountApiToken` so catalog sinks keep their original credentials. The
+ *    analytics token, which nothing reads since 22 Nov 2026, is not declared: a deploy deletes it.
  *  - `"given"`: state holds `TelemetryToken` — use that one owner-created token.
  *  - `"off"`: neither — the bucket and the streams are made, and no token, catalog, sink or
  *    pipeline: the mind can make those itself (./mind-made-telemetry-tables.ts). */
@@ -120,8 +122,34 @@ export const deleteLegacyAccountApiToken = <E, R, E2, R2>(
     ),
   );
 
+/** THE ANALYTICS TOKEN THAT A STACK MINTED UNTIL 22 NOV 2026: Account Analytics Read over the
+ *  whole account, which nothing reads now. A refused delete of it fails the deploy: Alchemy keeps
+ *  its state row (status `deleting`) and plans the delete again at the next deploy. Were it let go
+ *  as the other tokens are, a token that reads the whole account would stay live with no trace in
+ *  the stack's state. The deploy credential that minted it may delete it, so a refusal is not
+ *  expected. Once a member deletes it in the dashboard, the next delete finds no token and
+ *  succeeds. */
+const ANALYTICS_TOKEN = "TelemetryAnalyticsToken";
+
+/** Deletes the analytics token (`ANALYTICS_TOKEN`), or fails with a line that names it and says how
+ *  to delete it. */
+export const deleteAnalyticsToken = <E, R>(
+  remove: Effect.Effect<void, E, R>,
+  token: { accountId: string; name: string; tokenId: string },
+  say: (line: string) => void,
+) =>
+  remove.pipe(
+    Effect.tapError((refused) =>
+      Effect.sync(() =>
+        say(
+          `API token ${token.name} (${token.tokenId}) reads the account's analytics and could not be deleted (${refusedForPermissionShape(refused) ? "this deploy credential lacks permission to delete API tokens" : wordsOf(refused)}). It stays in the stack's state, and this deploy fails. Delete it in Cloudflare's dashboard (https://dash.cloudflare.com/${token.accountId}/api-tokens), or deploy with a credential that may delete API tokens, then deploy again.`,
+        ),
+      ),
+    ),
+  );
+
 /** Overrides Alchemy's `AccountApiTokenProvider` so deleting `AccountApiToken` resources succeeds
- *  even without `account_api_tokens` write scope. */
+ *  even without `account_api_tokens` write scope, all but `ANALYTICS_TOKEN`. */
 export const AccountApiTokenDeleteFallbackProvider = () =>
   Provider.effect(
     Cloudflare.ApiToken.AccountApiToken,
@@ -132,17 +160,23 @@ export const AccountApiTokenDeleteFallbackProvider = () =>
       const wrapped: Provider.ProviderService<Cloudflare.ApiToken.AccountApiToken> = {
         ...base,
         delete: (input) =>
-          deleteLegacyAccountApiToken(
-            base.delete(input).pipe(noRetryOnPermissionRefusal),
-            zones
-              .listZones({ account: { id: input.output.accountId }, perPage: 1 })
-              .pipe(
-                Effect.provideService(Credentials, credentials),
-                Effect.provideService(HttpClient.HttpClient, httpClient),
+          input.id === ANALYTICS_TOKEN
+            ? deleteAnalyticsToken(
+                base.delete(input).pipe(noRetryOnPermissionRefusal),
+                input.output,
+                console.log,
+              )
+            : deleteLegacyAccountApiToken(
+                base.delete(input).pipe(noRetryOnPermissionRefusal),
+                zones
+                  .listZones({ account: { id: input.output.accountId }, perPage: 1 })
+                  .pipe(
+                    Effect.provideService(Credentials, credentials),
+                    Effect.provideService(HttpClient.HttpClient, httpClient),
+                  ),
+                input.output,
+                console.log,
               ),
-            input.output,
-            console.log,
-          ),
       };
       return wrapped;
     }),

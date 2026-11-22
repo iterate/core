@@ -13,30 +13,24 @@ void test("the stack's variables become the Worker's settings, and a binding bes
   assert.equal(config.eventsWriterName, "iterate-example-com-mind");
   assert.equal(config.otlpSecret.exposeSecret(), "the-otlp-secret");
   assert.equal(config.catalogToken?.exposeSecret(), "the-catalog-token");
-  assert.equal(config.analyticsToken?.exposeSecret(), "the-analytics-token");
 });
 
 void test("no secret prints", () => {
   const printed = JSON.stringify(telemetryWorkerConfigOf(stackVariables()));
-  for (const secret of ["the-otlp-secret", "the-catalog-token", "the-analytics-token"])
+  for (const secret of ["the-otlp-secret", "the-catalog-token"])
     assert.equal(printed.includes(secret), false);
 });
 
-void test("a missing otlpSecret is refused by its name, while catalogToken and analyticsToken are optional", () => {
+void test("a missing otlpSecret is refused by its name, while catalogToken is optional", () => {
   const { ITERATE__OTLP_SECRET: _, ...withoutOtlp } = stackVariables();
   assert.throws(
     () => telemetryWorkerConfigOf(withoutOtlp),
     /ITERATE otlpSecret \(ITERATE__OTLP_SECRET\)/,
   );
 
-  const {
-    ITERATE__CATALOG_TOKEN: _catalog,
-    ITERATE__ANALYTICS_TOKEN: _analytics,
-    ...withoutTelemetryTokens
-  } = stackVariables();
-  const config = telemetryWorkerConfigOf(withoutTelemetryTokens);
+  const { ITERATE__CATALOG_TOKEN: _catalog, ...withoutTelemetryToken } = stackVariables();
+  const config = telemetryWorkerConfigOf(withoutTelemetryToken);
   assert.equal(config.catalogToken, undefined);
-  assert.equal(config.analyticsToken, undefined);
 });
 
 void test("one env is parsed once", () => {
@@ -60,6 +54,5 @@ function stackVariables() {
     }),
     ITERATE__OTLP_SECRET: "the-otlp-secret",
     ITERATE__CATALOG_TOKEN: "the-catalog-token",
-    ITERATE__ANALYTICS_TOKEN: "the-analytics-token",
   };
 }

@@ -24,9 +24,6 @@ const own = {
   /** The API token that reads `events`, `logs` and `spans` (R2 SQL), set by the secret variable
    *  `ITERATE__CATALOG_TOKEN` when telemetry tables are enabled. */
   catalogToken: redacted(z.string().min(1)).optional(),
-  /** The API token that reads `metrics` (Account Analytics Read), set by the secret variable
-   *  `ITERATE__ANALYTICS_TOKEN` when telemetry tables are enabled. */
-  analyticsToken: redacted(z.string().min(1)).optional(),
 };
 
 // A Worker's `env` is one object for the life of its isolate, so it keys the memo: the config is

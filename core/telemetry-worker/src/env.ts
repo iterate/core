@@ -9,7 +9,8 @@ export type Env = {
   ITERATE: string;
   ITERATE__OTLP_SECRET: string;
   ITERATE__CATALOG_TOKEN?: string;
-  ITERATE__ANALYTICS_TOKEN?: string;
+  /** Cloudflare's Analytics SQL over the whole account, with no token (./store-query.ts cuts it). */
+  ANALYTICS: AnalyticsSQLBinding;
   LOGS: Pipeline<LogRow>;
   SPANS: Pipeline<SpanRow>;
   EVENTS: Pipeline<EventsRow>;
