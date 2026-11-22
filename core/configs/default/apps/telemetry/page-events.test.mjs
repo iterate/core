@@ -32,7 +32,8 @@ registerHooks({
   },
 });
 const pe = await import("./page-events.ts");
-const { OutsideDaysDurableObject, OUTSIDE_A_DAY, reserveDay } = await import("./backend.ts");
+const { OutsideDaysDurableObject } = await import("./backend.ts");
+const { OUTSIDE_A_DAY, reserveDay } = await import("./day-budget.ts");
 const {
   vitalsOf,
   marksOf,

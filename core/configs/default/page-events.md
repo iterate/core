@@ -252,7 +252,7 @@ member's visitor 60 records of any kind, all members 600; an outside visitor 20,
 member's 1,024 and 4,000), a title 80 (120), a captured event 6 values (12).
 
 **The day's budget of the outside, for the whole mind, a HARD limit:** the facet `outside-days` on
-`/pages` (`apps/telemetry/backend.ts`) holds a SQLite table with one row for each UTC day. A
+`/pages` (`apps/telemetry/backend.ts`, its statement in `day-budget.ts`) holds a SQLite table with one row for each UTC day. A
 send from outside reserves all its records there in ONE STATEMENT before anything is appended: it
 adds them only when the day's sum stays at most 20,000, and a send that does not fit is dropped
 whole. A Durable Object runs one call at a time, so the day never passes 20,000, however many
