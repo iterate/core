@@ -1,45 +1,69 @@
-import { expect, test } from "vitest";
-import { clientsWithAccess, endFields, endsOf, logoOriginsOf } from "./access-list.ts";
+import { expect, test, vi } from "vitest";
+import { clientsWithAccess, type Ends, endFields, endsOf, logoOriginsOf } from "./access-list.ts";
 import type { Env } from "./env.ts";
 import { configVars } from "./test-support.ts";
 import type { ClientWithAccess, SignIn } from "./oauth.ts";
 
-test("a client is drawn once, with each sign-in it holds under it: what it reaches, since when, when it was last used and when it ends", () => {
-  const drawn = words(clientsWithAccess(env, [clientOf([codex, older])], end));
+test("a client is drawn once, with a summary, an all-N control, and each sign-in collapsed in details", () => {
+  const html = render([clientOf([codex, older])]);
+  const drawn = words(html);
   expect(drawn.match(/Codex/g)).toHaveLength(1);
-  expect(drawn).toContain("access went to 127.0.0.1:53013.");
-  expect(drawn).toContain(
-    "Reaches the mind's MCP server: everything in this mind, as the member, since 2026-11-01, last used 2026-11-10, ends 2026-11-17 unless used. [Revoke signIn=grant-1]",
-  );
-  expect(drawn).toContain("since 2026-10-20, last used 2026-11-10, ends 2026-11-17 unless used");
-  expect(drawn).toContain("[Revoke signIn=grant-0]");
-  // one button ends all that the client holds
+  expect(drawn).toContain("Whole mind MCP goes to 127.0.0.1:53013 Latest 1 d ago");
+  // one visible button ends all that the client holds, and the single sign-ins sit inside details
   expect(drawn).toContain("[Revoke all 2 client=client-1]");
+  expect(html).toContain(`<details class="access-details">`);
+  expect(drawn).toContain("2 sign-ins");
+  expect(drawn).toContain("Used 1 d ago since 1 Nov ends 17 Nov if idle [Revoke signIn=grant-1]");
+  expect(drawn).toContain("Used 1 d ago since 20 Oct ends 17 Nov if idle [Revoke signIn=grant-0]");
+  expect(html).toContain(
+    `<time datetime="2026-11-10T12:00:00Z" title="2026-11-10 12:00 UTC">1 d ago</time>`,
+  );
 });
 
-test("a client with one sign-in has that sign-in's button alone", () => {
-  const drawn = words(clientsWithAccess(env, [clientOf([codex])], end));
+test("a client with one sign-in has that sign-in's button alone and no details disclosure", () => {
+  const html = render([clientOf([codex])]);
+  const drawn = words(html);
+  expect(html).toContain(`data-client="client-1" data-access="grant-1"`);
+  expect(html).not.toContain("<details");
   expect(drawn).toContain("[Revoke signIn=grant-1]");
   expect(drawn).not.toContain("Revoke all");
 });
 
-test("a device's sign-in, a let-in and one of the mind's own pages each say what they are", () => {
-  const device = words(
-    clientsWithAccess(env, [{ ...clientOf([codex]), name: "iterate CLI", device: true }], end),
+test("each action control gets a full accessible label naming what it ends", () => {
+  const labels: string[] = [];
+  render(
+    [clientOf([codex, older])],
+    (ends, button, label) => {
+      labels.push(`${button} -> ${label}`);
+      return end(ends, button);
+    },
+    "jo@example.net",
   );
-  expect(device).toContain("a device or CLI, signed in by a code.");
-  // where a device's code went is this stack's own page, which says nothing
-  expect(device).not.toContain("access went to");
+  expect(labels).toEqual([
+    "Revoke -> Revoke Codex sign-in from 1 Nov of jo@example.net",
+    "Revoke -> Revoke Codex sign-in from 20 Oct of jo@example.net",
+    "Revoke all 2 -> Revoke all 2 sign-ins of Codex of jo@example.net",
+  ]);
+});
 
-  const letIn = {
+test("a device's sign-in, a let-in and one of the mind's own pages each say what they are", () => {
+  const device = words(render([{ ...clientOf([codex]), name: "iterate CLI", device: true }]));
+  expect(device).toContain("Device sign-in");
+  // where a device's code went is this stack's own page, which says nothing
+  expect(device).not.toContain("goes to");
+
+  const letInSoon = {
     ...codex,
     renews: false,
     renewedAt: undefined,
-    until: Date.UTC(2026, 10, 1, 14, 30),
+    until: Date.UTC(2026, 10, 11, 15, 0),
   };
-  expect(words(clientsWithAccess(env, [clientOf([letIn])], end))).toContain(
-    "until 2026-11-01 14:30 UTC, with no renewal.",
-  );
+  const letInHtml = render([clientOf([letInSoon])]);
+  expect(words(letInHtml)).toContain("until in 3 h no renewal");
+  expect(letInHtml).toContain(`title="2026-11-11 15:00 UTC"`);
+
+  const letInLater = { ...letInSoon, until: Date.UTC(2026, 10, 15, 14, 30) };
+  expect(words(render([clientOf([letInLater])]))).toContain("until 15 Nov, 14:30 UTC no renewal");
 
   const browser: SignIn = {
     ...codex,
@@ -49,24 +73,15 @@ test("a device's sign-in, a let-in and one of the mind's own pages each say what
     scopes: ["identity"],
     renews: false,
     renewedAt: undefined,
-    endsAt: at("2026-11-02"),
+    endsAt: at("2026-11-12"),
   };
-  const page = words(
-    clientsWithAccess(
-      env,
-      [{ ...clientOf([browser]), name: "guestbook.example.com", host: browser.host }],
-      end,
-    ),
-  );
-  expect(page).toContain("guestbook.example.com one of this mind's own pages");
-  expect(page).toContain(
-    "Reaches guestbook.example.com: who the person is, and no more, since 2026-11-01, ends 2026-11-02. [Sign out signIn=grant-1]",
-  );
+  const page = words(render([{ ...clientOf([browser]), name: "Guestbook", host: browser.host }]));
+  expect(page).toContain("Guestbook Identity only guestbook.example.com This mind's page");
+  expect(page).toContain("Signed in 1 Nov ends 12 Nov [Sign out signIn=grant-1]");
 });
 
 test("an owner's list names the member, and a name that a client gave is written as text", () => {
-  const drawn = clientsWithAccess(
-    env,
+  const drawn = render(
     [{ ...clientOf([codex]), name: '<img src=x onerror="alert(1)">' }],
     end,
     "jo@example.net",
@@ -126,7 +141,21 @@ test("a form names one sign-in or all of one client, and a form that names neith
   expect(endFields({ client: 'c"1' })).toBe('<input type="hidden" name="client" value="c&#34;1">');
 });
 
+const NOW = Date.parse("2026-11-11T12:00:00Z");
 const at = (day: string) => Date.parse(`${day}T12:00:00Z`) / 1000;
+
+function render(
+  clients: ClientWithAccess[],
+  endControl: (ends: Ends, button: string, label: string) => string = end,
+  whose?: string,
+) {
+  vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+  try {
+    return clientsWithAccess(env, clients, endControl, whose);
+  } finally {
+    vi.useRealTimers();
+  }
+}
 /** A form as the test reads it: its button's word and what it names. */
 const end = (ends: { signIn: string } | { client: string }, button: string) =>
   `[${button} ${"signIn" in ends ? `signIn=${ends.signIn}` : `client=${ends.client}`}]`;
@@ -136,8 +165,7 @@ const words = (html: string) =>
     .replaceAll(/<[^>]+>/g, " ")
     .replaceAll(/&#(\d+);/g, (_all, code) => String.fromCharCode(Number(code)))
     .replaceAll(/\s+/g, " ")
-    .replaceAll(" ,", ",")
-    .replaceAll(" .", ".");
+    .trim();
 
 // the cast: the list reads the mind's config and no binding
 const env = configVars() as unknown as Env;

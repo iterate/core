@@ -522,41 +522,243 @@ margin-top: 0.375rem;
 dialog .actions {
 justify-content: flex-end;
 }
+.page-head {
+display: flex;
+flex-direction: column;
+gap: 0.25rem;
+}
+.session-section {
+display: flex;
+flex-direction: column;
+gap: 0.625rem;
+}
+.section-head {
+display: flex;
+flex-wrap: wrap;
+align-items: center;
+justify-content: space-between;
+gap: 0.5rem 1rem;
+}
+.section-title {
+display: flex;
+align-items: center;
+gap: 0.5rem;
+}
+.count {
+display: inline-flex;
+align-items: center;
+justify-content: center;
+min-width: 1.25rem;
+height: 1.25rem;
+padding: 0 0.375rem;
+border-radius: 999px;
+background: var(--muted);
+color: var(--muted-foreground);
+font-size: 0.75rem;
+font-weight: 500;
+font-variant-numeric: tabular-nums;
+}
+button.small {
+min-height: 1.75rem;
+padding: 0 0.625rem;
+border-radius: calc(var(--radius) - 3px);
+font-size: 0.8125rem;
+white-space: nowrap;
+}
+.browser-sessions,
 .access-list {
 list-style: none;
+margin: 0;
 padding: 0;
+border: 1px solid var(--border);
+border-radius: var(--radius);
+overflow: hidden;
 }
+.browser-sessions > li + li,
+.access-list > li + li {
+border-top: 1px solid var(--border);
+}
+.browser-row,
 .access {
 display: grid;
 grid-template-columns: auto minmax(0, 1fr) auto;
-gap: 0.25rem 0.75rem;
-align-items: start;
-padding: 0.75rem 0;
-border-top: 1px solid var(--border);
+gap: 0.125rem 0.75rem;
+align-items: center;
+padding: 0.75rem 0.875rem;
 }
-.access p {
-margin: 0;
+.browser-row[data-current] {
+background: color-mix(in oklab, var(--muted) 60%, transparent);
+}
+.browser-row > .tile,
+.access > .tile {
+grid-row: 1 / span 2;
+align-self: start;
+margin-top: 0.0625rem;
+}
+.browser-row > form {
+grid-column: 3;
+grid-row: 1 / span 2;
+align-self: center;
+}
+.access > form {
+grid-column: 3;
+grid-row: 1;
+align-self: start;
+}
+button.secondary.small {
+border-color: var(--border);
+background: var(--card);
+}
+button.secondary.small:hover {
+border-color: var(--input);
+background: var(--accent);
+}
+.row-title {
+display: flex;
+flex-wrap: wrap;
+align-items: center;
+gap: 0.25rem 0.5rem;
+min-width: 0;
+line-height: 1.35;
+}
+.row-title strong {
+font-weight: 600;
+}
+.row-meta {
+grid-column: 2;
+display: flex;
+flex-direction: column;
+gap: 0.125rem;
+color: var(--muted-foreground);
+font-size: 0.8125rem;
+line-height: 1.45;
 overflow-wrap: anywhere;
+}
+.meta-line {
+margin: -1px;
+padding: 1px;
+overflow: hidden;
+}
+.meta-track {
+display: flex;
+flex-wrap: wrap;
+align-items: center;
+row-gap: 0.125rem;
+margin-left: -0.875rem;
+}
+.meta-track > * {
+position: relative;
+margin-left: 0.875rem;
+}
+.meta-track > .badge + .meta-item {
+margin-left: 0.5rem;
+}
+.meta-item + .meta-item::before {
+position: absolute;
+left: -0.5625rem;
+opacity: 0.5;
+content: "·";
+}
+.badge {
+display: inline-flex;
+align-items: center;
+height: 1.1875rem;
+padding: 0 0.4375rem;
+border: 1px solid var(--border);
+border-radius: calc(var(--radius) - 4px);
+background: var(--muted);
+color: var(--muted-foreground);
+font-size: 0.6875rem;
+font-weight: 500;
+line-height: 1;
+white-space: nowrap;
+}
+.badge-current,
+.badge-strong {
+border-color: color-mix(in oklab, var(--foreground) 18%, var(--border));
+background: color-mix(in oklab, var(--foreground) 8%, var(--card));
+color: var(--foreground);
+}
+time {
+font-variant-numeric: tabular-nums;
+}
+.access-details {
+grid-column: 2 / -1;
+margin-top: 0.25rem;
+font-size: 0.8125rem;
+}
+.access-details > summary {
+display: inline-flex;
+align-items: center;
+gap: 0.3125rem;
+color: var(--foreground);
+font-weight: 500;
+cursor: pointer;
+list-style: none;
+user-select: none;
+}
+.access-details > summary::-webkit-details-marker {
+display: none;
+}
+.access-details > summary::before {
+display: inline-block;
+width: 0.375rem;
+height: 0.375rem;
+border-right: 1.5px solid var(--muted-foreground);
+border-bottom: 1.5px solid var(--muted-foreground);
+transform: rotate(-45deg);
+transition: transform 0.12s ease;
+content: "";
+}
+.access-details[open] > summary::before {
+transform: rotate(45deg);
+}
+.access-details > summary:hover {
+text-decoration: underline;
+text-underline-offset: 3px;
 }
 .access-sessions {
 list-style: none;
-margin: 0.25rem 0 0;
-padding: 0;
+margin: 0.375rem 0 0;
+padding: 0.125rem 0.625rem;
+border: 1px solid var(--border);
+border-radius: calc(var(--radius) - 2px);
+background: color-mix(in oklab, var(--muted) 45%, transparent);
 }
-.access-sessions li {
+.access-sessions > li {
 display: flex;
-flex-wrap: wrap;
+align-items: center;
 justify-content: space-between;
-gap: 0 0.75rem;
-padding: 0.125rem 0;
+gap: 0.5rem 0.75rem;
+padding: 0.375rem 0;
+color: var(--muted-foreground);
 overflow-wrap: anywhere;
 }
-@media (max-width: 30rem) {
-.access {
-grid-template-columns: auto minmax(0, 1fr);
+.access-sessions > li + li {
+border-top: 1px solid var(--border);
 }
-.access form {
-grid-column: 2;
+.access-sessions button.small {
+min-height: 1.5rem;
+padding: 0 0.5rem;
+font-size: 0.75rem;
+}
+@media (max-width: 34rem) {
+.browser-row,
+.access {
+padding: 0.6875rem 0.75rem;
+gap: 0.1875rem 0.625rem;
+}
+.browser-row > form {
+grid-row: 1;
+align-self: start;
+}
+.row-meta {
+grid-column: 2 / -1;
+}
+button.small {
+min-height: 1.625rem;
+padding: 0 0.5rem;
+font-size: 0.75rem;
 }
 }
 .masthead {
@@ -642,4 +844,4 @@ background: color-mix(in oklab, var(--primary) 90%, transparent);
 
 /** The CSP source that allows that `<style>` and no other: its SHA-256. */
 // allow-high-entropy-next-line: a hash of the public stylesheet above, not a secret
-export const plainPageCssHash = "'sha256-2ReNgCvaaPNESKTCYaQws8GtdFOZ7EJ0hOe6DWAQuBE='";
+export const plainPageCssHash = "'sha256-eOpsA+PohMVZskqVroM9x40UXrfcbtKUoNY8w+xjSqg='";

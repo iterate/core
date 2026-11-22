@@ -149,15 +149,35 @@ test("the page lists a member's and a non-member's own browsers, this one marked
 
   const ownersPage = await pageOf(env, owner.cookie);
   expect(ownersPage).toContain("Chrome on macOS");
+  expect(ownersPage).toContain(`data-browser="chrome"`);
   expect(ownersPage).toContain("Safari on iPhone");
+  expect(ownersPage).toContain(`data-browser="safari"`);
   expect(ownersPage).toContain(`data-session="${owner.session}" data-current`);
+  expect(ownersPage).toContain("This browser");
+  expect(ownersPage).toContain("Passkey");
+  expect(ownersPage).toMatch(/<time datetime="[^"]+Z" title="\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC">/);
+  expect(ownersPage).toContain(`aria-label="End Safari on iPhone session"`);
   expect(ownersPage).toContain("End all other browsers");
   expect(ownersPage).toContain("<h2>Apps and tools</h2>");
   expect(ownersPage).not.toContain(ada.session);
 
-  // a person who is no member any more sees their own one browser, and no key and no member
+  // a person who is no member any more sees their own one browser, and no key and no member;
+  // an unknown User-Agent gets a neutral browser icon, and an unknown mobile agent a phone icon
+  const adaCurl = await signedIn(env, ADA, "curl/8.7.1");
+  const adaWebview = await signedIn(
+    env,
+    ADA,
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15",
+  );
+  const adasWithOthers = await pageOf(env, ada.cookie);
+  expect(adasWithOthers).toContain(`data-browser="unknown"`);
+  expect(adasWithOthers).toContain(`data-browser="phone"`);
+  await endSessions(env, ADA.id, "all", { session: adaCurl.session }, new AccountFacts());
+  await endSessions(env, ADA.id, "all", { session: adaWebview.session }, new AccountFacts());
+
   const adasPage = await pageOf(env, ada.cookie);
-  expect(adasPage).toContain("(this browser)");
+  expect(adasPage).toContain("This browser");
+  expect(adasPage).toContain(`aria-label="Sign out of this browser (Chrome on macOS)"`);
   expect(adasPage).not.toContain("End all other browsers");
   expect(adasPage).not.toMatch(/Safari on iPhone|Members/);
 

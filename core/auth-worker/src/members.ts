@@ -501,11 +501,11 @@ async function membersPage(
       clientsWithAccess(
         env,
         clients,
-        (ends, button) => `<form method="post" action="${MEMBERS_PATH}" class="inline">
+        (ends, button, label) => `<form method="post" action="${MEMBERS_PATH}">
           <input type="hidden" name="action" value="end-access">
           <input type="hidden" name="email" value="${text(email)}">
           ${endFields(ends)}
-          <button type="submit" class="link">${button}</button>
+          <button type="submit" class="secondary small" aria-label="${text(label)}">${text(button)}</button>
         </form>`,
         email,
       ),

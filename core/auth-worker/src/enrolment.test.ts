@@ -442,7 +442,8 @@ test("a session that a mailed code opened for a person who was no member lists a
   // the old session's page shows its own kind, and nothing that the passkey opened
   const page = await (await ask(stack.env, "/sessions", { cookie: before.cookie })).text();
   expect(page.match(/data-session="/g)).toHaveLength(2);
-  expect(page).not.toContain("signed in with a passkey");
+  expect(page).toContain("Email code");
+  expect(page).not.toContain("Passkey");
   expect(page.match(/name="signIn"/g)).toHaveLength(1);
 
   // and its forms end its own kind alone: the other mailed session, and its own grant
