@@ -1,5 +1,6 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { FACTS_HEADER, recordFacts, withFacts } from "./facts.ts";
+import { codedError } from "./lib.ts";
 
 test("a fact that records an act: the answer goes on at once, stored or not", async () => {
   const appended: unknown[] = [];
@@ -36,6 +37,29 @@ test("a fact that is the act: the answer waits for the store, and is a 503 when 
   expect(await refused.json()).toEqual({ refused: expect.stringMatching(/send the same request/) });
 });
 
+test("a record whose key already names an event reached the log before: info, never an issue; the act itself is still a 503", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  const issue = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const { answer, recorded } = recordFacts(answered(), reachedBefore);
+    await recorded;
+    expect(await answer).toMatchObject({ status: 200 });
+    expect(issue).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "facts.reached-before", path: "/integrations/x" }),
+    );
+
+    const refused = await recordFacts(answered(true), reachedBefore).answer;
+    expect(refused).toMatchObject({ status: 503 });
+    expect(issue).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "issue", failureSite: "facts.not-stored" }),
+    );
+  } finally {
+    info.mockRestore();
+    issue.mockRestore();
+  }
+});
+
 const event = { type: "x/said", payload: { text: "hello" } };
 
 function answered(storeFirst?: true) {
@@ -46,4 +70,13 @@ function answered(storeFirst?: true) {
 
 function lost() {
   return Promise.reject(new Error("the log could not be reached"));
+}
+
+function reachedBefore() {
+  return Promise.reject(
+    codedError(
+      "IDEMPOTENCY_CONFLICT",
+      'idempotency key "x/said:1" already names a different event at offset 3',
+    ),
+  );
 }

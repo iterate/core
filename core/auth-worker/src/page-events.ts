@@ -58,7 +58,9 @@ const PageRecord = z.object({
   type: z.enum(["viewed", "left", "error"]),
   n: whole(1_000_000).catch(0),
   pathname: text,
-  at: text,
+  // the page's own time, which each record of the tag has: never the server's, so that the same
+  // send twice makes the same events, which the log keeps once (their keys)
+  at: z.string().regex(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,3})?Z$/),
   openMs: whole(86_400_000).optional().catch(undefined),
   seenMs: whole(86_400_000).optional().catch(undefined),
   scrolled: z.number().int().min(0).max(100).optional().catch(undefined),
@@ -187,15 +189,10 @@ function whereOf(request: Request) {
   };
 }
 
-/** A time the page wrote, when it is one; else the server's. */
-const when = (value: string | undefined) =>
-  value && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,3})?Z$/.test(value)
-    ? value
-    : new Date().toISOString();
-
 /** THE FACTS OF ONE SEND: the page events on /pages, an error on /exceptions for a member and on
- *  /exceptions/outside for anyone else. A record that is no record, or one over a bound, is left
- *  out. */
+ *  /exceptions/outside for anyone else. A record that is no record (one with no time of its own
+ *  too), or one over a bound, is left out. A key sent again with other content is a replay: the
+ *  log keeps the first, and the Boundary logs it at info (core/lib/src/facts.ts). */
 function pageFacts(request: Request, sent: z.infer<typeof Sent>, sender: Sender): Facts {
   const url = new URL(request.url);
   const app = appOf(url.hostname);
@@ -223,7 +220,7 @@ function pageFacts(request: Request, sent: z.infer<typeof Sent>, sender: Sender)
     const error = record.type === "error";
     if (!within(who, error)) continue;
     const pathname = cut(pathOf(record.pathname));
-    const at = when(record.at);
+    const { at } = record;
     if (record.type === "viewed")
       pages.push({
         type: PAGE_VIEWED,

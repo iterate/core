@@ -350,13 +350,15 @@ test("a text field that holds an object, even one whose string form throws, is n
     sent({
       page: { ...PAGE, title: object, language: object, timezone: object },
       events: [
-        record(1, "viewed", { pathname: object, at: object }),
-        record(2, "error", { pathname: object, at: object, message: object, stack: object }),
+        record(1, "viewed", { pathname: object }),
+        record(2, "error", { pathname: object, message: object, stack: object }),
+        // a time that is no text is no time of its own: the record is left out
         record(3, "left", { pathname: object, at: object }),
       ],
     }),
   );
   expect(status).toBe(204);
+  expect(facts[0]!.events).toHaveLength(1);
   expect(facts[0]!.events[0]!.payload).toMatchObject({
     pathname: "",
     title: "",
@@ -364,6 +366,26 @@ test("a text field that holds an object, even one whose string form throws, is n
     timezone: "",
   });
   expect(facts[1]!.events[0]!.payload).toMatchObject({ message: "(no message)", stack: "" });
+});
+
+test("the same send twice makes the same facts, which the log keeps once; a record with no time of its own is left out", async () => {
+  const body = {
+    page: PAGE,
+    events: [
+      record(1, "viewed"),
+      record(2, "error", { message: "no" }),
+      record(3, "left", { at: undefined }),
+      record(4, "left", { at: "yesterday" }),
+    ],
+  };
+  const first = await answer(sent(body));
+  const again = await answer(sent(body));
+  expect(first).toMatchObject({ status: 204 });
+  expect(again).toMatchObject({ status: 204, facts: first.facts });
+  expect(first.facts.map(({ path, events }) => [path, events.length])).toEqual([
+    ["/pages", 1],
+    ["/exceptions", 1],
+  ]);
 });
 
 function sent(body: unknown, headers: Record<string, string> = {}, method = "POST") {

@@ -1,4 +1,4 @@
-import { reportIssue } from "./lib.ts";
+import { errorCode, reportIssue } from "./lib.ts";
 import type { StreamEventInput } from "./stream/processor.ts";
 
 /** Only a trusted Worker sets it: egress and the home lab's link drop any other answer's copy
@@ -54,7 +54,9 @@ export function withFacts(response: Response, facts: Facts): Response {
 
 /** Never rejects: an append that fails is reported. A fact records an act that stands, so `answer`
  *  goes on at once. A `storeFirst` fact is the act: `answer` waits for it, and is a 503 when it was
- *  not stored, so the sender sends the same request again. */
+ *  not stored, so the sender sends the same request again. A record whose key already names an
+ *  event reached the log before, from a sender that sent it again: no failure, logged at info, as
+ *  the Boundary's kept facts are (core/boundary-worker/src/provided-mind.ts). */
 export function recordFacts(
   response: Response,
   append: (path: string, events: StreamEventInput[]) => Promise<unknown>,
@@ -66,6 +68,10 @@ export function recordFacts(
     append(path, events).then(
       () => true,
       (error: unknown) => {
+        if (!storeFirst && errorCode(error) === "IDEMPOTENCY_CONFLICT") {
+          console.info({ event: "facts.reached-before", path, said: String(error).slice(0, 300) });
+          return true;
+        }
         reportIssue(storeFirst ? "facts.not-stored" : "facts.not-recorded", error, { path });
         return !storeFirst;
       },
