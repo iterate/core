@@ -3,6 +3,7 @@
 // events (./artifacts-events.ts) and the way to the mind that the config's topology names
 // (./mind-transport.ts): the mind Worker, or a mind that runs elsewhere and handed itself in
 // (./provided-mind.ts).
+import { requestWithOwnedBody } from "core-itx/request-body";
 import type { Env } from "./env.ts";
 import { boundaryResponse } from "./http.ts";
 import { receivedMail } from "./mail.ts";
@@ -16,7 +17,10 @@ export { ProvidedMind } from "./provided-mind.ts";
 export { Door } from "./rpc.ts";
 
 export default {
-  fetch: (request, env, ctx) => boundaryResponse(request, env, ctx, mindTransportOf(env)),
+  // The body goes on to the mind or the auth Worker, which may answer without reading it: this
+  // invocation reads it itself (core-itx/request-body).
+  fetch: (request, env, ctx) =>
+    boundaryResponse(requestWithOwnedBody(request, "boundary"), env, ctx, mindTransportOf(env)),
   // The mind stores the mail, then its config's `email` hook runs (./mail.ts says the order). A
   // failure to store throws, so Cloudflare delivers the mail again: a mind that runs elsewhere and
   // is not connected is such a failure. The fact's idempotency key keeps a retry after a committed
