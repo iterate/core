@@ -55,7 +55,9 @@ const ML_DSA = "webcrypto_modern_algorithms";
  *  whatever its props say, but plans an update for a change of them; the live minds' keys were
  *  made with these props written out. */
 const KEY = { bytes: 32 };
-/** Every log line and every span, kept in Cloudflare's own Workers Logs. */
+/** Every log line and every span, kept in Cloudflare's own Workers Logs. A stack's traces take
+ *  their share from its config (`telemetry.traceSampling`, ./config.ts); its log lines are kept
+ *  whole. */
 const KEEP_ALL = { enabled: true, headSamplingRate: 1, persist: true };
 /** What every Worker of the mind gets as its variable `ITERATE` (iterate/mind-config
  *  `MindConfig`): the same object for each, since they have the same trust level. */
@@ -83,6 +85,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     const { accountId, zones } = config.cloudflare;
     const mindIsInTheStack = config.topology === "full-cloudflare";
     const telemetryMode = options.telemetryMode || "given";
+    // the share of requests whose trace Cloudflare keeps: every one unless the config says less
+    const traces = { ...KEEP_ALL, headSamplingRate: config.telemetry?.traceSampling ?? 1 };
 
     // ── keys, generated once and kept in the stack's state: each is a secret of its Worker ──
     const atRestKey = yield* Alchemy.makeRandom("SecretsAtRestKey", KEY);
@@ -241,7 +245,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
       main: core("telemetry-worker/src/worker.ts"),
       compatibility: { date: COMPATIBILITY_DATE },
       // never exported to itself: a failure to land would make more of what failed to land
-      observability: { ...KEEP_ALL, logs: { ...KEEP_ALL, invocationLogs: true }, traces: KEEP_ALL },
+      observability: { ...KEEP_ALL, logs: { ...KEEP_ALL, invocationLogs: true }, traces },
       // Cloudflare's export posts to this workers.dev address. The other Workers name the
       // export's destinations, so the intake cannot be behind one of them.
       workersDev: { enabled: true, previewsEnabled: false },
@@ -290,7 +294,7 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           destinations: [logsDestination.slug],
         },
         traces: {
-          ...KEEP_ALL,
+          ...traces,
           destinations: [tracesDestination.slug],
         },
       },

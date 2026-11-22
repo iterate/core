@@ -58,6 +58,12 @@ export const MindConfig = z
      *  config's `email` runs. The address must be a verified destination address of the
      *  account's Email Routing, which a person confirms once by the link Cloudflare mails to it. */
     mail: z.strictObject({ forwardTo: z.email() }).optional(),
+    /** THE MIND'S TELEMETRY in Cloudflare's own store. `traceSampling` is the share of requests
+     *  whose trace Cloudflare keeps, for every Worker of the stack, from 0 (no trace) to 1 (each
+     *  one): the head sampling rate of Workers traces
+     *  (https://developers.cloudflare.com/workers/observability/traces/). Log lines are always
+     *  kept whole. Absent: 1, every trace. `iterate deploy --trace-sampling` sets it. */
+    telemetry: z.strictObject({ traceSampling: z.number().min(0).max(1) }).optional(),
   })
   // One label, because Cloudflare's certificate for a zone covers the zone and `*.<zone>` alone.
   .refine(

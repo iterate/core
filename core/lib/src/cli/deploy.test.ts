@@ -171,6 +171,35 @@ test("a deploy over a mind keeps what the mind has, its id among it, and a flag 
   });
 });
 
+test("the trace sampling is what --trace-sampling says, else what the mind has; default keeps every trace", () => {
+  const { accountId } = answers;
+  const over = (traceSampling?: string, telemetry?: { traceSampling: number }) =>
+    deployConfigOf({
+      accountId,
+      domain: "ada.example",
+      traceSampling,
+      deployed: {
+        ...deployed,
+        deployConfig: {
+          alchemy: { stageName: "ada" },
+          cloudflare: { accountId, zones: deployed.zones },
+          telemetry,
+        },
+      },
+    }).telemetry;
+  // a new mind, and a mind with no setting: no setting, so every trace (core/alchemy config.ts)
+  expect(deployConfigOf(answers)).not.toHaveProperty("telemetry");
+  expect(over()).toBeUndefined();
+  expect(over("0.1")).toEqual({ traceSampling: 0.1 });
+  expect(over("0")).toEqual({ traceSampling: 0 });
+  // no flag keeps the mind's own; a flag replaces it; default removes it
+  expect(over(undefined, { traceSampling: 0.25 })).toEqual({ traceSampling: 0.25 });
+  expect(over("1", { traceSampling: 0.25 })).toEqual({ traceSampling: 1 });
+  expect(over("default", { traceSampling: 0.25 })).toBeUndefined();
+  for (const wrong of ["", " ", "1.5", "-0.1", "all", "1/10"])
+    expect(() => over(wrong), wrong).toThrow(/--trace-sampling .* is no share/);
+});
+
 test("a deployed mind's config is read from its boundary Worker's settings: the plain-text variable ITERATE", () => {
   const { stageName: _, ...config } = deployed;
   const settings = (text: string) => ({
@@ -693,6 +722,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
       egressGatewayWorker: "ada-egress",
     },
     mail: { forwardTo: "team@group.example" },
+    telemetry: { traceSampling: 0.25 },
   });
   // every field of the script's config, nested ones too, is in this one: a new field fails here
   type Shape = Record<string, object>;
@@ -758,6 +788,14 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
   const { mail: _, ...withoutMail } = whole;
   expect(JSON.parse(JSON.stringify(overMind(whole, { mailForwardTo: "none" })))).toEqual(
     withoutMail,
+  );
+  expect(overMind(whole, { traceSampling: "1" })).toEqual({
+    ...whole,
+    telemetry: { traceSampling: 1 },
+  });
+  const { telemetry: _telemetry, ...withoutTelemetry } = whole;
+  expect(JSON.parse(JSON.stringify(overMind(whole, { traceSampling: "default" })))).toEqual(
+    withoutTelemetry,
   );
   expect(() => overMind(whole, { mailForwardTo: "team@ada-labs.com" })).toThrow(
     /domain of the mind/,

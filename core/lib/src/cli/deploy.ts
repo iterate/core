@@ -81,6 +81,8 @@ export type DeployInput = {
   egressGateway?: string;
   /** where each mail is forwarded as it arrived; `none` stops the forward (`deployConfigOf`) */
   mailForwardTo?: string;
+  /** the share of requests whose trace is kept, 0 to 1; `default` is every one (`deployConfigOf`) */
+  traceSampling?: string;
   yes?: boolean;
   buy?: boolean;
   eraseRecords?: boolean;
@@ -139,7 +141,9 @@ type DeployedMind = z.infer<typeof DeployedConfig> & {
  *  names the zone itself or another name one label under it. A mind that is `deployed` keeps its
  *  zones, its topology, its owners and its hostname: `owner` and `controlPlaneHostname` are then
  *  what a flag said, and each replaces what the mind has. So does `mailForwardTo`, the config's
- *  `mail.forwardTo`, and `none` there removes it: with no flag the mind keeps its forward.
+ *  `mail.forwardTo`, and `none` there removes it: with no flag the mind keeps its forward. So does
+ *  `traceSampling`, the config's `telemetry.traceSampling` (a number from 0 to 1), and `default`
+ *  there removes it, so that every trace is kept.
  *
  *  `mindId` is the deployed mind's own, and nothing here ever gives a mind that has an id
  *  another. A mind with none gets the hash of the genesis that the command signs right before
@@ -151,6 +155,7 @@ export function deployConfigOf(answers: {
   controlPlaneHostname?: string;
   egressGateway?: string;
   mailForwardTo?: string;
+  traceSampling?: string;
   deployed?: DeployedMind;
 }) {
   const { deployed } = answers;
@@ -190,9 +195,23 @@ export function deployConfigOf(answers: {
     throw new Error(
       `The mail forward ${forwardTo} is no email address, or one at a domain of the mind, which takes that mail. Pass --mail-forward-to with an address elsewhere, or none.`,
     );
+  const sampling = answers.traceSampling;
+  const share = Number(sampling);
+  // an empty flag is an error, never "back to the default" by accident
+  if (
+    sampling === "" ||
+    (sampling && sampling !== "default" && !(sampling.trim() && share >= 0 && share <= 1))
+  )
+    throw new Error(
+      `--trace-sampling ${sampling} is no share: give a number from 0 to 1 (1 keeps every trace), or default.`,
+    );
   return {
     ...kept,
     mail: forwardTo === "none" ? undefined : forwardTo ? { forwardTo } : kept?.mail,
+    // the trace sampling is what the flag says, else what the mind has; `default` keeps every trace
+    ...(sampling && {
+      telemetry: sampling === "default" ? undefined : { traceSampling: share },
+    }),
     mindId: deployed?.mindId,
     controlPlaneHostname,
     ownerEmails,
@@ -1988,6 +2007,7 @@ export async function deployMind(input: DeployInput) {
       controlPlaneHostname: input.controlPlaneHostname,
       egressGateway: input.egressGateway,
       mailForwardTo: input.mailForwardTo,
+      traceSampling: input.traceSampling,
       deployed: mind,
     });
     const { controlPlaneHostname } = config;

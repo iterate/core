@@ -75,6 +75,26 @@ void test("a mind's mail is forwarded to one address, or to none", () => {
   );
 });
 
+void test("the trace sampling is a share from 0 to 1, or absent; a telemetry setting with another key is refused", () => {
+  assert.equal(MindConfig.parse(config()).telemetry, undefined);
+  for (const traceSampling of [0, 0.1, 1])
+    assert.deepEqual(MindConfig.parse({ ...config(), telemetry: { traceSampling } }).telemetry, {
+      traceSampling,
+    });
+  for (const telemetry of [
+    { traceSampling: 1.5 },
+    { traceSampling: -0.1 },
+    { traceSampling: "1" },
+    { traceSampling: 1, lake: true },
+    {},
+  ])
+    assert.equal(
+      MindConfig.safeParse({ ...config(), telemetry }).success,
+      false,
+      JSON.stringify(telemetry),
+    );
+});
+
 void test("a forward address that is no address, and a mail setting with another key, are refused", () => {
   for (const mail of [
     { forwardTo: "the team" },

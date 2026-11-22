@@ -253,6 +253,12 @@ const launcherProcedures = {
           .describe(
             "Forward each mail to the mind there as it arrived, a verified destination address of the account's Email Routing; none stops it (default: none; for a mind that is there already: the one it has)",
           ),
+        traceSampling: z
+          .string()
+          .optional()
+          .describe(
+            "The share of requests whose trace Cloudflare keeps, from 0 to 1, for every Worker of the mind; default keeps every one (default: 1; for a mind that is there already: the one it has)",
+          ),
         buy: z
           .boolean()
           .optional()

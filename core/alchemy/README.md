@@ -80,6 +80,12 @@ mind starts from it, so a field that no Worker holds, such as `cloudflare.contai
 
 A mind takes each of its zones whole: nothing else may use them.
 
+Every Worker of the stack keeps every log line and, by default, every trace in Cloudflare's own
+Workers Logs. `"telemetry": { "traceSampling": 0.1 }` keeps the trace of one request in ten (from 0
+to 1; Cloudflare's head sampling rate). `iterate deploy --trace-sampling 0.1` writes it, and
+`--trace-sampling default` goes back to every trace. On iterate.com on 21 Nov 2026, spans were
+about 86 % of what the store took in.
+
 Each mail to an address at a zone reaches the mind: the boundary stores it on the mind's
 `/integrations/email` (`email/received`), and only that step can fail the delivery, so Cloudflare
 delivers again. Then the mind's config gets it while the delivery is live, in its `email` method
