@@ -39,7 +39,15 @@ import {
   tokenEndpointResponse,
   TOKEN_ENDPOINT,
 } from "./oauth.ts";
-import { errorPage, notMemberPage, signInPage, SIGN_OUT_PATH } from "./pages.ts";
+import {
+  errorPage,
+  notMemberPage,
+  signInPage,
+  SIGN_OUT_PATH,
+  takesNoTag,
+  withoutTag,
+} from "./pages.ts";
+import { outsideReserved, pageEventsResponse, senderOf } from "./page-events.ts";
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
 import { SESSIONS_PATH, sessionsResponse } from "./sessions-page.ts";
@@ -48,7 +56,15 @@ import { statementDraftsResponse } from "./statement-drafts.ts";
 import { statementsResponse } from "./statements.ts";
 import { whoIs } from "./who-is.ts";
 
+/** THE ANSWER, with core's page tag taken out of it where a person signs in, grants access,
+ *  signs a statement or adds a key (./pages.ts `takesNoTag`): one rule by the request's path,
+ *  whatever page builder made the answer, an error or a refusal too. */
 export async function authResponse(asked: Request, env: Env, ctx: ExecutionContext) {
+  const answer = await answerOf(asked, env, ctx);
+  return takesNoTag(new URL(asked.url).pathname) ? withoutTag(answer) : answer;
+}
+
+async function answerOf(asked: Request, env: Env, ctx: ExecutionContext) {
   const url = new URL(asked.url);
   // the cookies and the metadata name the issuer's origin alone
   if (url.origin !== issuerOf(env)) return new Response("Not found", { status: 404 });
@@ -58,6 +74,13 @@ export async function authResponse(asked: Request, env: Env, ctx: ExecutionConte
       ? await withKnownResource(env, asked)
       : asked;
   const get = request.method === "GET" || request.method === "HEAD";
+  // WHAT CORE'S PAGE TAG SENDS (./page-events.ts): a 204 whose facts the boundary appends
+  const pageEvents = await pageEventsResponse(
+    request,
+    () => senderOf(env, request),
+    (records) => outsideReserved(env.DB, records),
+  );
+  if (pageEvents) return pageEvents;
   if (pathname === AUTHORIZE_ENDPOINT) return authorizeResponse(env, request);
   if (pathname === TOKEN_ENDPOINT && request.method === "POST")
     return (

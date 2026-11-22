@@ -62,6 +62,8 @@ test.for([
 test.for([
   ["/", "auth"],
   ["/oauth2/token", "auth"],
+  // core's page tag sends here: the auth Worker answers, and the boundary appends its facts
+  ["/.page-events", "auth"],
   ["/api", "api"],
   ["/api/files/a.txt", "api"],
   // the path of the egress gateway's providers is a route of the API, and has no metadata document

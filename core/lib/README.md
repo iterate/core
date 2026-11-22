@@ -246,7 +246,8 @@ that the boundary kept for a mind that runs elsewhere while it was away (`iterat
 - **A domain namespace** is the singular name of the kind of context whose log the event belongs
   to, which is the defining contract's slug when there is one: `account`, `organization`,
   `mind`, `repo`, `workspace`, `sandbox`, `secret`, `approval`, `agent`,
-  `voice-agent`. A fact
+  `voice-agent`, `page` (a page's views, on `/pages`) and `exception` (what broke, on
+  `/exceptions`). A fact
   cross-posted to another log keeps its own namespace: `repo/created` on `/` is still a repo fact.
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.

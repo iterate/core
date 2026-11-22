@@ -96,6 +96,7 @@ async function sessionsPage(env: Env, session: PersonSession): Promise<Response>
   return page({
     title: `Sessions at ${mind}`,
     wide: true,
+    tag: true,
     imageOrigin: logoOriginsOf(access),
     body: `<div class="page-head">
         <h1>Where you are signed in</h1>

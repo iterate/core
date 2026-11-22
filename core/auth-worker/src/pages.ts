@@ -2,6 +2,7 @@ import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
 import { PLAIN_PAGE_ICON_SRC, plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, knownMarkOf, shownLogoOf } from "./client-mark.ts";
+import { PAGE_TAG_SCRIPT } from "./page-tag.ts";
 
 export { type Fact, factsTable } from "iterate/standalone-page";
 
@@ -50,10 +51,14 @@ export function page(
     centered?: boolean;
     /** The one origin an image of this page may come from: a verified client's own logo. */
     imageOrigin?: string;
+    /** CORE'S PAGE TAG (./page-tag.ts): what people did here and what broke. A page has no tag
+     *  until it says `tag: true`, and an answer under a path of `NO_TAG_PATHS` loses it
+     *  whatever its builder says (`withoutTag`, ./http.ts). */
+    tag?: true;
   },
   headers = new Headers(),
 ): Response {
-  const nonce = (input.script || input.style) && crypto.randomUUID();
+  const nonce = (input.script || input.style || input.tag) && crypto.randomUUID();
   headers.set("content-type", "text/html; charset=utf-8");
   headers.set("cache-control", "no-store");
   headers.set(
@@ -65,7 +70,8 @@ export function page(
       input.style
         ? `style-src ${plainPageCssHash} 'nonce-${nonce}'`
         : `style-src ${plainPageCssHash}`,
-      ...(input.script ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
+      // the tag's beacon goes to this origin's `/.page-events`, as a page's own script's calls do
+      ...(input.script || input.tag ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
       `img-src ${PLAIN_PAGE_ICON_SRC}${input.imageOrigin ? ` ${input.imageOrigin}` : ""}`,
     ].join("; "),
   );
@@ -73,9 +79,12 @@ export function page(
   // `same-origin`, not `no-referrer`: under `no-referrer` a browser sends `Origin: null` on a
   // form's POST, and the consent and sign-out forms are checked by their Origin.
   headers.set("referrer-policy", "same-origin");
-  const body = input.script
-    ? `${input.body}<script nonce="${nonce}">${STATUS_SCRIPT}${input.script}</script>`
-    : input.body;
+  // the tag first, so that it sees what the page's own script throws
+  const tag = input.tag ? `<script nonce="${nonce}">${PAGE_TAG_SCRIPT}</script>` : "";
+  const script = input.script
+    ? `<script nonce="${nonce}">${STATUS_SCRIPT}${input.script}</script>`
+    : "";
+  const body = `${input.body}${tag}${script}`;
   return new Response(
     standalonePage({
       title: input.title,
@@ -259,10 +268,51 @@ export function errorPage(
     {
       title: "You can't continue",
       status,
+      tag: true,
       body: `<h1>You can't continue</h1><p>${text(message)}</p><p>${ways}</p>`,
     },
     headers,
   );
+}
+
+/** THE PATHS WITH NO PAGE TAG, and every path under one: where a person signs in, enters a
+ *  code, grants access, signs a statement or adds a key. */
+const NO_TAG_PATHS = [
+  "/sign-in",
+  "/oauth2",
+  "/keys",
+  "/members",
+  "/minds",
+  "/sign-out",
+  "/statements",
+];
+
+export const takesNoTag = (pathname: string) =>
+  NO_TAG_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`));
+
+/** `answer` with core's page tag taken out, when it has it: the tag's element, and the
+ *  `script-src` and `connect-src` that the page then has no script for. Any other answer is the
+ *  same answer. */
+export async function withoutTag(answer: Response): Promise<Response> {
+  if (!answer.headers.get("content-type")?.startsWith("text/html") || !answer.body) return answer;
+  const html = await answer.text();
+  const end = html.indexOf(`${PAGE_TAG_SCRIPT}</script>`);
+  const start = end < 0 ? -1 : html.lastIndexOf("<script nonce=", end);
+  const headers = new Headers(answer.headers);
+  let kept = html;
+  if (start >= 0) {
+    kept = html.slice(0, start) + html.slice(end + PAGE_TAG_SCRIPT.length + "</script>".length);
+    const policy = headers.get("content-security-policy");
+    if (policy && !kept.includes("<script"))
+      headers.set(
+        "content-security-policy",
+        policy
+          .split("; ")
+          .filter((part) => !/^(script|connect)-src /.test(part))
+          .join("; "),
+      );
+  }
+  return new Response(kept, { status: answer.status, statusText: answer.statusText, headers });
 }
 
 /** Where a browser's session at the issuer ends (./sign-in.ts `signOutResponse`). */
@@ -318,6 +368,7 @@ export function notMemberPage(input: { mind: string; email: string; here?: strin
   return page({
     title: "You can't continue",
     status: 403,
+    tag: true,
     body: `<h1>You can't continue</h1>
       <p><strong>${text(input.email)}</strong> is not a member of ${text(input.mind)}. Ask an owner to add you.</p>
       <div>${otherAccountForm(input.here || "/")}</div>`,
