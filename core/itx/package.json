@@ -5,8 +5,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./end-when-silent": "./src/end-when-silent.ts",
-    "./fetch-upgrade": "./src/context/fetch-upgrade.ts",
-    "./request-body": "./src/request-body.ts"
+    "./fetch-upgrade": "./src/context/fetch-upgrade.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

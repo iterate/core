@@ -3,7 +3,6 @@
 // lab) answers the same four calls over its socket.
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { contextAt, implicitRootsAt, sessionContext } from "core-itx";
-import { requestWithOwnedBody } from "core-itx/request-body";
 import { memberPrincipalOf } from "iterate/principal";
 import type { MindTarget } from "iterate/workers";
 import { runApprovedAct } from "./approved-acts.ts";
@@ -15,10 +14,8 @@ import { LenderRoot } from "./lender-root.ts";
 import { appendAsPlatform } from "./platform-append.ts";
 
 export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
-  // The body goes on to the config's Worker, or a context, which may answer without reading it:
-  // this invocation reads it itself (core-itx/request-body).
   fetch(request: Parameters<MindTarget["fetch"]>[0]) {
-    return mindResponse(requestWithOwnedBody(request, "mind"), this.env, this.ctx);
+    return mindResponse(request, this.env, this.ctx);
   }
 
   /** THE MIND FOR ONE SESSION OF THE CONTROL PLANE'S API. The boundary ended the session and

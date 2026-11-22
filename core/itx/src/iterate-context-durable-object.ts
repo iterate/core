@@ -106,7 +106,6 @@ import {
   type RulesSnapshotAnswer,
 } from "./context/rule-snapshots.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
-import { requestWithOwnedBody } from "./request-body.ts";
 
 // Reached by id alone (the context sweep), a context is its birth record; one with neither a birth
 // record nor a name is refused, so no id alone ever mints one.
@@ -1433,10 +1432,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);
         const caller = callerOfStampedRequest(request, headers, app);
-        const forwarded = new Request(
-          requestWithOwnedBody(request, `iterate-context ${this.#durableObjectAddress.name}`),
-          { headers },
-        );
+        const forwarded = new Request(request, {
+          headers,
+          body: this.#expressionFetchBody(request),
+        });
         const result = await this.#callerStorage.run(caller, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
         );
@@ -1449,6 +1448,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
     if (app) return new Response("loaded code's fetch names no expression\n", { status: 404 });
     return new Response("a context's fetch names no expression\n", { status: 404 });
+  }
+
+  // A DO that answers while a body is unread gets an uncaught "Can't read from request stream" error
+  // (workerd#918, workerd#1730), so this pipe owns the read and logs its end. `new Request` refuses a
+  // body on GET or HEAD.
+  #expressionFetchBody(request: Request): ReadableStream | null {
+    if (!request.body || request.method === "GET" || request.method === "HEAD") return null;
+    const { readable, writable } = new IdentityTransformStream();
+    request.body.pipeTo(writable).catch((error: unknown) => {
+      console.info({
+        event: "expression-fetch.request-body-unread",
+        namespace: "iterate-context",
+        name: this.#durableObjectAddress.name,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return readable;
   }
 
   #egress(request: Request, options?: { signFor?: string }): Promise<Response> {
