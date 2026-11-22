@@ -563,6 +563,7 @@ function Guest() {
       const socket = new WebSocket(
         new URL(`/guest/itx${AGENT}`, location.href.replace(/^http/, "ws")),
       );
+      socket.addEventListener("open", () => performance.mark("iterate:itx-open"), { once: true });
       socket.addEventListener("close", () =>
         setHeld({ say: "Your guest session ended.", again: true }),
       );

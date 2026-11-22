@@ -65,6 +65,10 @@ that names your task BEFORE the task, not after a failure:
   limit: [mail-replies.md](mail-replies.md).
 - Before you let another mind in, send events to one, or act on what one sent:
   [minds.md](minds.md).
+- Before you add analytics or error reporting to a page: every page already has both
+  ([page-events.md](page-events.md)). To see what broke, `await itx.config.exceptions()`
+  ([errors.md](errors.md)). To see how fast the pages are, `await itx.config.pageSpeed()`
+  (page-events.md, "Speed").
 
 ## worker.ts
 

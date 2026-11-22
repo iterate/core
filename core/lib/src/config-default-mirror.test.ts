@@ -16,6 +16,7 @@ import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import onboardingFiles from "../../configs/default/apps/onboarding/public/";
 import Config from "../../configs/default/worker.ts";
+import { defaultConfigInstance, stubHtmlRewriter } from "./test-support/config-default-instance.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 
 test("the default config's pages and folders load here as the platform's loader makes them", () => {
@@ -42,8 +43,9 @@ test("the default config's pages and folders load here as the platform's loader 
 });
 
 test("the homepage answers GET and HEAD of / alone: anything else that no case takes is not found, so a webhook nothing serves is not acknowledged", async () => {
-  // a bare instance, with a mind that says its name
-  const config = Object.create(Config.prototype, {
+  // an instance, with a mind that says its name; the homepage takes the page tag (page-events.md)
+  stubHtmlRewriter();
+  const config = defaultConfigInstance({
     getItx: {
       value: () => ({
         whoami: async () => ({ path: "/", mindSlug: "iterate.example.com" }),
@@ -60,6 +62,7 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
   expect(homepageHtml).toContain("Homepage of mind iterate.example.com");
   expect(homepageHtml).toContain('href="https://onboarding.example.com/"');
   expect(homepageHtml).toContain('href="https://dash.example.com/"');
+  expect(homepageHtml).toMatch(/<script async fetchpriority="low" src="\/\.page\.js\?v=/);
   const status = async (url: string, method = "GET") =>
     (await config.fetch(new Request(url, { method }))).status;
   expect({
@@ -84,7 +87,7 @@ test.for(["docs", "dash", "onboarding"])(
   async (host) => {
     const refusal = new Response("Sign in\n", { status: 401 });
     // a bare instance, with a guard that lets nobody in
-    const config = Object.create(Config.prototype, {
+    const config = defaultConfigInstance({
       auth: { value: { require: () => refusal } },
     }) as { fetch(request: Request): Promise<Response> };
     const ask = (path: string) => config.fetch(new Request(`https://${host}.example.com${path}`));

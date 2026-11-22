@@ -28,7 +28,7 @@ export const PATH_RULE = `function pathOf(path) {
     /^[0-9a-f]{32,}$/i.test(s) ||
     (s.length >= 12 && /^\\w+$/.test(s) && /[A-Za-z]/.test(s) && /\\d/.test(s)) ||
     (s.length >= 16 && /[A-Z]/.test(s) && /[a-z]/.test(s) && (s.length >= 20 || /\\d/.test(s)));
-  return String(path).split(/[?#]/)[0].split("/").map((s) => (isId(s) ? "<id>" : s)).join("/").slice(0, 200);
+  return String(path).split(/[?#]/)[0].slice(0, 2000).split("/").map((s) => (isId(s) ? "<id>" : s)).join("/").slice(0, 200);
 }`;
 
 /** `PATH_RULE` for the route, on what a page sent. */

@@ -42,7 +42,7 @@ import {
   verifyAi,
   type VerifyAiItx,
 } from "../../configs/default/apps/onboarding/verify-ai.ts";
-import Config from "../../configs/default/worker.ts";
+import { defaultConfigInstance } from "./test-support/config-default-instance.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
 import { auth } from "./sdk/auth.ts";
 
@@ -1311,7 +1311,7 @@ test("GET /open-cloud for a member: a 303 to this mind's own /sign-in/open, on t
   fake.calls.length = 0;
 
   const fetches = vi.spyOn(globalThis, "fetch");
-  const config = Object.create(Config.prototype, {
+  const config = defaultConfigInstance({
     auth: { value: auth },
     getItx: {
       value: () => ({
@@ -2112,7 +2112,7 @@ test.for([
   "%s gets no cards, no press and no socket on the onboarding host: the guard answers before the app",
   async ([, headers]) => {
     // a bare instance with the SDK's own guard, and a mind that fails at any touch
-    const config = Object.create(Config.prototype, {
+    const config = defaultConfigInstance({
       auth: { value: auth },
       getItx: {
         value: () => {
@@ -2142,7 +2142,7 @@ test.for([
 );
 
 test("a press from another origin is refused even with a member's session: no cross-site disconnect", async () => {
-  const config = Object.create(Config.prototype, {
+  const config = defaultConfigInstance({
     auth: { value: auth },
     getItx: {
       value: () => {

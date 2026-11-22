@@ -39,6 +39,7 @@ const OPENER =
 
 // ── the member's itx ──
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
+socket.addEventListener("open", () => performance.mark("iterate:itx-open"), { once: true });
 const itx = newWebSocketRpcSession(socket);
 socket.addEventListener("close", () => {
   const now = Date.now();

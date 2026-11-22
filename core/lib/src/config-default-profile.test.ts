@@ -16,7 +16,7 @@ import {
 } from "../../configs/default/profile.ts";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import templateFiles from "../../configs/default/profile/";
-import Config from "../../configs/default/worker.ts";
+import { defaultConfigInstance, stubHtmlRewriter } from "./test-support/config-default-instance.ts";
 import { MIND_IDENTITY_PATH, reservedPathOf } from "./mind-identity-log.ts";
 
 test("a new mind's website says its zone as its name and serves the template's icon, to anyone", async () => {
@@ -70,6 +70,8 @@ test("a new mind's website says its zone as its name and serves the template's i
 });
 
 test("the homepage's title is the mind's name, and it shows the icon in the tab and on the page", async () => {
+  // the homepage takes the page tag (page-events.md)
+  stubHtmlRewriter();
   const html = await (await ask("/")).text();
   expect(html).toContain("<title>example.com</title>");
   expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml">');
@@ -112,7 +114,7 @@ test.for(["dash", "docs", "meet", "onboarding"])(
   "the %s app's icon is the mind's: one file for the website and every app, to anyone",
   async (host) => {
     // a guard that lets nobody in: the icon is answered before it
-    const guarded = Object.create(Config.prototype, {
+    const guarded = defaultConfigInstance({
       auth: { value: { require: () => new Response("Sign in\n", { status: 401 }) } },
     }) as { fetch(request: Request): Promise<Response> };
     const icon = await guarded.fetch(new Request(`https://${host}.example.com/icon.svg`));
@@ -267,8 +269,8 @@ test("the Dash asks the zone's website for the profile, draws without it, and as
   );
 });
 
-/** The default worker as a bare instance, with a mind at example.com. */
-const config = Object.create(Config.prototype, {
+/** The default worker as an instance, with a mind at example.com. */
+const config = defaultConfigInstance({
   getItx: {
     value: () => ({
       whoami: async () => ({ path: "/", mindSlug: "iterate.example.com" }),

@@ -39,6 +39,7 @@ import { newWebSocketRpcSession } from "@iterate-com/ui/live";
 // host. The platform ends it when the sign-in ends; a reload signs in again. Three closes in a
 // minute stop the reloads.
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
+socket.addEventListener("open", () => performance.mark("iterate:itx-open"), { once: true });
 const itx = newWebSocketRpcSession(socket);
 socket.addEventListener("close", () => {
   const now = Date.now();

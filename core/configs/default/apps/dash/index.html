@@ -29,6 +29,10 @@
     <script>
       try {
         window.__itxSocket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
+        // time to itx: when the socket opens (page-events.md, "Speed")
+        window.__itxSocket.addEventListener("open", () => performance.mark("iterate:itx-open"), {
+          once: true,
+        });
       } catch {}
       window.__session = fetch("/.auth/session.json").then((answer) => answer.json());
     </script>
