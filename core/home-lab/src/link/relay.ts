@@ -31,7 +31,8 @@ export function relayTo(target: () => MindTarget) {
      *  `forward` in as stubs of its own, which last while this call does and call back over the
      *  link to the boundary. Neither goes into Workers RPC as it is: a function of this isolate's
      *  calls each, and Workers RPC hands the local Mind Worker a stub of that function. A boundary
-     *  of an older build hands no `save`. */
+     *  of an older build hands no `save`. It answers what the local Mind Worker answered
+     *  (how the hook ended, or nothing from an older build). */
     email({ mail, save, forward }: Parameters<MindTarget["email"]>[0]) {
       return target().email({
         mail,

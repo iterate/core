@@ -84,11 +84,13 @@ test("the config's email hook reaches a mind at home with its forward, and the f
       throw Object.assign(new Error("destination address not verified"), { code: "REFUSED" });
     forwarded.push(to);
   };
-  await boundary.email({
+  const answer = await boundary.email({
     mail: { subject: "a@elsewhere.example refused@elsewhere.example" } as never,
     forward,
   });
   expect(forwarded).toEqual(["a@elsewhere.example"]);
+  // the mind's answer crosses back: its config was handed save
+  expect(answer).toBe("returned");
   // a refusal crosses back with its words
   expect(mind).toMatchObject({
     calls: [
@@ -336,7 +338,9 @@ test("the link breaks during the config's hook: its hook-failed fact is kept, an
   // the hook runs
   await vi.waitFor(() => expect(away.keptForward).toBeDefined());
   home.socket.close(1001, "the home lab stops");
-  await delivery;
+  // nothing was saved, and the boundary's own record finds no mind: the delivery fails, and
+  // Cloudflare delivers the mail again
+  await expect(delivery).rejects.toThrow();
   expect(keptTypes(storage)).toEqual(["events.iterate.com/email/hook-failed"]);
 
   const back = pretendMind("back");
@@ -835,6 +839,7 @@ function pretendMind(
           ),
         );
       this.calls.push(["email", mail.subject, answers]);
+      return "returned";
     }
   }
   return new Mind();

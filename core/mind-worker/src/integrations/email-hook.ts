@@ -1,23 +1,28 @@
 // email-hook.ts — THE CONFIG'S `email` HOOK, AS THE MIND RUNS IT for one delivery of one mail
-// (../rpc.ts `Mind.email`). The boundary has stored the mail's files and recorded the mail first
-// (`receiveEmail`), so nothing here can lose it. The config's `save()` goes to the boundary's
-// capability, which records the mail again, as the platform: that call records nothing new. A
-// boundary of an older build hands no `save`, and the config's `save()` then answers at once.
-// The hook is called as `processEvent` is: on the root context, through the
-// published config's `deliverEmail` (iterate/sdk), under the platform's own caller, which alone
-// may call it (core-itx built-ins.ts `workersRoot`).
+// (../rpc.ts `Mind.email`). The boundary has stored the mail's files under `/email/` first
+// (`receiveEmail` with the files alone), so nothing here can lose the mail's bytes. A MAIL IS OFF
+// THE LOG ONLY WHEN THE CONFIG'S FUNCTION RETURNED WITHOUT SAVING IT. The config's `save()` goes
+// to the boundary's capability, which has `receiveEmail` append `email/received` as the platform.
+// For any other end (a throw, a config with no `email`, a failure of this call) the boundary
+// records the mail itself: this call answers how the hook ended (`runEmailHook`). A boundary of an
+// older build hands no `save`: such a boundary recorded the mail itself, before the hook, and the
+// config's `save()` then answers at once. The hook is called as `processEvent` is: on the root
+// context, through the published config's `deliverEmail` (iterate/sdk), under the platform's own
+// caller, which alone may call it (core-itx built-ins.ts `workersRoot`).
 //
 // WHAT THE HOOK DID IS A FACT ON `/integrations/email`, never this call's failure:
 //   - its save: `email/received`, which the boundary's capability has `receiveEmail` append;
 //   - each forward: `email/forwarded`, which the boundary's capability appends;
-//   - a throw: `email/hook-failed` `threw`, once for each mail;
-//   - a config with no `email`: `email/hook-failed` `missing`, once for each config commit, under
-//     the key `email/hook-failed:missing:<commit>`. An old config in the wild gets one fact, not
+//   - a throw: `email/hook-failed` `threw`, once for each mail, with its `raw` path, and the
+//     answer "threw": the mail is on the log beside it, by the hook's save or the boundary's;
+//   - a config with no `email`: the answer "missing", so the boundary records the mail, and the
+//     fact `email/hook-failed` `missing`, once for each config commit, under the key
+//     `email/hook-failed:missing:<commit>`. An old config in the wild gets one fact, not
 //     one for each mail. A commit that the mind cannot read still gets ONE fact: the key is then
 //     `email/hook-failed:missing:unknown-commit`, the one thing known being that the config that
 //     answered has no `email` (`mind/worker-updated.missing` names each publication's commit).
 // A platform failure on the way (the root or the loader) is not the hook's: it throws, and the
-// boundary records `unreachable`.
+// boundary records `unreachable` and the mail.
 import type { EmailHookArgs } from "iterate/email";
 import { expiredIfTheDeliveryIsGone } from "iterate/email";
 import type { ItxExpression } from "iterate/expression";
@@ -61,11 +66,13 @@ export type EmailHookDeps = {
 };
 
 /** Runs the config's `email` hook for one delivery, with the delivery's `save` and `forward`, each
- *  ended when the config's function settles. */
+ *  ended when the config's function settles. It answers how the hook ended: "returned" (the
+ *  config's function returned, and chose whether the mail is on the log), "threw" or "missing";
+ *  the boundary records the mail itself for the last two. */
 export async function runEmailHook(
   deps: EmailHookDeps,
   { mail, save, forward }: Parameters<MindTarget["email"]>[0],
-) {
+): Promise<"returned" | "threw" | "missing"> {
   const raw = mail.raw?.path;
   if (!raw) throw codedError("INVALID_INPUT", "email: the mail names no raw file");
   // A FORWARD IS ONCE FOR EACH MAIL AND ADDRESS, BY ONE RULE: the SENT mark for (mail, address)
@@ -84,7 +91,8 @@ export async function runEmailHook(
   let ended = false;
   const saveOnce = async () => {
     if (ended) throw codedError("EXPIRED", "not saved: the config's email hook has ended");
-    // The boundary recorded the mail itself, before the hook: nothing is left to do.
+    // A boundary that hands no save recorded the mail itself, before the hook: nothing is left
+    // to do.
     if (!save) return;
     try {
       await save();
@@ -122,9 +130,9 @@ export async function runEmailHook(
       idempotencyKey: `email/hook-failed:threw:${raw}`,
       payload: { why: "threw", error: code ? `${code}: ${message}` : message, raw },
     });
-    return;
+    return "threw";
   }
-  if (answer !== "missing") return;
+  if (answer !== "missing") return "returned";
   // Soft: a commit that cannot be read is still one fact, never one for each mail.
   const read = await deps
     .readRoot(MIND_SNAPSHOT_READ)
@@ -140,6 +148,7 @@ export async function runEmailHook(
           error: `the published commit could not be read: ${"error" in read ? read.error : "none is published"}`,
         },
   });
+  return "missing";
 }
 
 /** A fact that is there already, with other words (a second delivery's throw), is recorded. */

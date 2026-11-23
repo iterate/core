@@ -28,8 +28,20 @@ test("the config's save reaches the boundary's capability", async () => {
   const mind = fakeMind(async ({ save }) => {
     await save();
   });
-  await runEmailHook(mind.deps, mind.args);
+  await expect(runEmailHook(mind.deps, mind.args)).resolves.toBe("returned");
   expect(mind).toMatchObject({ did: ["saved"], appended: [] });
+});
+
+test("the mind answers how the hook ended: returned without a save, threw, or missing; the boundary records the mail for the last two", async () => {
+  const returned = fakeMind(async () => {});
+  await expect(runEmailHook(returned.deps, returned.args)).resolves.toBe("returned");
+  expect(returned).toMatchObject({ did: [], appended: [] });
+  const threw = fakeMind(async () => {
+    throw new Error("the config broke");
+  });
+  await expect(runEmailHook(threw.deps, threw.args)).resolves.toBe("threw");
+  const missing = fakeMind("missing");
+  await expect(runEmailHook(missing.deps, missing.args)).resolves.toBe("missing");
 });
 
 test("a save kept past the config's function is EXPIRED, and the boundary is not asked", async () => {
@@ -309,7 +321,7 @@ test("a second delivery that throws again with other words is recorded already: 
     throw new Error("the hook failed");
   });
   mind.conflict = true;
-  await expect(runEmailHook(mind.deps, mind.args)).resolves.toBeUndefined();
+  await expect(runEmailHook(mind.deps, mind.args)).resolves.toBe("threw");
 });
 
 test("a platform failure on the way is not the hook's: it throws, and the boundary records the mind as unreachable", async () => {

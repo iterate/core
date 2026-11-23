@@ -91,7 +91,9 @@ export default class extends ConfigApi {
 
   // EVERY MAIL to an address of the mind, while its delivery is live. `save()` keeps it: one
   // event on the context /integrations/email, which the `email/received` case below hands to an
-  // agent. To send the original on: `await forward("someone@example.com")`.
+  // agent. A hook that returns without it leaves the mail off the log, and no agent gets it; one
+  // that throws or runs out of time leaves the mail on the log. To send the original on:
+  // `await forward("someone@example.com")`.
   async email({ save }: EmailHookArgs) {
     await save();
   }

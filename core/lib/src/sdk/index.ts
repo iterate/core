@@ -558,8 +558,8 @@ export abstract class IterateConfigEntrypoint<
    *  parties also append to the mind's contexts through its API at `/api`, so much of a mind's
    *  logic reacts in `processEvent`. All three are abstract: the config's own `tsc` and editor ask
    *  for them. The loader never type-checks, so the platform still says what a class that lacks one
-   *  gets: a 501 page for each request, an event taken as handled, a mail kept and not passed on;
-   *  and one record of the lack for each published commit.
+   *  gets: a 501 page for each request, an event taken as handled, a mail that the platform
+   *  records on the log itself; and one record of the lack for each published commit.
    *
    *  THE AUTHOR HOOK: every durable event of every context of the mind from its first
    *  publication on (what was committed while no config was published may be passed over), one per
@@ -571,11 +571,13 @@ export abstract class IterateConfigEntrypoint<
   /** EVERY MAIL TO AN ADDRESS OF THE MIND, while its delivery is live. The platform has stored the
    *  mail's files under `/email/` before this runs. `save()` keeps the mail: the platform appends
    *  `email/received` on `/integrations/email`, and `processEvent` gets that event: replies and
-   *  agents react there. The platform also records the mail itself before this runs, so a hook
-   *  that does not call `save` loses nothing yet. `forward(to)` sends the original on, as it
-   *  arrived (iterate/email `EmailHookArgs` names the errors of both). Nothing here fails the
-   *  mail's delivery: a throw, or a hook that runs past the boundary's time limit, is an
-   *  `email/hook-failed` fact. The platform alone calls it.
+   *  agents react there. A mail is off the log only when this RETURNS without calling `save`:
+   *  the mind then keeps its files alone, and no agent gets it. A throw, or a hook that runs past
+   *  the boundary's time limit, leaves the mail on the log (the platform records it), with an
+   *  `email/hook-failed` fact beside it, and does not fail the delivery. `forward(to)` sends the
+   *  original on, as it arrived (iterate/email `EmailHookArgs` names the errors of both). A save
+   *  that the mind did not take fails the delivery, so Cloudflare delivers the mail again. The
+   *  platform alone calls it.
    *
    *  ```ts
    *  async email({ mail, save, forward }: EmailHookArgs) {

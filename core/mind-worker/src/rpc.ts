@@ -56,12 +56,13 @@ export class Mind extends WorkerEntrypoint<Env> implements MindTarget {
   /** THE CONFIG'S `email` HOOK for one delivery (iterate/workers `MindTarget.email`), on the root
    *  context as `processEvent` runs (./integrations/email-hook.ts). workerd's `WorkerEntrypoint`
    *  types `email` as a Worker's native mail handler; this entrypoint is a named one, which never
-   *  gets that event: only the boundary calls it, over RPC. */
+   *  gets that event: only the boundary calls it, over RPC. It answers how the hook ended:
+   *  "returned", "threw" or "missing" (`runEmailHook`). */
   // @ts-expect-error -- MindTarget's hook, not workerd's native mail handler: see above
   async email(args: Parameters<MindTarget["email"]>[0]) {
     const root = contextAt("/");
     const asPlatform = { principal: null, platform: true as const };
-    await runEmailHook(
+    return await runEmailHook(
       {
         deliverEmail: (hookArgs) =>
           root.invoke("itx.builtins.cd('/').config.deliverEmail", [hookArgs], asPlatform),

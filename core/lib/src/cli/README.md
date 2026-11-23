@@ -128,6 +128,9 @@ What it does, in order:
      forwarded as it arrived ([core/alchemy](../../../alchemy/README.md#the-one-input)). The
      address must be a verified destination address of the account's Email Routing, which a
      person adds in the dashboard; while it is not, every mail to the mind fails for its sender.
+     A stack with a forward address records every mail on the log before the forward, whatever
+     the config's `email` hook does: the forward must not go twice, and a refused forward must
+     not cost the mail its place on the log.
    - `cloudflare.egressGatewayWorker`: absent, unless `--egress-gateway <Worker name>` names a
      Worker of the account that carries what a mind's `itx.fetch` sends out of the stack, each
      request with its secret in ([core/alchemy](../../../alchemy/README.md) says what does not

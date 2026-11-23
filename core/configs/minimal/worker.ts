@@ -6,7 +6,9 @@ export default class extends IterateConfigEntrypoint {
   async processEvent(_args: IterateConfigProcessEventArgs) {}
 
   // Every mail, while its delivery is live. save() keeps it on /integrations/email, and replies and
-  // agents react to it in processEvent. Forward it here too: await forward("a@b.c").
+  // agents react to it in processEvent. A hook that returns without it keeps only the mail's
+  // files; one that throws or runs out of time leaves the mail on the log. Forward it here too:
+  // await forward("a@b.c").
   async email({ save }: EmailHookArgs) {
     await save();
   }

@@ -33,19 +33,29 @@ export interface MindTarget {
    *  answer, so the `source.signer` one names is the key the auth Worker verified. In any other
    *  call an event's signer is dropped. */
   append(path: string, events: StreamEventInput[], fromAuth?: boolean): Promise<void>;
-  /** Files first, then each `email/received` fact, appended as the platform. A call may carry no
-   *  files: the config's `save()` sends the delivery's events alone, after the boundary's first
-   *  call stored the files. A redelivery, or a second call, records nothing new. */
+  /** Files first, then each `email/received` fact, appended as the platform. The boundary calls it
+   *  twice in a delivery: first with the files alone, before the hook, so the mail's bytes are
+   *  kept; then with the events alone, which puts the mail on the log: when the config's `save()`
+   *  asks, or for the boundary itself when the hook did not return. A stack with
+   *  `MAIL_FORWARD_TO` sends the events with the files, before the hook. A redelivery, or a second
+   *  call, records nothing new. */
   receiveEmail(mail: ReceivedEmail): Promise<void>;
-  /** THE CONFIG'S `email` HOOK FOR ONE DELIVERY, after `receiveEmail` took the mail (iterate/sdk
-   *  `IterateConfigEntrypoint.email`). `save` and `forward` are capabilities that the boundary made
-   *  for this delivery and that die with it: functions, which Workers RPC and capnweb each pass as
-   *  stubs, and which each hop wraps again in a function of its own
-   *  (core/boundary-worker/src/mail.ts). `save` is absent from a boundary of an older build, which
-   *  records the mail itself. The mind records what the hook did: a throw, or a config with no
+  /** THE CONFIG'S `email` HOOK FOR ONE DELIVERY, after `receiveEmail` stored the mail's files
+   *  (iterate/sdk `IterateConfigEntrypoint.email`). `save` and `forward` are capabilities that the
+   *  boundary made for this delivery and that die with it: functions, which Workers RPC and
+   *  capnweb each pass as stubs, and which each hop wraps again in a function of its own
+   *  (core/boundary-worker/src/mail.ts). The mail is off the log only when the hook returned
+   *  without calling `save`. `save` is absent from a boundary of an older build, which records the mail itself before the
+   *  hook. The mind records what the hook did: a throw, or a config with no
    *  `email`, is an `email/hook-failed` fact, never this call's failure. It throws only when the
-   *  mind could not be reached or could not record. */
-  email(args: Omit<EmailHookArgs, "save"> & Partial<Pick<EmailHookArgs, "save">>): Promise<void>;
+   *  mind could not be reached or could not record. IT ANSWERS HOW THE HOOK ENDED: "returned"
+   *  (the config's function returned, and chose whether the mail is on the log), "threw" or
+   *  "missing" (no `email`). A mind of an older build answers nothing. For every answer but
+   *  "returned", and for a rejection, the boundary records the mail itself unless the hook saved
+   *  it. */
+  email(
+    args: Omit<EmailHookArgs, "save"> & Partial<Pick<EmailHookArgs, "save">>,
+  ): Promise<"returned" | "threw" | "missing" | void>;
   /** An act a member approved after its caller stopped waiting (./acts.ts): the mind does it now,
    *  once, and writes what came of it on the caller's context. The gate decides whether it is
    *  still to do, so a second call does nothing. */
