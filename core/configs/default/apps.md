@@ -74,14 +74,15 @@ apps/<name>/
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
   (`memberItx()` of `@iterate-com/ui/live`, in `apps/dash/public/app.js`). The platform decides who the caller is, never the page. What the
   page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
-- **An MCP server of your own that runs scripts as the member.** An app may serve MCP itself, with
-  its own instructions and its own description of `run` (`apps/guestbook/mcp.ts` shows the
-  protocol and the sign-in). It hands a member's `tools/call` of `run` to the platform with
-  `host.auth.mcpRun(request, message)`: the platform runs the script as the member the request was
-  stamped with, as at the mind's own `/mcp`, never with the worker's reach. The run's
-  own record (`itx/run-requested` on `/`) shows the member as `source.principal` and the host as
-  `source.via.appPage`; what the script appends shows them as `source.onBehalfOf.principal` and
-  `source.onBehalfOf.via.appPage`.
+- **An MCP server of your own that runs scripts as the member.** `apps/mcp/` mounts the mind's own
+  MCP server on `mcp.<zone>/mcp` in `worker.ts`, with its `initialize` instructions and `run`
+  description in `apps/mcp/app.ts` (change them there, or pass your own to `mcpApp(...)`). Any
+  other app may serve MCP too (`apps/guestbook/mcp.ts` shows the protocol and the sign-in). It hands
+  a member's `tools/call` of `run` to the platform with `host.auth.mcpRun(request, message)`: the
+  platform runs the script as the member the request was stamped with, as at the mind's own `/mcp`,
+  never with the worker's reach. The run's own record (`itx/run-requested` on `/`) shows the member
+  as `source.principal` and the host as `source.via.appPage`; what the script appends shows them as
+  `source.onBehalfOf.principal` and `source.onBehalfOf.via.appPage`.
 - **Who asked.** A facet's code appends as its context, not as the person who called it. So when a
   signed-in person calls a facet (`itx.agents.get(path).message(...)` is such a call), what the
   facet then appends shows them as `source.onBehalfOf`: `principal`, `grant`, `via` when they
