@@ -8,7 +8,7 @@ import { reportIssue } from "iterate/lib";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { installAgents } from "iterate/agents/install";
 import { publishAgentKinds } from "iterate/agents/kinds";
-import { agentKinds } from "./agent-kinds/index.ts";
+import { kindsForTheDash } from "./agent-kinds/index.ts";
 import { sayMindForm } from "./cloud-deliveries.ts";
 import { removeOwnTelemetryQueryRule } from "./telemetry.ts";
 
@@ -29,8 +29,10 @@ export async function step(name: string, run: () => Promise<unknown>): Promise<v
 export async function init(itx: IterateConfigProcessEventArgs<"agents">["itx"]) {
   // The agents (agents.ts): the catalog on /agents and the `itx.agents` rule.
   await step("agents", () => installAgents(itx));
-  // where each kind's file is, for the Dash's agent view (`agentKinds`, agent-kinds/index.ts)
-  await step("agent-kinds", () => publishAgentKinds(itx, agentKinds));
+  // where each kind's file is, for the Dash's agent view (agent-kinds/index.ts). The Dash's New
+  // agent starts the kind `agent` where it knows that kind's file, and it is told of it in a new
+  // mind only (`kindsForTheDash`).
+  await step("agent-kinds", async () => publishAgentKinds(itx, await kindsForTheDash(itx)));
   // Tell iterate Cloud that this mind reads its deliveries in the mind form
   // (cloud-deliveries.ts, and `processMindEvent` in worker.ts). Keep both, or the Cloud sends the
   // key form alone.

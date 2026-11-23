@@ -86,5 +86,11 @@ subagents and the agents of mail, X, Meet and Slack stay iterate's own. The kind
 - `agent-ui.ts`: the Dash's chat as a channel. `agent-prompt.ts`: what the agent is told.
 - A model: `config.llm.model`, `<provider>/<model>` as the AI Gateway names it.
 
-To make new chats iterate's own agent again, take `default: true` out of `agent-kinds/agent.ts`.
-The chats that the kind started stay what they are.
+NEW MINDS ONLY. The Dash starts the kind where it knows the kind's file, and `init.ts` tells it of
+the file only where new chats are this agent (`agent-kinds/index.ts`). That choice is made once, at the first publish that
+has this code, and kept in the mind's KV (`config:new-chats-are-the-agent`, `yes` or `no`): a mind
+at its first publish gets `yes`, and a mind that existed before this kind gets `no` and keeps
+iterate's own agent for its new chats.
+
+To change it, write the choice yourself: `await itx.kv.put("config:new-chats-are-the-agent", "yes")`
+(or `"no"`). The next publish tells the Dash. The chats that a kind started stay what they are.

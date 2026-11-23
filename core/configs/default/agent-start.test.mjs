@@ -34,6 +34,7 @@ registerHooks({
 });
 
 const { default: agentKind } = await import("./agent-kinds/agent.ts");
+const { kindsForTheDash } = await import("./agent-kinds/index.ts");
 
 const T = "events.iterate.com/";
 /** A fake root: each context's log. */
@@ -152,4 +153,42 @@ test("a subagent goes under its parent's own path, never onto another agent", as
     answers.map((e) => e.type.slice(T.length)),
     ["agent/subagent-failed", "agent/subagent-started"],
   );
+});
+
+test("the Dash is told of the kind agent in a new mind only, and the choice is kept", async () => {
+  const CHOICE = "config:new-chats-are-the-agent";
+  const mind = (entries) => {
+    const kept = new Map(Object.entries(entries));
+    return {
+      kept,
+      kv: {
+        get: async (key) => kept.get(key) ?? null,
+        put: async (key, value) => void kept.set(key, value),
+      },
+    };
+  };
+  const kinds = (...names) =>
+    JSON.stringify(Object.fromEntries(names.map((name) => [name, `agent-kinds/${name}.ts`])));
+  /** The kinds init.ts tells the Dash of, by file name. */
+  const told = async (itx) =>
+    (await kindsForTheDash(itx)).map((kind) => kind.path.split("/").at(-1).replace(/\.js$/, ".ts"));
+  // a mind's first publish: the Dash was never told of a kind
+  const fresh = mind({});
+  assert.deepEqual(await told(fresh), ["iterate.ts", "agent.ts"]);
+  assert.equal(fresh.kept.get(CHOICE), "yes");
+  // a mind that existed before this kind: it told the Dash its kinds, and `agent` was not one
+  const older = mind({ "agent-kinds": kinds("iterate") });
+  assert.deepEqual(await told(older), ["iterate.ts"]);
+  assert.equal(older.kept.get(CHOICE), "no");
+  // a mind that was born with this kind, before the choice was kept
+  const born = mind({ "agent-kinds": kinds("iterate", "agent") });
+  assert.deepEqual(await told(born), ["iterate.ts", "agent.ts"]);
+  // the choice is kept: a new mind's second publish, after the first wrote a list
+  fresh.kept.set("agent-kinds", kinds("iterate"));
+  assert.deepEqual(await told(fresh), ["iterate.ts", "agent.ts"]);
+  // an owner's own choice stands
+  older.kept.set(CHOICE, "yes");
+  assert.deepEqual(await told(older), ["iterate.ts", "agent.ts"]);
+  // a list that cannot be read is an older mind's
+  assert.deepEqual(await told(mind({ "agent-kinds": "not json" })), ["iterate.ts"]);
 });

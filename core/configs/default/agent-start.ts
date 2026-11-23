@@ -10,7 +10,7 @@
 //
 // A PERSON STARTS AN AGENT WITH NO METHOD OF THIS FILE: the Dash's New agent appends the kind's own
 // start fact, `agent-ui/agent-requested`, as that member (agent-kinds/agent.ts `newAgent`), and the
-// kind answers it with `toAgent`.
+// kind answers it with `toAgent`. The Dash does that in a new mind only (agent-kinds/index.ts).
 //
 // WHAT AN AGENT IS TOLD is not part of its start. every-event.ts sees the start's
 // `agent/configured` and appends the agent's system prompt (agent-prompt.ts). The agent waits

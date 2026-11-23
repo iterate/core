@@ -50,6 +50,8 @@ export const SCRIPT_GUIDE =
   "- Make your first line say what you do, for a person to see, with no await: " +
   '`itx.append({ type: "events.iterate.com/agent/summary-updated", payload: { activity: "<a few words>" } });`\n' +
   "- An append you do not await still lands before the script ends.\n" +
+  "- Appends you do not await land in no order. When the order matters, as with two messages to a " +
+  "person, send them in ONE append, in order: `itx.append(first, second)`.\n" +
   "- `return` a value to read it in your next turn. Return nothing to end your turn.\n" +
   "- To do several things at once, use `Promise.all` in the one script.\n" +
   "What survives a script is in your log, by number:\n" +

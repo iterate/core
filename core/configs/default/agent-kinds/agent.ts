@@ -262,7 +262,8 @@ export default {
   // THE MIND'S DEFAULT KIND: the Dash's New agent starts this one. The Dash appends the fact of
   // `start` and then the person's first words (`agent-ui/message-received`) to the new agent's
   // path, AS THE MEMBER WHO TYPED: no method of the mind stands between, so each fact carries that
-  // person's own stamp. To make new chats iterate's own agent again, take `default: true` away.
+  // person's own stamp. The Dash knows this file in a new mind only (agent-kinds/index.ts
+  // `newChatsAreTheAgent`): in a mind that existed before this kind, New agent is iterate's own.
   newAgent: {
     default: true,
     choices: [{ id: "agent", label: "Agent", byPerson: true }],
