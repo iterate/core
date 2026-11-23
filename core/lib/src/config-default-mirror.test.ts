@@ -36,6 +36,7 @@ test("the default config's pages and folders load here as the platform's loader 
     "brands/slack.svg",
     "brands/x.svg",
     "call-facet.js",
+    "mcp-page.js",
     "share-links.js",
   ]);
   // the onboarding page is the repo /repos/onboarding (core/repos/onboarding), loaded the same way

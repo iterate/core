@@ -40,6 +40,7 @@ import {
   KeyRoundIcon,
   LayoutDashboardIcon,
   LockKeyholeIcon,
+  PlugIcon,
   SettingsIcon,
   ShieldCheckIcon,
   SparklesIcon,
@@ -47,6 +48,7 @@ import {
   WaypointsIcon,
 } from "@iterate-com/ui/icons";
 import { CALL_FACET } from "./call-facet.js";
+import { DashMcp } from "./mcp-page.js";
 import { endLink, makeLink } from "./share-links.js";
 
 // The member's itx, from this host's /itx (app.ts answers it): over the socket that index.html
@@ -143,6 +145,13 @@ const pages = [
     icon: ChartLineIcon,
     serves: "telemetry",
     component: DashAnalytics,
+  },
+  {
+    id: "mcp",
+    name: "MCP",
+    about: "Connect coding agents over MCP — stays up even if you brick the userspace web UI.",
+    icon: PlugIcon,
+    component: DashMcp,
   },
   { id: "settings", name: "Settings", icon: SettingsIcon, component: DashSettings },
 ];
