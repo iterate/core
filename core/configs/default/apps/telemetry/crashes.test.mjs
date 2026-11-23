@@ -145,7 +145,7 @@ test("the query passes the telemetry query's rules: none of its refused marks, o
     // the logs sample as they are read and Cloudflare weights count() itself: sum(sampleInterval) would count again
     assert.doesNotMatch(query, /sampleInterval/);
     assert.match(query, /count\(\) AS n/);
-    // no Worker in it: the platform cuts the read to the mind's and the boundary's Workers
+    // no Worker in it: the platform cuts the read to the Workers of the mind's stack
     assert.doesNotMatch(query, /scriptName\s*(=|IN\b)|position\(scriptName/i);
     // no alias takes a column of the cut
     assert.doesNotMatch(query, /AS (scriptName|timestamp)\b/i);

@@ -12,8 +12,9 @@ const own = {
   telemetryBucketName: z.string().min(1),
   /** The Analytics Engine dataset that a query reads as `metrics`. */
   metricsDatasetName: z.string().min(1),
-  /** The Workers whose logs and spans a query reads whole: the mind's own. Of the stack's other
-   *  Workers a query reads no log line, and their spans without a request's detail. */
+  /** The Workers whose logs and spans a query reads whole: every Worker of the stack (mind,
+   *  boundary, auth, secrets, telemetry), as core/alchemy/src/stack.ts names them. Of any other
+   *  Worker a query reads no log line, and its spans without a request's detail. */
   workerNamesThatQueriesReadWhole: z.array(z.string().min(1)).min(1),
   /** What a row of `events` names as its writer, in the column `worker`: the mind Worker's name,
    *  or `external-mind` when the mind runs outside the stack and no Worker writes its events. */

@@ -86,8 +86,7 @@ exceptions keys by it.
   minute is spent or the append failed. It never throws. Nothing reports its own failure, and no
   event under `/exceptions` or `/pages` is ever turned into another exception.
 
-Not covered: the stack's other Workers (secrets, auth, telemetry: their issues are in the Workers'
-log), and the pages of `iterate.<domain>` (core's).
+Not covered: the pages of `iterate.<domain>` (core's).
 
 ## The crash job
 
@@ -104,8 +103,8 @@ the crash job picks up. Jonas, 21 Nov 2026: "a minute for crashes is fine".
   signed or not, starts no log query.
 - **What it reads.** Cloudflare's store of the Workers' log lines, `logs.workersLogs`, through
   `itx.telemetry.query`, which needs no token and no connection to Cloudflare. The platform cuts
-  that read to the mind Worker and the boundary Worker: the job never sees a crash of the stack's
-  other Workers (secrets, auth, telemetry). It reads the rows with `logType = 'cf-worker'`,
+  that read to the Workers of the mind's stack (mind, boundary, auth, secrets, telemetry), so the
+  job sees a crash of any of them. It reads the rows with `logType = 'cf-worker'`,
   `level = 'error'` and an `exception.name`, grouped by Worker, name and message, at most 90
   groups a sweep (three pages of 30). The window's two times are written into the query as text,
   and a count is `count()`: the logs sample as they are read, and Cloudflare weights `count()`

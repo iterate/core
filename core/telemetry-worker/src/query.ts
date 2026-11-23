@@ -52,8 +52,9 @@ function check(node: Record<string, unknown>, parent: unknown, key: string | und
     refuse("an EXTRACT field that is not a word");
 }
 
-// The mind reads every row of its own Workers; of the stack's trusted ones, no log line, and
-// their spans with the columns a request's detail rides in read as null.
+// The mind reads every row of the stack's Workers (config.ts `workerNamesThatQueriesReadWhole`);
+// of any other Worker, no log line, and its spans with the columns a request's detail rides in
+// read as null.
 const SPAN_SHAPE = [
   "timestamp",
   "worker",

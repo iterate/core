@@ -9,8 +9,8 @@
 // THE SWEEP. Each tick reads, from Cloudflare's store of the Workers' log lines
 // (`logs.workersLogs`, through `itx.telemetry.query`, which needs no token), the failures that only
 // the runtime saw: an uncaught throw, a rejection in `waitUntil`, a CPU or memory kill, a hung
-// request, an internal error. The platform cuts that read to the mind Worker and the boundary
-// Worker: a crash of the stack's other Workers (secrets, auth, telemetry) is not seen here. It
+// request, an internal error. The platform cuts that read to the Workers of the mind's stack (mind,
+// boundary, auth, secrets, telemetry), so a crash of any of them is seen here. It
 // reads a window that ends
 // 45 s ago (the store is up to 31 s behind) and starts 60 s before the end of the last window that
 // was read (a row may land late), never more than 12 hours. The kept end is kv
@@ -82,7 +82,7 @@ export const PAGE = 30;
 /** THE QUERY: each kind of failure that the runtime saw in the window `from` to `to` (ISO times
  *  cut to the second, `sweepWindow`), written into the text: `itx.telemetry.query` takes no
  *  parameter, and no `$`, `;`, comment, `#`, backslash or backtick (docs/telemetry.md). The
- *  platform adds the cut to the mind's and the boundary's Workers. `logs.workersLogs` samples as it
+ *  platform adds the cut to the Workers of the mind's stack. `logs.workersLogs` samples as it
  *  is read and weights `count()` itself (measured 22 Nov 2026), so a count is `count()`. A message
  *  is cut to 300 characters. */
 export function crashQuery(window: { from: string; to: string }, offset: number): string {
@@ -106,7 +106,8 @@ ORDER BY n DESC, said LIMIT ${PAGE} OFFSET ${Math.max(0, Math.floor(offset))}`;
 export const hoursFor = (window: { from: string }, now: number) =>
   Math.min(168, Math.max(1, Math.ceil((now - Date.parse(window.from)) / 3_600_000) + 1));
 
-/** Where a crash happened: the last part of its Worker's name (`<stack>-mind`, `<stack>-boundary`). */
+/** Where a crash happened: the last part of its Worker's name (`<stack>-mind`, `<stack>-boundary`,
+ *  `<stack>-auth`, `<stack>-secrets`, `<stack>-telemetry`). */
 export const siteOf = (worker: string) => worker.slice(worker.lastIndexOf("-") + 1);
 
 /** An ISO time cut to the second, as the query takes it: `2026-11-21T15:40:00Z`. */
