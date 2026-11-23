@@ -18,7 +18,7 @@ import { type StoreRun, storeQuery } from "./store-query.ts";
 
 /** Plain sentence returned instead of an error when the stack holds no telemetry token. */
 const TELEMETRY_TABLES_OFF =
-  "telemetry tables are off: your mind can turn them on itself (onboarding/telemetry.md)";
+  "telemetry tables are off: your mind can turn them on itself (onboarding/telemetry.md of /repos/onboarding)";
 
 export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService {
   async query(...[sql, hours]: Parameters<TelemetryService["query"]>) {

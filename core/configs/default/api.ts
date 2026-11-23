@@ -103,7 +103,7 @@ export abstract class ConfigApi extends IterateConfigEntrypoint {
 
   /** `itx.config.onboardingStep(step, action)`: one press of a button of the onboarding app, as
    *  the onboarding agent makes it from the owner's plain words (apps/onboarding/steps.ts;
-   *  onboarding/connect-iterate-cloud.md). It answers `{ status, words, link? }`. */
+   *  onboarding/connect-iterate-cloud.md of /repos/onboarding). It answers `{ status, words, link? }`. */
   async onboardingStep(step: string, action: string) {
     using itx = this.getItx();
     return await runStep(await stepContext(itx), step, action);
@@ -178,7 +178,7 @@ export abstract class ConfigApi extends IterateConfigEntrypoint {
 
   /** `itx.config.telemetryToken()`, `itx.config.telemetryTurnOn()`,
    *  `itx.config.telemetryQuery(sql, { hours })`: the mind turns its telemetry tables on and reads
-   *  them itself, with a token a member gives (telemetry.ts; onboarding/telemetry.md). Called by
+   *  them itself, with a token a member gives (telemetry.ts; onboarding/telemetry.md of /repos/onboarding). Called by
    *  that name: `itx.telemetry.query` is the platform's. */
   async telemetryToken(options?: { again?: boolean }) {
     using itx = this.getItx();

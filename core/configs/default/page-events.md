@@ -272,7 +272,7 @@ reservation, an append) answers 202 and appends nothing more.
 
 ```ts
 const { events } = await itx.cd("/pages").readEvents(0, 100); // each payload's `app` says whose
-// the telemetry tables, once they are on (onboarding/telemetry.md): `events` has `type`, `path`
+// the telemetry tables, once they are on (onboarding/telemetry.md of /repos/onboarding): `events` has `type`, `path`
 // and `payload` as text, the last `hours`
 const { rows } = await itx.telemetry.query(
   `SELECT type, count(*) AS n FROM events WHERE path = '/pages' GROUP BY type ORDER BY n DESC`,

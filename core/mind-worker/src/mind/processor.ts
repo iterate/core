@@ -24,6 +24,7 @@ import { readPackage } from "../context/module-resolution.ts";
 import { PLATFORM_AUTHOR } from "../repo/contract.ts";
 import { MindContract, type MindState } from "./contract.ts";
 import { configPointer, configRepoCall, probedConfig, type MindPublisher } from "./publication.ts";
+import { seedRepos, type SeedRepos } from "./seed-repos.ts";
 import {
   seedOf,
   templateChanges,
@@ -101,18 +102,22 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   private readonly publisher: () => MindPublisher;
   private readonly kept: KeptByTheFacet;
   private readonly templates: ConfigTemplates;
+  private readonly seedRepos: SeedRepos;
 
   constructor(
     getItx: () => ItxEntrypointScope & Disposable,
     publisher: () => MindPublisher,
     kept: KeptByTheFacet,
     templates: ConfigTemplates,
+    /** The repos a new mind starts with beside its config (seed-repos.ts); none by default. */
+    seedRepos: SeedRepos = {},
   ) {
     super();
     this.getItx = getItx;
     this.publisher = publisher;
     this.kept = kept;
     this.templates = templates;
+    this.seedRepos = seedRepos;
   }
 
   // per incarnation; the durable ground is the state
@@ -406,6 +411,8 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       });
     }
     if (!commitOid) throw new Error("the config repo's seed left main unborn");
+    // the other repos the build names, after the config's seed: best effort, it never throws
+    await seedRepos(call, this.seedRepos);
   }
 
   /** THE ROOT'S OWN SUBSCRIPTION ROW names the event types that reach this processor, and a

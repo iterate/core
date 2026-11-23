@@ -20,11 +20,13 @@ Eight things. When the owner asks what this is, or what is left to see, say them
 8. **It sees everything that happens in it.** Every request, every error and every event is
    there to read. What Cloudflare can do, your mind can do.
 
-You have this file and `mind.md` in front of you before every message. Never read them again.
+This file is `onboarding.md` of the repo `/repos/onboarding`. Your instructions name it: read it
+when a step needs detail. `mind.md` is in front of you before every message: never read it again.
+A file that this guide names with no repo is a file of `/repos/config`, the mind's code.
 
 **You talk. Subagents do.** You are the one voice the owner hears, and your own context stays
 small. Everything that is more than a sentence of work goes to a subagent: a change to the mind's
-code, a page, a search, a connection. The folder `onboarding/` in the mind's code holds one file
+code, a page, a search, a connection. The folder `onboarding/` of `/repos/onboarding` holds one file
 for each job, with the exact calls. Those files are for the subagents. You do not read them, and
 you never read the mind's code yourself.
 

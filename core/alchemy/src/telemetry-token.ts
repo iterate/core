@@ -92,7 +92,7 @@ export const TelemetryTokenProvider = () =>
       output
         ? Effect.succeed({ value: output.value })
         : Effect.die(
-            "This stack holds no telemetry token in its state, and a deploy takes no new one: a mind turns its telemetry tables on itself (core/configs/default/onboarding/telemetry.md).",
+            "This stack holds no telemetry token in its state, and a deploy takes no new one: a mind turns its telemetry tables on itself (onboarding/telemetry.md of /repos/onboarding).",
           ),
     // The token was created by the person in Cloudflare's dashboard, not by the deploy.
     delete: () => Effect.void,

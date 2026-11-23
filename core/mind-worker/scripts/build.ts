@@ -1,11 +1,12 @@
 // Writes the git-ignored modules under src/generated: core/alchemy's `deploy` runs it first,
 // so the Worker Alchemy bundles carries this checkout's SDK and templates.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
 import { createCli } from "trpc-cli";
+import { z } from "zod";
 import { PLATFORM_ENTRIES } from "../src/platform-entries.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -90,6 +91,31 @@ function trackedFiles(folder: string) {
     .map((file) => ({ path: file, content: readFileSync(path.join(folder, file), "utf8") }));
 }
 
+/** THE REPOS A NEW MIND STARTS WITH beside its config, from `ITERATE_SEED_REPOS`: JSON, a repo
+ *  path of the mind to an absolute folder (`{"/repos/onboarding":"/…/core/repos/onboarding"}`).
+ *  The deploy command sets it (core/lib/src/cli/deploy.ts); the kernel names no repo itself. Each
+ *  folder's git-tracked files; none when the variable is not set. */
+function seedRepos(): Record<string, { path: string; content: string }[]> {
+  const named = process.env.ITERATE_SEED_REPOS;
+  if (!named) return {};
+  const folders = z.record(z.string(), z.string()).safeParse(JSON.parse(named));
+  if (!folders.success)
+    throw new Error(`ITERATE_SEED_REPOS is not an object of repo paths to folders: ${named}`);
+  return Object.fromEntries(
+    Object.entries(folders.data).map(([repo, folder]) => {
+      if (!/^\/repos\/[a-z0-9][a-z0-9-]*$/.test(repo) || repo === "/repos/config")
+        throw new Error(
+          `ITERATE_SEED_REPOS names ${JSON.stringify(repo)}: a seed repo is /repos/<name>, and never /repos/config`,
+        );
+      if (!path.isAbsolute(folder) || !existsSync(folder))
+        throw new Error(
+          `ITERATE_SEED_REPOS names ${JSON.stringify(folder)} for ${repo}: that is no absolute path of a folder that exists`,
+        );
+      return [repo, trackedFiles(folder)];
+    }),
+  );
+}
+
 export default async function build() {
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
   writeFileSync(
@@ -98,7 +124,7 @@ export default async function build() {
   );
   writeFileSync(
     path.join(root, "src/generated/config-templates.js"),
-    `export const templates = ${JSON.stringify(configTemplates())};\n`,
+    `export const templates = ${JSON.stringify(configTemplates())};\nexport const seedRepos = ${JSON.stringify(seedRepos())};\n`,
   );
   writeFileSync(
     path.join(root, "src/generated/sandbox-files-tool.js"),

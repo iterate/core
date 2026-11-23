@@ -923,6 +923,16 @@ export function pnpmCommandOf(
   return { command: "npx", first: ["--yes", packageManager] };
 }
 
+/** THE REPOS A NEW MIND STARTS WITH beside its config, as the mind Worker's build reads them
+ *  (core/mind-worker/scripts/build.ts): `ITERATE_SEED_REPOS`, a repo path of the mind to a
+ *  folder of the source. A source that holds `core/repos/onboarding` seeds `/repos/onboarding`
+ *  from it; an older source names nothing, and its build seeds no repo. */
+export function seedReposEnvOf(sourceDir: string): { ITERATE_SEED_REPOS?: string } {
+  const onboarding = join(sourceDir, "core/repos/onboarding");
+  if (!existsSync(onboarding)) return {};
+  return { ITERATE_SEED_REPOS: JSON.stringify({ "/repos/onboarding": onboarding }) };
+}
+
 /** A checkout that holds core/alchemy, with its dependencies installed: `--source`, else the
  *  checkout this command runs in, else iterate/core at `ref` in the cache folder. A source whose
  *  core/alchemy is not the one script that this command writes the input of is refused. */
@@ -976,7 +986,7 @@ async function sourceOf(input: DeployInput): Promise<Source> {
   // so `alchemy deploy` and `alchemy plan` do not have to rebuild it later
   await exec(pnpm.command, [...pnpm.first, "--filter", "core-mind-worker", "build"], {
     cwd: dir,
-    env: { ...pnpmEnvFor(pnpm.command), CI: "1" },
+    env: { ...pnpmEnvFor(pnpm.command), CI: "1", ...seedReposEnvOf(dir) },
     maxBuffer: 64 << 20,
   });
   return { dir, pnpm };
@@ -1055,6 +1065,8 @@ function deployOnce(
         FORCE_COLOR: "0",
         CLOUDFLARE_API_TOKEN: run.token,
         ITERATE_MIND_CONFIG: run.config,
+        // the deploy may build the mind Worker again: the same repos as `sourceOf`'s build
+        ...seedReposEnvOf(run.source.dir),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -2146,6 +2158,10 @@ export async function deployMind(input: DeployInput) {
       throw error;
     });
     waiting.done(`iterate's source is ready (${seconds(sourceBegan)}): ${ready.dir}`);
+    if (seedReposEnvOf(ready.dir).ITERATE_SEED_REPOS)
+      p.log.info(
+        "A new mind starts with the repo /repos/onboarding: its onboarding page, guides and cards.",
+      );
     mkdirSync(work, { recursive: true, mode: 0o700 });
     const log = join(work, "deploy.log");
     writeFileSync(log, "");

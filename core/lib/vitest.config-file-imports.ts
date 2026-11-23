@@ -4,7 +4,8 @@
 // core/lib's vitest config names this plugin. Loaded code is not changed for it.
 //
 // THE RULE IS THE LOADER'S: core/mind-worker/src/context/module-resolution.ts (`fileModule`,
-// `loadFolder`). This copies it, for a file under a `configs/` folder alone:
+// `loadFolder`). This copies it, for a file under a `configs/` or `core/repos/` folder alone (a
+// template of a config repo, or a repo a new mind starts with):
 //
 //   a relative import of a file that is not code (.ts .mts .js .mjs are code) has one default
 //   export: the file's text when it is text (valid UTF-8, no NUL byte), else its bytes
@@ -43,7 +44,8 @@ export function configFileImports() {
     resolveId(source: string, importer?: string) {
       if (!importer || !source.startsWith(".")) return null;
       const target = resolve(dirname(importer), source);
-      if (!target.includes(`${sep}configs${sep}`)) return null;
+      const repo = target.includes(`${sep}core${sep}repos${sep}`);
+      if (!target.includes(`${sep}configs${sep}`) && !repo) return null;
       if (source.endsWith("/")) return `${FOLDER}${target}`;
       return /\.(ts|mts|js|mjs)$/.test(source) ? null : `${FILE}${target}`;
     },

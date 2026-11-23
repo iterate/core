@@ -12,9 +12,9 @@ import dashFiles from "../../configs/default/apps/dash/public/";
 import docsIndex from "../../configs/default/apps/docs/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
 import docsFiles from "../../configs/default/apps/docs/public/";
-import onboardingIndex from "../../configs/default/apps/onboarding/index.html";
+import onboardingIndex from "../../repos/onboarding/index.html";
 // oxlint-disable-next-line import/extensions -- a folder: every file under it, by path
-import onboardingFiles from "../../configs/default/apps/onboarding/public/";
+import onboardingFiles from "../../repos/onboarding/public/";
 import Config from "../../configs/default/worker.ts";
 import { defaultConfigInstance, stubHtmlRewriter } from "./test-support/config-default-instance.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
@@ -38,6 +38,7 @@ test("the default config's pages and folders load here as the platform's loader 
     "call-facet.js",
     "share-links.js",
   ]);
+  // the onboarding page is the repo /repos/onboarding (core/repos/onboarding), loaded the same way
   expect(onboardingIndex).toMatch(/<title>Onboarding<\/title>/);
   expect(Object.keys(onboardingFiles)).toEqual(["app.css", "app.js"]);
 });

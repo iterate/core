@@ -27,7 +27,7 @@ const CREDIT_USD = 10;
 /** WHETHER THIS STEP IS OFFERED AT ALL. True while iterate Cloud's secret proxy
  *  (cloud-credit.ts `ITERATE_PROXY`) is live and spends a key of its own. Set it to false to close the step: then
  *  no mind shows the card, the tool answers that the mind has no such step (the onboarding agent
- *  then asks the "let iterate in" question, onboarding.md section 5), and nothing asks iterate for
+ *  then asks the "let iterate in" question, onboarding.md of /repos/onboarding, section 5), and nothing asks iterate for
  *  anything. Tests set `StepContext.creditOpen` either way. */
 export const CREDIT_OPEN = true;
 

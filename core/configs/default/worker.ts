@@ -37,10 +37,10 @@ import { cloudflareClient, me, publicProfile } from "./website.ts";
 const dash = dashApp();
 const docs = docsApp();
 const meet = meetApp();
-const onboarding = onboardingApp();
-// Tasks is a board of the markdown files under tasks/ of the repo it points at. To show another
-// repo's tasks, name that repo here.
-const tasks = tasksApp({ repo: "/repos/tasks" });
+// The onboarding page and its guides are the repo /repos/onboarding; this repo keeps its steps.
+const onboarding = onboardingApp({ repo: "/repos/onboarding" });
+// The Tasks board shows the markdown files under tasks/ of /repos/onboarding: the onboarding cards.
+const tasks = tasksApp({ repo: "/repos/onboarding" });
 
 export default class extends ConfigApi {
   // EVERY REQUEST, on every hostname of the mind but `iterate.<zone>`, where the platform answers

@@ -31,3 +31,10 @@ template against the workspace packages.
 
 The build (core/mind-worker/scripts/build.ts) bundles each folder here under its name, with its
 git-tracked files, and a mind is seeded from the build's copy with no GitHub request.
+
+A new mind can start with other repos beside its config: the folders of `core/repos/`, each the
+first commit of the repo of its name (`core/repos/onboarding` is `/repos/onboarding`: the
+onboarding page, its agent's guides and the cards of the Tasks board). The kernel names none of
+them: the deploy command names each one in `ITERATE_SEED_REPOS` for the build
+(core/lib/src/cli/deploy.ts `seedReposEnvOf`), and a build without it seeds none. A template
+update never touches them: a mind's copy is its own from its birth.

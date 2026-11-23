@@ -12,6 +12,7 @@ import { rootWakeEvents } from "./context-birth-events.ts";
 import { MindContract, type MindState } from "./contract.ts";
 import { MindProcessor } from "./processor.ts";
 import type { MindPublisher } from "./publication.ts";
+import { seedRepos } from "./seed-repos.ts";
 import type { TemplateKept } from "./template-update.ts";
 
 test("an incarnation whose first wake still owes a publication compares the template when the publication is over, with no further event", async () => {
@@ -628,6 +629,49 @@ test("the latest `mind/sandbox-image-configured` on `/` names the image the mind
     first: "registry.cloudflare.com/account/first@sha256:digest",
     latest: "registry.cloudflare.com/account/latest@sha256:digest",
     cleared: null,
+  });
+});
+
+test("each repo the build names is made and gets its files as one first commit; a repo with a commit is left as it is, and a failure is one warning that throws nothing", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const did: string[] = [];
+  /** `/repos/old` has a commit already; `/repos/broken` refuses to be made. */
+  const call = async (expression: ItxExpression) => {
+    const at = expression[2];
+    const [verb, argument] = expression.at(-1) as [string, unknown];
+    const path = Array.isArray(at) ? at[1] : argument;
+    did.push(`${verb} ${path}`);
+    if (verb === "create" && path === "/repos/broken") throw new Error("no such account");
+    if (verb === "tip") return path === "/repos/old" ? "c0" : null;
+    if (verb === "commitFiles") {
+      expect(argument).toEqual({
+        message: `seed: ${path}`,
+        changes: [{ path: "index.html", content: "<p>hello</p>\n" }],
+        parent: null,
+      });
+      return { commitOid: "c1", changedPaths: ["index.html"] };
+    }
+    return { path };
+  };
+  const files = [{ path: "index.html", content: "<p>hello</p>\n" }];
+  await seedRepos(call, {
+    "/repos/broken": files,
+    "/repos/onboarding": files,
+    "/repos/old": files,
+  });
+  expect(did).toEqual([
+    "create /repos/broken",
+    "create /repos/onboarding",
+    "tip /repos/onboarding",
+    "commitFiles /repos/onboarding",
+    "create /repos/old",
+    "tip /repos/old",
+  ]);
+  expect(warn).toHaveBeenCalledOnce();
+  expect(warn.mock.calls[0]![0]).toMatchObject({
+    event: "mind.seed-repo-failed",
+    path: "/repos/broken",
+    error: "no such account",
   });
 });
 

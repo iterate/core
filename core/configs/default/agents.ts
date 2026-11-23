@@ -3,13 +3,14 @@
 // under it. worker.ts installs them (`installAgents`), which finds them in this file by its name.
 // Set an agent's defaults here, on the class (`AgentDurableObject.defaultConfig`).
 //
-// Every agent reads AGENTS.md before each request, and one at /agents/<name> reads <name>.md too:
-// /agents/onboarding reads onboarding.md.
+// Every agent reads AGENTS.md before each request, and one at /agents/<name> reads <name>.md too,
+// when the repo has one. /agents/onboarding gets its instructions as an event when the onboarding
+// app launches it, from the repo /repos/onboarding (apps/onboarding/launch.ts).
 import { AgentCollectionDurableObject, AgentDurableObject, AI_GATEWAY } from "iterate/agents";
 
 // Every agent also reads mind.md, after AGENTS.md, when the repo has one: who this mind is (its
 // name, its voice, what it is for, how it reaches its people). The template has no such file: the
-// onboarding agent writes it with the owner (onboarding.md, "What you remember"), so it is the mind's own from
+// onboarding agent writes it with the owner (onboarding.md of /repos/onboarding, "What you remember"), so it is the mind's own from
 // its first line, and AGENTS.md stays a file that follows the template.
 AgentDurableObject.standingFiles = (_path, files) => [
   ...new Set(["AGENTS.md", "mind.md", ...files]),

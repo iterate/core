@@ -162,7 +162,7 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
     path: "/onboarding",
     title: "Onboarding record",
     description:
-      "Where the owner's onboarding stands: one onboarding/finished event when the onboarding agent or the owner ended it (onboarding/finish.md). What the owner has seen is in mind.md.",
+      "Where the owner's onboarding stands: one onboarding/finished event when the onboarding agent or the owner ended it (onboarding/finish.md of /repos/onboarding). What the owner has seen is in mind.md.",
   },
   {
     path: "/approvals",

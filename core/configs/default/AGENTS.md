@@ -132,9 +132,12 @@ The agents' runtime is `iterate/agents`, which comes from the platform like the 
 `agents.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT plan, else
 an OpenAI API key, else the deployment's AI Gateway credit ([agent-kinds.md](agent-kinds.md)).
 
-An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`:
-`onboarding.md` is what `/agents/onboarding` is told, the agent where a new owner starts, and
-`onboarding/` holds one file for each job its subagents do. The init case creates it. On a mind
+An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`, when this
+repo has one. `/agents/onboarding` is the agent where a new owner starts. Its guides are in the
+repo `/repos/onboarding`, which a new mind starts with: `onboarding/instructions.md` is what it is
+told (the onboarding app appends it as an event when AI is proven working,
+`apps/onboarding/launch.ts`), `onboarding.md` is its long guide, and `onboarding/` holds one file
+for each job its subagents do. The init case creates the agent. On a mind
 that came through iterate Cloud the handover writes its first message and starts its first
 subagents (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
 first opens its chat (`openers` in `apps/dash/public/app.js`).
@@ -220,7 +223,8 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   member's word.
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
   steps as cards above the chat with `/agents/onboarding`, each button also the agent's
-  `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding").
+  `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding"). Its page is the
+  repo `/repos/onboarding`.
 - `apps/guestbook/` is an app for end users on `guestbook.<zone>`, off in a new mind
   ([people.md](people.md), "The guestbook").
 

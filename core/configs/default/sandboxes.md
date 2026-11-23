@@ -13,7 +13,7 @@ the mind gets one with git, Claude Code and Codex in it, and how you start yours
   as a copy of that snapshot, in about a second.
 - **The mind's coding snapshot is the sandbox `/agents/onboarding/sandbox/coding`.** It holds git,
   gh, curl, jq, ripgrep, Python 3, pnpm, Claude Code and Codex, and git's sign-in for this mind's
-  repos. The onboarding subagent `/agents/onboarding/sandbox` builds it (`onboarding/sandbox.md`).
+  repos. The onboarding subagent `/agents/onboarding/sandbox` builds it (`onboarding/sandbox.md` of `/repos/onboarding`).
   Never run anything in that sandbox yourself: its next idle save would replace the snapshot.
 
 ## Start a sandbox from the snapshot
@@ -95,7 +95,7 @@ if (!events.some((event) => event.type === "events.iterate.com/sandbox/started")
     `claude -p <prompt>`. The secret must be pinned to `https://api.anthropic.com`. `IS_SANDBOX`
     lets it run as root with `--dangerously-skip-permissions`.
   - With no key, they answer "Not logged in" or 401. The mind's AI Gateway credit does not reach
-    them. A key is the owner's choice (`onboarding/pays.md`): never ask for one in a chat.
+    them. A key is the owner's choice (`onboarding/pays.md` of `/repos/onboarding`): never ask for one in a chat.
 
 ## Serve a port at a host
 

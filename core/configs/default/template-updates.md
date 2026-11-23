@@ -13,8 +13,8 @@ platform wrote there; a file you changed or deleted is yours, and stays.
   the newer one imports the newer app.
 - **A file the newer template no longer has stays, and nothing reads it.** When it is yours, the
   event names it (`leftBehind`): carry what you changed there into the file that took its place.
-  For example, the agents' settings are in `agents.ts` and the onboarding agent's text is in
-  `onboarding.md`.
+  For example, the agents' settings are in `agents.ts`, and the onboarding agent's guides are in
+  the repo `/repos/onboarding`, not in this one.
 - **Your `package.json` gets the packages that newer files import**, each at the template's
   version, when it does not list them (`packagesAdded` in the same event). Nothing else of the
   file changes, and a version you set is never changed: a package you list at an older version

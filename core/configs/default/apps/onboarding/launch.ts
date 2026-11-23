@@ -1,34 +1,28 @@
 // launch.ts — CREATES AND SEEDS `/agents/onboarding` THE MOMENT AI IS PROVEN WORKING
-// (`app.ts`: POST /verify-ai). Appends a fat, idempotent event stack onto `/agents/onboarding`:
-//   1. Bespoke instructions from `onboarding/instructions.md` (dont-trigger-request)
-//   2. Generated overview of all `onboarding`-tagged markdown cards in `tasks/` and their
-//      `depends-on` dependencies, with live statuses and filtered Tasks app deep-links
+// (`app.ts`: POST /verify-ai). It reads the repo `/repos/onboarding` at its newest commit, and
+// appends a fat, idempotent event stack onto `/agents/onboarding`:
+//   1. Bespoke instructions from `onboarding/instructions.md` of that repo (dont-trigger-request)
+//   2. Generated overview of all `onboarding`-tagged markdown cards in that repo's `tasks/` and
+//      their `depends-on` dependencies, with live statuses and filtered Tasks app deep-links
 //      (dont-trigger-request)
 //   3. The idempotent opener (`opener:/agents/onboarding`) that wakes the agent for its greeting
 // And immediately starts the background subagents (`research` stalker, `website` maker, `sandbox`)
 // via `startFirstSubagents` (idempotent across Cloud handover and direct `npx iterate deploy`).
+// A mind with no `/repos/onboarding` has no guide to give the agent, so nothing is launched there.
 import { errorCode } from "iterate/lib";
 import { type HandoverItx, startFirstSubagents } from "../../cloud-handover.ts";
-import onboardingInstructions from "../../onboarding/instructions.md";
-// oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
-import bundledTaskFiles from "../../tasks/";
-import { TASKS_REPO } from "../tasks/app.ts";
+import { ONBOARDING_REPO } from "./app.ts";
 
 export const ONBOARDING_AGENT = "/agents/onboarding";
 const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
 
+/** The mind, as the launch uses it: the handover's calls, and reads of `/repos/onboarding`. */
 export type LaunchOnboardingItx = HandoverItx & {
   repos?: {
-    /** Answers at once for a repo that exists, and throws for one that was deleted. */
-    create?(path: string): Promise<unknown>;
     get(path: string): {
       tip(): Promise<string | null>;
+      readFile(path: string, options: { commitOid: string }): Promise<string | null>;
       modules(options: { commitOid: string; dir: string }): Promise<Record<string, string>>;
-      commitFiles?(input: {
-        message: string;
-        parent: string | null;
-        changes: { path: string; content: string }[];
-      }): Promise<unknown>;
     };
   };
 };
@@ -162,7 +156,7 @@ export function renderOnboardingTasksOverview(
     `Live board (filtered to onboarding): ${boardUrl}`,
     `Active items only: ${activeUrl}`,
     "",
-    `Each item below is a markdown card under \`tasks/\` in \`${TASKS_REPO}\` (\`itx.repos.get("${TASKS_REPO}")\`; a commit there publishes nothing). Update a card's \`status:\` to \`done\` (or \`in-progress\`) as the owner moves through onboarding, and prefer tasks whose \`depends-on\` prerequisites are already \`done\`.`,
+    `Each item below is a markdown card under \`tasks/\` in \`${ONBOARDING_REPO}\` (\`itx.repos.get("${ONBOARDING_REPO}")\`; a commit there publishes nothing). Update a card's \`status:\` to \`done\` (or \`in-progress\`) as the owner moves through onboarding, and prefer tasks whose \`depends-on\` prerequisites are already \`done\`.`,
   ];
 
   const statuses = [
@@ -205,47 +199,25 @@ export function renderOnboardingTasksOverview(
   return { text: `${sections.join("\n")}\n`, tasks };
 }
 
-function bundledTasksMap(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(bundledTaskFiles)
-      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-      .map(([name, content]) => [`tasks/${name}`, content]),
+/** WHAT THE LAUNCH READS of `/repos/onboarding` at its newest commit: the agent's instructions
+ *  and the cards under `tasks/`, by path. Null on a mind with no such repo, a repo with no commit,
+ *  or one with no instructions: there is no guide to give the agent then. */
+async function readOnboardingRepo(
+  itx: LaunchOnboardingItx,
+): Promise<{ instructions: string; files: Record<string, string> } | null> {
+  if (!itx.repos) return null;
+  const repo = itx.repos.get(ONBOARDING_REPO);
+  const commitOid = await repo.tip().catch(() => null);
+  if (!commitOid) return null;
+  const [instructions, under] = await Promise.all([
+    repo.readFile("onboarding/instructions.md", { commitOid }),
+    repo.modules({ commitOid, dir: "tasks" }),
+  ]);
+  if (!instructions) return null;
+  const files = Object.fromEntries(
+    Object.entries(under).map(([name, content]) => [`tasks/${name}`, content]),
   );
-}
-
-/** THE CARDS OF THE TASKS REPO (../tasks/app.ts `TASKS_REPO`), which this makes on a mind that
- *  has none: the repo, and one first commit with the template's cards, the bundled `tasks/`
- *  folder of `/repos/config`. A repo that has a commit is read as it is, so a second launch
- *  changes no card. The cards live there, not in `/repos/config`, because a commit to the config
- *  repo publishes the mind, and a card moves often.
- *
- *  It answers the bundled cards, and writes nothing, where it cannot make or read the repo: a
- *  tasks repo that the owner deleted stays deleted (the platform refuses to make it again), and
- *  the launch must not fail for it. The board then shows the config repo's cards. */
-async function readTaskFiles(itx: LaunchOnboardingItx): Promise<Record<string, string>> {
-  const bundled = bundledTasksMap();
-  if (!itx.repos) return bundled;
-  try {
-    await itx.repos.create?.(TASKS_REPO);
-    const repo = itx.repos.get(TASKS_REPO);
-    const tip = await repo.tip();
-    if (!tip) {
-      // `parent: null`: the first commit alone. Of two launches at once, the later is refused.
-      await repo.commitFiles?.({
-        message: "The onboarding cards, from the template's tasks/",
-        parent: null,
-        changes: Object.entries(bundled).map(([path, content]) => ({ path, content })),
-      });
-      return bundled;
-    }
-    const under = await repo.modules({ commitOid: tip, dir: "tasks" });
-    const live = Object.fromEntries(
-      Object.entries(under).map(([name, content]) => [`tasks/${name}`, content]),
-    );
-    return Object.keys(live).length > 0 ? live : bundled;
-  } catch {
-    return bundled;
-  }
+  return { instructions, files };
 }
 
 async function appendIdempotent(
@@ -261,12 +233,15 @@ async function appendIdempotent(
 }
 
 /** CREATES `/agents/onboarding` AND APPENDS ITS FAT EVENT STACK once AI is proven working:
- *  bespoke instructions from `onboarding/instructions.md`, the generated tasks & dependencies
- *  overview from `tasks/*.md`, and the idempotent opener — then kicks off the background
- *  `research` (stalker), `website` (website maker), and `sandbox` subagents immediately. */
+ *  bespoke instructions from `onboarding/instructions.md` of `/repos/onboarding`, the generated
+ *  tasks & dependencies overview from that repo's `tasks/*.md`, and the idempotent opener — then
+ *  kicks off the background `research` (stalker), `website` (website maker), and `sandbox`
+ *  subagents immediately. On a mind with no `/repos/onboarding` it does nothing. */
 export async function launchOnboardingAgent(
   itx: LaunchOnboardingItx,
 ): Promise<LaunchOnboardingResult> {
+  const onboarding = await readOnboardingRepo(itx);
+  if (!onboarding) return { launched: false, tasksCount: 0 };
   try {
     await itx.agents.create(ONBOARDING_AGENT);
   } catch (error: unknown) {
@@ -275,9 +250,8 @@ export async function launchOnboardingAgent(
     throw error;
   }
 
-  const [url, files] = await Promise.all([itx.url(), readTaskFiles(itx)]);
-  const zone = new URL(url).hostname;
-  const { text: tasksOverview, tasks } = renderOnboardingTasksOverview(files, zone);
+  const zone = new URL(await itx.url()).hostname;
+  const { text: tasksOverview, tasks } = renderOnboardingTasksOverview(onboarding.files, zone);
 
   // Append the fat context stack (instructions + generated tasks/dependencies overview), then the
   // opener that triggers the agent's first reply. Each event carries a stable idempotency key so
@@ -288,7 +262,7 @@ export async function launchOnboardingAgent(
     payload: {
       role: "developer",
       actor: { type: "agent" },
-      content: onboardingInstructions.replaceAll("<zone>", zone),
+      content: onboarding.instructions.replaceAll("<zone>", zone),
       llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
   });

@@ -1,5 +1,5 @@
 // telemetry.ts — THE MIND'S TELEMETRY TABLES, TURNED ON AND READ BY THE MIND ITSELF
-// (onboarding/telemetry.md). A mind deployed with no telemetry token has a bucket and three
+// (onboarding/telemetry.md of /repos/onboarding). A mind deployed with no telemetry token has a bucket and three
 // streams, which keep every event, log and span they are sent, and no tables. With one API token
 // of the account, kept as the secret below, the mind makes the tables and reads them:
 //
@@ -50,7 +50,7 @@ type TelemetryItx = Pick<
 
 /** `itx.config.telemetryToken({ again? })`: the two links a member needs, Cloudflare's form and
  *  the page of this mind that takes the token, with the `account` to pick and the `bucket` that
- *  the token's second policy names (onboarding/telemetry.md). No agent sees the token.
+ *  the token's second policy names (onboarding/telemetry.md of /repos/onboarding). No agent sees the token.
  *  `{ needed: false }` on a stack that holds its own telemetry token. Once it is set:
  *  `{ set: true, wide, bucket }`. As made, the token reads and writes every R2 bucket of the
  *  account, makes and deletes buckets and can set one public. `wide` says that it still reaches

@@ -1,7 +1,7 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import { contextAt, runningCause, type ItxEntrypointScope } from "core-itx";
 import { keepModulesOfIdentity, moduleIdentityOf } from "../context/worker-loader.ts";
-import { templates } from "../generated/config-templates.js";
+import { seedRepos, templates } from "../generated/config-templates.js";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { MindState } from "./contract.ts";
 import type { EntitySlug } from "./entity-lifecycle.ts";
@@ -30,6 +30,7 @@ export class MindFacet extends StreamProcessorDurableObject<
       keepTemplate: (kept) => this.ctx.storage.put("config-template", kept),
     },
     templates,
+    seedRepos,
   );
 
   #publisher(): MindPublisher {

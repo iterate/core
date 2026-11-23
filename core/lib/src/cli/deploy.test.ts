@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -38,6 +38,7 @@ import {
   ONE_MORE_TRY,
   saysTheConsumerIsNotSeenYet,
   saysTheStateStoreRefused,
+  seedReposEnvOf,
   stateStoreAddress,
   STORE_WAIT_MS,
   waitForStore,
@@ -1328,6 +1329,15 @@ test("the deploy opens no page until the pages a browser asks first work: iterat
   expect(
     await never({ [ACCESS]: { status: 302, location: "https://iterate.ada-labs.com/sign-in" } }),
   ).toMatchObject({ outcome: { fault: `${ACCESS} answered 302 to https://iterate.ada-labs.com` } });
+});
+
+test("a source that holds core/repos/onboarding tells the mind Worker's build to seed /repos/onboarding from it; an older source names no repo", () => {
+  const source = mkdtempSync(join(tmpdir(), "deploy-seed-"));
+  expect(seedReposEnvOf(source)).toEqual({});
+  mkdirSync(join(source, "core/repos/onboarding"), { recursive: true });
+  expect(JSON.parse(seedReposEnvOf(source).ITERATE_SEED_REPOS!)).toEqual({
+    "/repos/onboarding": join(source, "core/repos/onboarding"),
+  });
 });
 
 /** An account's answer for the settings of the Worker at each path in `found`, a 404 elsewhere. */

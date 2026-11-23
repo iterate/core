@@ -10,6 +10,8 @@ What goes public as `iterate/core`: a mind's stack.
 - `home-lab/` runs the mind Worker on your own machine.
 - `lib/` is npm `iterate`: the SDK, the agents app (`iterate/agents`) and the `iterate` CLI.
 - `configs/` are the templates a mind starts from.
+- `repos/` are the repos a new mind starts with beside its config: `repos/onboarding` is
+  `/repos/onboarding`, which `iterate deploy` names for the build ([configs/README.md](configs/README.md)).
 
 - **Core builds from a clone of itself.** Nothing in `core/` imports outside `core/`; outside code may
   import core, never the reverse. `.oxlintrc.json` enforces it (`lint/oxlintrc-core-boundary.test.ts`).

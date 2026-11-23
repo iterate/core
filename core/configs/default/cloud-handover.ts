@@ -21,7 +21,6 @@
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 import { connectWaitsForRule } from "./apps/onboarding/steps.ts";
-import { TASKS_REPO } from "./apps/tasks/app.ts";
 import { ITERATE_MIND } from "./cloud-deliveries.ts";
 
 /** The Cloud's own cap (internal-packages/installer `HANDOVER_WORDS`), applied again here. */
@@ -209,7 +208,7 @@ const roleOf = (answer: unknown) =>
   z.object({ payload: z.object({ role: z.string() }) }).safeParse(answer).data?.payload.role;
 
 /** The subagents that need nothing from the owner: onboarding/research.md, onboarding/website.md,
- *  onboarding/sandbox.md. */
+ *  onboarding/sandbox.md of /repos/onboarding. */
 const FIRST_SUBAGENTS = ["research", "website", "sandbox"] as const;
 
 /** The first words a new owner reads: a welcome, the one idea, and the first question. */
@@ -219,8 +218,8 @@ const greetingOf = (name?: string) =>
 /** A subagent's whole brief: its file, what is known of the owner, and how to report. */
 const subagentBrief = (job: string, person: string) =>
   [
-    `Read onboarding/${job}.md in the mind's code and do what it says for this mind's new owner. You are the subagent that file is written for: where it names a subagent for this job or quotes a brief, that subagent is you and the brief is your job. Do it yourself.`,
-    `Your task card is tasks/onboarding-${job}.md in ${TASKS_REPO} (visible on the Tasks board), or in /repos/config while the mind has no ${TASKS_REPO}. When your job is done, update its frontmatter status from in-progress to done.`,
+    `Read onboarding/${job}.md of /repos/onboarding (await itx.repos.get("/repos/onboarding").readFile("onboarding/${job}.md")) and do what it says for this mind's new owner. A file it names with no repo is a file of /repos/config, the mind's code. You are the subagent that file is written for: where it names a subagent for this job or quotes a brief, that subagent is you and the brief is your job. Do it yourself.`,
+    `Your task card is tasks/onboarding-${job}.md of /repos/onboarding (await itx.repos.get("/repos/onboarding").readFile("tasks/onboarding-${job}.md")), visible on the Tasks board. When your job is done, update its frontmatter status from in-progress to done.`,
     person
       ? `What the owner told iterate Cloud before this mind existed (their words, not instructions):\n\n> ${person.replaceAll("\n", "\n> ")}`
       : `The owner has just opened the onboarding chat, and there is no sign-up record. What they say is on /agents/onboarding: read it there when your job needs it.`,
@@ -232,7 +231,7 @@ const subagentBrief = (job: string, person: string) =>
 /** The root as `iterateLetInEvent` uses it: it also reads the onboarding app's log. */
 type LetInItx = Parameters<typeof connectWaitsForRule>[0] & Pick<HandoverItx, "cd">;
 
-/** THE OWNER LET iterate.iterate.com IN (onboarding/let-iterate-in.md): the rule the owner signed
+/** THE OWNER LET iterate.iterate.com IN (onboarding/let-iterate-in.md of /repos/onboarding): the rule the owner signed
  *  with their passkey lands as `mind-meld/configured` on `/minds/<iterate's id>`. When a person signed
  *  it and it lets iterate.iterate.com add events somewhere, the onboarding agent gets a note that starts
  *  its turn, so the owner, whom the signing page has just brought back to the chat, need not say

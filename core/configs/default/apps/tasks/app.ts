@@ -18,10 +18,9 @@ import files from "./public/";
 /** What Tasks says of itself to anyone: the mind's sign-in pages show its name and icon. */
 const TASKS: AppDescription = { name: "Tasks", icon: "/icon.svg", for: "members" };
 
-/** THE TASKS REPO of a new mind: the onboarding app makes it and puts the first cards there
- *  (../onboarding/launch.ts). A commit to it publishes nothing, so a card that moves does not
- *  load the mind's code again, as a commit to `/repos/config` does. */
-export const TASKS_REPO = "/repos/tasks";
+/** The repo the board points at when worker.ts names none. A commit to a repo other than
+ *  `/repos/config` publishes nothing, so a card that moves does not load the mind's code again. */
+const TASKS_REPO = "/repos/tasks";
 
 /** `repo`: THE REPO THE BOARD POINTS AT, a path of this mind (`/repos/<name>`). The page shows
  *  the markdown files under `tasks/` of it. While the mind has no such repo, the page shows the

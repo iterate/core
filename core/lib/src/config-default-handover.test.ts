@@ -79,11 +79,12 @@ test("the handover writes the first message and starts the first subagents, once
     ["/agents/onboarding/sandbox", "onboarding:helper:sandbox", "user"],
     ["/agents/onboarding", "onboarding:helpers-started", "developer"],
   ]);
-  // a subagent's brief starts its turn, and names its file and the way to report
+  // a subagent's brief starts its turn, and names its guide and its card in /repos/onboarding, how
+  // to read them, and the way to report
   expect(rows[3]!.payload).not.toHaveProperty("llmRequestPolicy");
   expect(rows[3]!.payload).toMatchObject({
     content: expect.stringMatching(
-      /Read onboarding\/research\.md[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
+      /Read onboarding\/research\.md of \/repos\/onboarding \(await itx\.repos\.get\("\/repos\/onboarding"\)\.readFile\("onboarding\/research\.md"\)\)[\s\S]*tasks\/onboarding-research\.md of \/repos\/onboarding[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
     ),
   });
   expect(rows[6]!.payload).toMatchObject({

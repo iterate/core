@@ -5,7 +5,7 @@
 // takes what the real one takes: a key with another body is refused, one with the same body
 // answers the event it has.
 /// <reference path="../../configs/default/files.d.ts" />
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, test, vi } from "vitest";
 import { ITERATE_MIND as ITERATE_ID } from "../../configs/default/cloud-deliveries.ts";
 import { onboardingApp } from "../../configs/default/apps/onboarding/app.ts";
@@ -788,7 +788,7 @@ test("a balance that comes back above zero (an estimate settled lower): the card
 
 test("the guides say who pays, and the spoken offer does not claim the agents need the credit", () => {
   const read = (path: string) =>
-    readFileSync(new URL(`../../configs/default/${path}`, import.meta.url), "utf8").replaceAll(
+    readFileSync(new URL(`../../repos/onboarding/${path}`, import.meta.url), "utf8").replaceAll(
       /\s+/g,
       " ",
     );
@@ -889,7 +889,7 @@ test("the onboarding agent names no credit on such a stack, nor while the credit
   const closed = runStep({ ...contextOf(fakeMind(), credit), creditOpen: false }, STEP, "check");
   await expect(closed).rejects.toThrow(`no step "${STEP}" on this mind`);
   const guide = readFileSync(
-    new URL("../../configs/default/onboarding.md", import.meta.url),
+    new URL("../../repos/onboarding/onboarding.md", import.meta.url),
     "utf8",
   ).replaceAll(/\s+/g, " ");
   expect(guide).toContain(
@@ -1931,7 +1931,7 @@ test("aiStatus and collectOpenAiKey read credentials and create a secret-collect
 
 test("onboarding page is a centered no-AI wizard with no AgentChat, the optional Connect Cloudflare card on Configure AI, visible approval line, and model-authored reply gate", () => {
   const pageJs = readFileSync(
-    new URL("../../configs/default/apps/onboarding/public/app.js", import.meta.url),
+    new URL("../../repos/onboarding/public/app.js", import.meta.url),
     "utf8",
   );
   expect(pageJs).not.toContain("AgentChat");
@@ -1979,6 +1979,7 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
   const created: string[] = [];
   const launchItx = {
     ...mind.itx,
+    repos: onboardingRepo().repos,
     agents: {
       create: async (path: string) => {
         created.push(path);
@@ -2026,63 +2027,85 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
   expect(mind.logs.get("/agents/onboarding/website")).toHaveLength(1);
 });
 
-test("launchOnboardingAgent makes the tasks repo with the template's cards once, reads it after, and launches without it when the repo was deleted", async () => {
+test("launchOnboardingAgent reads the instructions and the cards of /repos/onboarding at its tip, and makes no repo", async () => {
   const mind = fakeMind();
   const agents = { create: async () => {} };
-  /** A repo collection with one repo, `/repos/tasks`: unborn, then at the commit it is given. */
-  const tasksRepo = (deleted = false) => {
-    const made: string[] = [];
-    const commits: { parent: string | null; changes: { path: string; content: string }[] }[] = [];
-    let files: Record<string, string> | null = null;
-    return {
-      made,
-      commits,
-      repos: {
-        create: async (path: string) => {
-          if (deleted) throw new Error(`repo ${path}: deleted — not re-creatable`);
-          made.push(path);
-        },
-        get: (path: string) => ({
-          tip: async () => (path === "/repos/tasks" && files ? "c1" : null),
-          modules: async () =>
-            Object.fromEntries(
-              Object.entries(files || {}).map(([name, text]) => [
-                name.slice("tasks/".length),
-                text,
-              ]),
-            ),
-          commitFiles: async (input: (typeof commits)[number]) => {
-            commits.push(input);
-            files = Object.fromEntries(input.changes.map(({ path, content }) => [path, content]));
-          },
-        }),
-      },
-    };
-  };
-
-  const repo = tasksRepo();
+  const repo = onboardingRepo({
+    "onboarding/instructions.md": "# Your instructions\n\nThe board is at https://tasks.<zone>/.\n",
+    "tasks/onboarding-website.md":
+      "---\nstatus: in-progress\ntags: [onboarding]\n---\n\n# Build a first public homepage\n",
+    "tasks/notes.md": "---\ntags: [personal]\n---\n\n# Buy milk\n",
+  });
   const first = await launchOnboardingAgent({ ...mind.itx, agents, repos: repo.repos });
-  expect(repo).toMatchObject({ made: ["/repos/tasks"] });
-  expect(repo.commits).toHaveLength(1);
-  expect(repo.commits[0]!.parent).toBeNull();
-  const seeded = repo.commits[0]!.changes.map(({ path }) => path);
-  expect(seeded).toContain("tasks/onboarding-website.md");
-  expect(seeded.every((path) => /^tasks\/onboarding-[a-z-]+\.md$/.test(path))).toBe(true);
-  expect(first).toMatchObject({ tasksCount: seeded.length });
+  expect(first).toEqual({ launched: true, tasksCount: 1 });
+  expect(repo).toMatchObject({
+    asked: [
+      "tip /repos/onboarding",
+      "readFile /repos/onboarding onboarding/instructions.md at c1",
+      "modules /repos/onboarding tasks at c1",
+    ],
+  });
+  expect(mind.chat()[0]?.payload).toMatchObject({
+    content: "# Your instructions\n\nThe board is at https://tasks.example.com/.\n",
+  });
   // the overview names the repo the cards are in
-  expect(JSON.stringify(mind.chat()[1]?.payload)).toContain("/repos/tasks");
+  expect(JSON.stringify(mind.chat()[1]?.payload)).toContain("/repos/onboarding");
+});
 
-  // a second launch reads the repo as it is, and commits nothing
-  const again = await launchOnboardingAgent({ ...mind.itx, agents, repos: repo.repos });
-  expect(repo.commits).toHaveLength(1);
-  expect(again).toMatchObject({ tasksCount: seeded.length });
+test("launchOnboardingAgent launches nothing on a mind with no /repos/onboarding, or none with a commit: there is no guide to give the agent", async () => {
+  const created: string[] = [];
+  const agents = {
+    create: async (path: string) => {
+      created.push(path);
+    },
+  };
+  for (const repos of [undefined, onboardingRepo("unborn").repos, onboardingRepo("gone").repos]) {
+    const mind = fakeMind();
+    expect(await launchOnboardingAgent({ ...mind.itx, agents, repos })).toEqual({
+      launched: false,
+      tasksCount: 0,
+    });
+    expect(mind.chat()).toEqual([]);
+  }
+  expect(created).toEqual([]);
+});
 
-  // a tasks repo that was deleted is not made again, and the launch still answers
-  const gone = tasksRepo(true);
-  const without = await launchOnboardingAgent({ ...fakeMind().itx, agents, repos: gone.repos });
-  expect(without).toMatchObject({ launched: true });
-  expect(gone.commits).toHaveLength(0);
-  expect(without).toMatchObject({ tasksCount: seeded.length });
+test("a member's request for the page goes to the worker of /repos/onboarding at its tip; the shared files are the config's; a mind without the repo answers 404", async () => {
+  const loaded: unknown[] = [];
+  const hostOf = (tip: string | null) => ({
+    auth: { memberPage: () => null },
+    getItx: () => ({
+      repos: { get: () => ({ tip: async () => tip }) },
+      workers: {
+        get: (spec: unknown) => {
+          loaded.push(spec);
+          return {
+            fetch: async (request: Request) =>
+              new Response(`page ${new URL(request.url).pathname}`, { status: 200 }),
+          };
+        },
+      },
+      [Symbol.dispose]() {},
+    }),
+  });
+  const app = onboardingApp();
+  const ask = (path: string, tip: string | null = "c1") =>
+    app.fetch(new Request(`https://onboarding.example.com${path}`), hostOf(tip) as never);
+  expect(await (await ask("/app.js")).text()).toBe("page /app.js");
+  expect(loaded).toEqual([
+    {
+      source: ["itx", "repos", ["get", "/repos/onboarding"], ["files", { commitOid: "c1" }]],
+      cacheKey: "onboarding-page:/repos/onboarding:c1",
+    },
+  ]);
+  const theme = await ask("/theme.css");
+  expect(theme.headers.get("content-type")).toContain("text/css");
+  expect(loaded).toHaveLength(1);
+  const none = await ask("/", null);
+  expect(none).toMatchObject({ status: 404 });
+  expect(await none.text()).toBe(
+    "This mind has no onboarding page: the repo /repos/onboarding is not there.\n",
+  );
 });
 
 test("POST /verify-ai launches /agents/onboarding on success and does not create it on failure", async () => {
@@ -2093,6 +2116,7 @@ test("POST /verify-ai launches /agents/onboarding on success and does not create
     auth,
     getItx: () => ({
       ...mindOk.itx,
+      repos: onboardingRepo().repos,
       agents: {
         create: async (path: string) => {
           createdOk.push(path);
@@ -2372,6 +2396,51 @@ const at = (offset: number, type: string, payload: Record<string, unknown>): Onb
 });
 
 type Logged = MindEvent & { idempotencyKey?: string; metadata?: unknown };
+
+/** A FAKE `/repos/onboarding` at commit `c1`, the reads the launch makes of it in `asked`. Its
+ *  files are those of core/repos/onboarding on disk unless `at` names others; `"unborn"` is a
+ *  repo with no commit, and `"gone"` a repo whose reads throw, as a deleted one's do. */
+function onboardingRepo(
+  at: Record<string, string> | "unborn" | "gone" = {
+    ...onboardingFilesUnder("onboarding/"),
+    ...onboardingFilesUnder("tasks/"),
+  },
+) {
+  const asked: string[] = [];
+  const repos = {
+    get: (path: string) => ({
+      tip: async () => {
+        asked.push(`tip ${path}`);
+        if (at === "gone") throw new Error(`repo ${path}: deleted`);
+        return at === "unborn" ? null : "c1";
+      },
+      readFile: async (file: string, { commitOid }: { commitOid: string }) => {
+        asked.push(`readFile ${path} ${file} at ${commitOid}`);
+        return typeof at === "string" ? null : (at[file] ?? null);
+      },
+      modules: async ({ commitOid, dir }: { commitOid: string; dir: string }) => {
+        asked.push(`modules ${path} ${dir} at ${commitOid}`);
+        return Object.fromEntries(
+          Object.entries(typeof at === "string" ? {} : at)
+            .filter(([file]) => file.startsWith(`${dir}/`))
+            .map(([file, text]) => [file.slice(dir.length + 1), text]),
+        );
+      },
+    }),
+  };
+  return { repos, asked };
+}
+
+/** The files of core/repos/onboarding under `dir` (`tasks/`), by their path in the repo. */
+function onboardingFilesUnder(dir: string): Record<string, string> {
+  const folder = new URL(`../../repos/onboarding/${dir}`, import.meta.url);
+  return Object.fromEntries(
+    readdirSync(folder).map((name) => [
+      `${dir}${name}`,
+      readFileSync(new URL(name, folder), "utf8"),
+    ]),
+  );
+}
 
 function fakeMind(
   options: {

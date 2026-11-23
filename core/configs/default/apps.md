@@ -194,7 +194,11 @@ Dash shows what it registered and links to its page.
 ## Onboarding
 
 `apps/onboarding/` is a centered, no-AI setup wizard that gets a new owner from a fresh deploy into
-their Dash chat with `/agents/onboarding`:
+their Dash chat with `/agents/onboarding`. This repo keeps its routes and its steps; the page
+(`index.html`, `public/`), the agent's guides and the cards of the Tasks board are the repo
+`/repos/onboarding`, which a new mind starts with. Every request on `onboarding.<zone>` that the
+app does not answer goes to the worker of that repo at its newest commit (`pageFromRepo` in
+`apps/onboarding/app.ts`). Delete that repo to retire the page: the host then answers 404.
 
 1. **Connect to iterate Cloud (optional):** the owner signs the meld rule with a passkey and takes
    iterate's credit for OpenAI and Exa by iterate's proxy, or skips (`steps/connect-iterate-cloud.ts`).
