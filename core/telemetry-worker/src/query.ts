@@ -52,9 +52,9 @@ function check(node: Record<string, unknown>, parent: unknown, key: string | und
     refuse("an EXTRACT field that is not a word");
 }
 
-// The mind reads every row of the stack's Workers (config.ts `workerNamesThatQueriesReadWhole`);
-// of any other Worker, no log line, and its spans with the columns a request's detail rides in
-// read as null.
+// The mind reads every log line of the stack's Workers (`logs`), and every span of its own
+// (`own`); the spans of the stack's other Workers with the columns a request's detail rides in
+// read as null (./config.ts says why).
 const SPAN_SHAPE = [
   "timestamp",
   "worker",
@@ -78,17 +78,21 @@ const SPAN_SHAPE = [
 ];
 const SPAN_DETAIL = ["status_message", "url_path", "exception", "attributes", "attributes_bytes"];
 
-const BASIN: Record<string, (own: string, since: string) => string> = {
-  events: (_own, since) => `SELECT * FROM telemetry.events WHERE __ingest_ts > ${since}`,
-  spans: (own, since) =>
+const BASIN: Record<string, (names: { own: string; logs: string }, since: string) => string> = {
+  events: (_names, since) => `SELECT * FROM telemetry.events WHERE __ingest_ts > ${since}`,
+  spans: ({ own }, since) =>
     `SELECT ${SPAN_SHAPE.join(", ")}, ${SPAN_DETAIL.map((column) => `CASE WHEN worker IN (${own}) THEN ${column} END AS ${column}`).join(", ")} FROM telemetry.spans WHERE __ingest_ts > ${since}`,
-  logs: (own, since) =>
-    `SELECT * FROM telemetry.logs WHERE worker IN (${own}) AND __ingest_ts > ${since}`,
+  logs: ({ logs }, since) =>
+    `SELECT * FROM telemetry.logs WHERE worker IN (${logs}) AND __ingest_ts > ${since}`,
 };
 
 /** Each table becomes the subquery of its cut. Cloudflare's own datasets, `metrics` among them,
  *  are ./store-query.ts's. */
-export function scoped(sql: string, { own }: { own: readonly string[] }, hours = 24) {
+export function scoped(
+  sql: string,
+  { own, logs }: { own: readonly string[]; logs: readonly string[] },
+  hours = 24,
+) {
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_HOURS)
     throw refused(`hours is a whole number from 1 to ${MAX_HOURS}`);
   // oxlint-disable-next-line iterate/simple-truthiness-check -- `sql` is the mind's word over RPC: a non-string is refused here, not parsed
@@ -103,9 +107,11 @@ export function scoped(sql: string, { own }: { own: readonly string[] }, hours =
   }
   const [statement] = statements;
   if (statements.length !== 1 || statement?.type !== "select") throw refused("one SELECT only");
-  const ownList = own.map((name) => `'${name.replaceAll("'", "''")}'`).join(", ");
+  const listOf = (names: readonly string[]) =>
+    names.map((name) => `'${name.replaceAll("'", "''")}'`).join(", ");
+  const lists = { own: listOf(own), logs: listOf(logs) };
   const inner = Object.fromEntries(
-    Object.entries(BASIN).map(([table, rows]) => [table, parse(rows(ownList, since))[0]!]),
+    Object.entries(BASIN).map(([table, rows]) => [table, parse(rows(lists, since))[0]!]),
   );
   // every property of every node, so no clause can hide a table
   const walk = (node: unknown, parent?: unknown, key?: string): unknown => {

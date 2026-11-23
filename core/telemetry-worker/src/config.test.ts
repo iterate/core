@@ -50,6 +50,13 @@ function stackVariables() {
       telemetryBucketName: "iterate-example-com-telemetry",
       metricsDatasetName: "iterate_example_com_metrics",
       workerNamesThatQueriesReadWhole: ["iterate-example-com-mind", "iterate-example-com-boundary"],
+      workerNamesWhoseLogsQueriesRead: [
+        "iterate-example-com-mind",
+        "iterate-example-com-boundary",
+        "iterate-example-com-auth",
+        "iterate-example-com-secrets",
+        "iterate-example-com-telemetry",
+      ],
       eventsWriterName: "iterate-example-com-mind",
     }),
     ITERATE__OTLP_SECRET: "the-otlp-secret",

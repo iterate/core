@@ -236,10 +236,14 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           accountId,
           telemetryBucketName: names.telemetryBucket,
           metricsDatasetName: names.telemetryMetrics,
-          // Every Worker of the stack: the mind reads the logs and spans of them all, so its crash
-          // job sees a crash of any (core/configs/default/apps/telemetry/crashes.ts). An external
-          // mind writes no log to Cloudflare, and no Worker writes its events.
-          workerNamesThatQueriesReadWhole: [
+          // an external mind writes no log to Cloudflare, and no Worker writes its events
+          workerNamesThatQueriesReadWhole: mindIsInTheStack
+            ? [names.mind, names.boundary]
+            : [names.boundary],
+          // Every Worker of the stack: the mind reads the log lines of them all, so its crash job
+          // sees a crash of any (core/configs/default/apps/telemetry/crashes.ts). Their spans
+          // stay out: a span of the vault's outbound fetch can hold what the vault put in.
+          workerNamesWhoseLogsQueriesRead: [
             ...(mindIsInTheStack ? [names.mind] : []),
             names.boundary,
             names.auth,

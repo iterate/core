@@ -2202,8 +2202,8 @@ export interface IterateContextApi {
    *  `logs.traces`, `logs.issues`, `events.workersInvocations`, and `metrics`, the stack's own
    *  Analytics Engine dataset) it needs no token: Cloudflare's Analytics SQL, as Cloudflare's
    *  docs write it, with no JOIN, subquery, UNION, CTE, comment or `$`; at most 168 hours over the
-   *  three logs and 768 over the other two. It reads the rows of every Worker of the mind's
-   *  stack, and of no other. Over the tables `events`, `logs` and `spans` (R2 SQL, at most 720
+   *  three logs and 768 over the other two. It reads the log lines of every Worker of the
+   *  mind's stack, and the spans of the mind's and the boundary's alone. Over the tables `events`, `logs` and `spans` (R2 SQL, at most 720
    *  hours) it needs the stack's telemetry token, and with none it answers a notice. `query` is the
    *  platform's alone, under this one name: a mind that made its tables with its own token reads
    *  them by `itx.config.telemetryQuery(sql, { hours })` (core/configs/default/telemetry.ts). */

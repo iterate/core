@@ -144,7 +144,7 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
     path: "/exceptions/sweeps",
     title: "Crash job",
     description:
-      "The crash job's tick, every 60 s: each exception/sweep-requested reads what only Cloudflare's runtime saw in the mind Worker and the boundary Worker and puts it on /exceptions (source.from runtime). A sweep that read nothing leaves one exception/sweep-failed an hour (errors.md).",
+      "The crash job's tick, every 60 s: each exception/sweep-requested reads what only Cloudflare's runtime saw in the Workers of the mind's stack and puts it on /exceptions (source.from runtime). A sweep that read nothing leaves one exception/sweep-failed an hour (errors.md).",
   },
   {
     path: "/exceptions",

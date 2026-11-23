@@ -226,12 +226,20 @@ void test("a stack that names no egress gateway binds none, and has the same ITE
         `{"mindId":"${id}","controlPlaneHostname":"example.com","zones":["example.com"],"ownerEmails":["owner@owner.example"],"topology":"${topology}"}`,
         `${name} / ${worker}`,
       );
-    // A QUERY READS EVERY WORKER OF THE STACK, so the crash job sees a crash of any: the mind (when
-    // it is in the stack), the boundary, auth, secrets and telemetry, and no other Worker
-    const read = (JSON.parse(texts.Telemetry!.ITERATE!) as Record<string, unknown>)
-      .workerNamesThatQueriesReadWhole;
+    // A QUERY READS THE LOG LINES OF EVERY WORKER OF THE STACK, so the crash job sees a crash of
+    // any: the mind (when it is in the stack), the boundary, auth, secrets and telemetry, and no
+    // other Worker. THE SPANS STAY the mind's and the boundary's: the vault's can hold a value.
+    const telemetryConfig = JSON.parse(texts.Telemetry!.ITERATE!) as Record<string, unknown>;
     assert.deepEqual(
-      read,
+      telemetryConfig.workerNamesThatQueriesReadWhole,
+      [
+        ...(topology === external ? [] : ["iterate-example-com-mind"]),
+        "iterate-example-com-boundary",
+      ],
+      name,
+    );
+    assert.deepEqual(
+      telemetryConfig.workerNamesWhoseLogsQueriesRead,
       [
         ...(topology === external ? [] : ["iterate-example-com-mind"]),
         "iterate-example-com-boundary",

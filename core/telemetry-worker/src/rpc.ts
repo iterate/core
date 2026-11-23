@@ -24,12 +24,13 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
   async query(...[sql, hours]: Parameters<TelemetryService["query"]>) {
     const config = telemetryWorkerConfigOf(this.env);
     const own = config.workerNamesThatQueriesReadWhole;
+    const logs = config.workerNamesWhoseLogsQueriesRead;
     const run = isTelemetryDatasetQuery(String(sql))
       ? {
           engine: "store" as const,
-          ...storeQuery(sql, { own, metricsDataset: config.metricsDatasetName }, hours),
+          ...storeQuery(sql, { own, logs, metricsDataset: config.metricsDatasetName }, hours),
         }
-      : scoped(sql, { own }, hours);
+      : scoped(sql, { own, logs }, hours);
     const started = Date.now();
     let outcome: number | string = "unanswered";
     let cloudflareCode: number | undefined;

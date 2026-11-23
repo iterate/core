@@ -80,7 +80,11 @@ export type StoreRun = {
 
 export function storeQuery(
   sql: unknown,
-  { own, metricsDataset }: { own: readonly string[]; metricsDataset: string },
+  {
+    own,
+    logs,
+    metricsDataset,
+  }: { own: readonly string[]; logs: readonly string[]; metricsDataset: string },
   hours = 24,
   now = Date.now(),
 ): StoreRun {
@@ -113,8 +117,11 @@ export function storeQuery(
   const params: Record<string, string> = {
     itx_since: new Date(now - hours * 3_600_000).toISOString(),
   };
-  if (worker) own.forEach((name, index) => (params[`itx_worker_${index}`] = name));
-  const ownList = own.map((_name, index) => `$itx_worker_${index}`).join(", ");
+  // WHOSE ROWS: of the spans, the mind's own Workers'; of every other dataset, the whole stack's
+  // (./config.ts `workerNamesWhoseLogsQueriesRead` says why the spans stay out)
+  const names = dataset === "logs.traces" ? own : logs;
+  if (worker) names.forEach((name, index) => (params[`itx_worker_${index}`] = name));
+  const ownList = names.map((_name, index) => `$itx_worker_${index}`).join(", ");
   const cut = worker
     ? `${worker} IN (${ownList}) AND ${time} >= $itx_since`
     : `${time} >= $itx_since`;

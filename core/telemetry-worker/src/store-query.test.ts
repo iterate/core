@@ -19,12 +19,32 @@ registerHooks({
 });
 const { Telemetry } = await import("./rpc.ts");
 
-const scope = {
-  own: ["iterate-example-com-mind", "iterate-example-com-boundary"],
-  metricsDataset: "iterate_example_com_metrics",
-};
+const OWN = ["iterate-example-com-mind", "iterate-example-com-boundary"];
+// the cut's shape is the same for any list: most tests here give the logs the same two names
+const scope = { own: OWN, logs: OWN, metricsDataset: "iterate_example_com_metrics" };
 const NOW = Date.parse("2026-11-22T12:00:00.000Z");
 const cut = (sql: string, hours?: number) => storeQuery(sql, scope, hours, NOW);
+
+void test("WHOSE ROWS: the logs, issues and invocations of every Worker of the stack; the spans of the mind's own Workers alone", () => {
+  const stack = [
+    ...OWN,
+    "iterate-example-com-auth",
+    "iterate-example-com-secrets",
+    "iterate-example-com-telemetry",
+  ];
+  const read = (sql: string) =>
+    Object.entries(storeQuery(sql, { ...scope, logs: stack }, 24, NOW).params)
+      .filter(([name]) => name.startsWith("itx_worker_"))
+      .map(([, worker]) => worker);
+  for (const dataset of ["logs.workersLogs", "logs.issues", "events.workersInvocations"])
+    assert.deepEqual(read(`SELECT count() FROM ${dataset}`), stack, dataset);
+  // a span of the vault's outbound fetch can hold a secret's value: the vault's spans stay out
+  assert.deepEqual(read("SELECT count() FROM logs.traces"), OWN);
+  assert.match(
+    storeQuery("SELECT count() FROM logs.traces", { ...scope, logs: stack }, 24, NOW).query,
+    /WHERE \(serviceName IN \(\$itx_worker_0, \$itx_worker_1\) AND startTime >= \$itx_since\) AND \(TRUE\)/,
+  );
+});
 
 const refusedWith = (sql: string, words: RegExp, hours?: number) =>
   assert.throws(
@@ -393,6 +413,7 @@ function stackVariables() {
       telemetryBucketName: "iterate-example-com-telemetry",
       metricsDatasetName: "iterate_example_com_metrics",
       workerNamesThatQueriesReadWhole: ["iterate-example-com-mind", "iterate-example-com-boundary"],
+      workerNamesWhoseLogsQueriesRead: ["iterate-example-com-mind", "iterate-example-com-boundary"],
       eventsWriterName: "iterate-example-com-mind",
     }),
     ITERATE__OTLP_SECRET: "the-otlp-secret",

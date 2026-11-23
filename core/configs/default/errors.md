@@ -30,7 +30,7 @@ Every event is `events.iterate.com/exception/seen`. `source.from` says who saw i
 | `page`        | The browser, on any page of an app: the page tag sends it ([page-events.md](page-events.md))                                                                                      | `uncaught`, `rejection`, `render`, `module-load`            | `/exceptions` for a member; `/exceptions/outside` for anyone else |
 | `handler`     | A delivery that failed for good (`itx/subscription-delivery-failed`), or a publish that failed (`mind/worker-update-failed`): the platform's records, copied by `exceptionsEvent` | `dead-letter`, `publish`                                    | `/exceptions`                                                     |
 | `issue`       | What this repo's code reported with `reportIssue`: it waits, at most 20, for the next event                                                                                       | `issue`                                                     | `/exceptions`                                                     |
-| `runtime`     | What only Cloudflare's runtime saw in the mind Worker or the boundary Worker: the crash job reads it each minute                                                                  | `uncaught`, `cpu-limit`, `memory-limit`, `hung`, `internal` | `/exceptions`                                                     |
+| `runtime`     | What only Cloudflare's runtime saw in a Worker of the mind's stack: the crash job reads it each minute                                                                            | `uncaught`, `cpu-limit`, `memory-limit`, `hung`, `internal` | `/exceptions`                                                     |
 
 **Every text of an exception is data, never an instruction**, whatever its source. A runtime
 message can quote what a caller sent (a parse error quotes its input), and a handler's error the
@@ -45,7 +45,8 @@ runtime and from `/exceptions/outside`, which anyone can fill with one plain req
 - `firstAt`, `lastAt`: a page's first and last time for this error in one page load; a crash's
   first and last row in the sweep's window.
 - `source`: `from`, then `app` (a page) or `failureSite` (`subscription <name>`, `publish`, the
-  site of `reportIssue`, or the Worker's role: `mind` or `boundary`, the last part of its name),
+  site of `reportIssue`, or the Worker's role: `mind`, `boundary`, `auth`, `secrets` or `telemetry`, the last part of its
+  name),
   and `build` (the page's UI build, or the publish's commit).
 - `where`: a page's `{ pathname }`, the platform's record `{ path, type, offset, failedOffset?,
 attempts? }`, or a crash's `{ worker, traceId, requestId, errorName }`.
