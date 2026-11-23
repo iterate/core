@@ -6,9 +6,8 @@
 //
 // EVERY FRAGMENT SHOWS THE APPEND. A script does each thing by `itx.append`, and the scope has no
 // wrapper that hides a fact (script-envelope.ts). A channel's fragment is in the file of its channel:
-// `SLACK_MESSAGES` in slack.ts, `WEB_MESSAGES` in the mind's agent-ui.ts. So an agent that only
-// answers in Slack is not told of the web. The two here are for every agent: words to another agent,
-// and a subagent.
+// `WEB_MESSAGES` in the mind's agent-ui.ts. So an agent is told only of the channels it answers in.
+// The two here are for every agent: words to another agent, and a subagent.
 //
 // A question on the side (`llm-request/requested` of purpose `side`) has no fragment yet. The
 // script's scope has `llmRequestOffset`, the offset that such a request names as its base.

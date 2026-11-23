@@ -3,8 +3,8 @@
 // LLM request protocol is (agent/llm-request.ts). The agent's own contract names no channel.
 //
 //   agent-ui/message-received { message, files?, client? }
-//       What the chat's composer creates, on the agent's own context (agent-kinds/agent.ts, the
-//       view). The platform stamps who wrote it (`event.source`).
+//       What the chat's composer creates, on the agent's own context, with the message's files
+//       stored first (the kit's AgentChat). The platform stamps who wrote it (`event.source`).
 //   agent-ui/agent-requested { model? }
 //       Start the agent at this path, on `model` if it names one, with no words yet.
 //   agent-ui/message-sent { message }
@@ -14,8 +14,8 @@
 // that say who sent them and where. It reads the platform's own channel the same way:
 //
 //   agent/message-received { message, files?, from?, trigger? }
-//       `itx.agents.get(path).message()`. Other kinds of agent, a tool and the platform's file
-//       upload use it. It is not this file's fact.
+//       `itx.agents.get(path).message()`. Other kinds of agent, a tool, and a page that cannot
+//       store files use it. It is not this file's fact.
 //
 // `agentUiContext` and `agentsApiContext` are THE TRANSCRIPTION: each gives the payload of ONE
 // `agent/context-added` of role `user`. The person's words come first, then one line that says who

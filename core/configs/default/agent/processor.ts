@@ -30,8 +30,8 @@
 // NO GATE. An input starts what its policy says, at once. `agent/llm-request-triggered` starts a
 // request now, whoever writes it. Every script runs. The next request waits
 // for the script of a response. Each of these is one small protected method (`inputStarts`,
-// `scriptMayRun`, `wakeTimesMs`): a subclass changes one. agent-with-decision-models.ts lets
-// someone decide first; agent-with-background-scripts.ts lets the chain go on past a slow script.
+// `scriptMayRun`, `wakeTimesMs`): a subclass changes one, to let someone decide first, or to let
+// the chain go on past a slow script. The template holds no such subclass.
 //
 // EVERY WAIT HAS A STATED END, written as a schedule fact in the log: a request's deadline, a retry's
 // back-off, the debounce, a request no processor takes. Nothing sleeps.
@@ -70,7 +70,7 @@ type LlmRequestResult = Extract<
 
 export class Agent extends StreamProcessor<AgentState, AgentEvent> {
   /** A subclass with facts or state of its own puts its own contract here, one that lists this one
-   *  in its `processorDeps` (agent-with-decision-models.ts). */
+   *  in its `processorDeps`. */
   readonly contract = AgentContract;
   /** RUNTIME STATE, gone with the host and never read by a rule: what this incarnation has
    *  appended and not yet read back, so that it writes nothing twice. */
@@ -212,8 +212,7 @@ export class Agent extends StreamProcessor<AgentState, AgentEvent> {
     ];
   }
 
-  /** The requests to make now. A subclass that asks several models at once returns more
-   *  (agent-with-hedged-llm-requests.ts). */
+  /** The requests to make now. A subclass that asks several models at once returns more. */
   protected llmRequestsOwed(state: AgentState): Obligation[] {
     const { model } = state.config.llm;
     const scripts = this.scriptsAsked();

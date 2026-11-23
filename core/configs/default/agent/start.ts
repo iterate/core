@@ -117,7 +117,7 @@ export async function agentStartEvents(
 /** THE SIZE OF ONE `agent/context-copied`: the JSON of its items, in characters. The platform's
  *  ceiling for one event is 8 MiB of JSON (core/itx/src/stream/stream.ts `EVENT_BODY_MAX_CHARS`);
  *  this is far under it, as the request maker's own fact is (llm-api.ts `MAX_INPUT_ITEMS_CHARS`). */
-const COPY_PART_MAX_CHARS = 1_000_000;
+export const COPY_PART_MAX_CHARS = 1_000_000;
 
 /** THE SIZE OF THE WHOLE COPY. The child's facts go in one append, and Workers RPC carries at most
  *  32 MiB in one message. */

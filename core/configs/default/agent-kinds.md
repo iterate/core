@@ -84,6 +84,9 @@ subagents and the agents of mail, X, Meet and Slack stay iterate's own. The kind
   `agent/context-added`, and starts a subagent on `agent/subagent-requested`. Its view is
   iterate's chat.
 - `agent-ui.ts`: the Dash's chat as a channel. `agent-prompt.ts`: what the agent is told.
+- `agent-tests/`: the agent's unit tests, and `agent-kinds/agent.test.mjs`: the kind's. Run them
+  from the repo's root with `node --test "agent-tests/*.test.mjs" agent-kinds/agent.test.mjs`. They
+  are not in `agent/`, because every file of that folder is the facets' code.
 - A model: `config.llm.model`, `<provider>/<model>` as the AI Gateway names it.
 
 NEW MINDS ONLY. The Dash starts the kind where it knows the kind's file, and `init.ts` tells it of

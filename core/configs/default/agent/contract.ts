@@ -43,7 +43,7 @@
 //                                      worker answers: agent/subagent-started or -failed.
 //
 // In the base nobody decides first: an input starts what its policy says, at once, and every script
-// runs. A subclass lets someone decide first (agent-with-decision-models.ts).
+// runs. A subclass may let someone decide first (processor.ts `inputStarts`, `scriptMayRun`).
 //
 // A request ENDS at the first of `llm-request/settled` and `llm-request/deadline-passed`. A response
 // COUNTS (its script runs) only when the request succeeded and nothing overtook it: no input came to

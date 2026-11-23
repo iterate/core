@@ -214,7 +214,7 @@ export type LlmApiDeps = {
 
 /** THE LARGEST FILE A REQUEST INLINES, in bytes. An image of this size is under Anthropic's limit
  *  of 10 MB in base64. */
-const MAX_INLINE_FILE_BYTES = 7_000_000;
+export const MAX_INLINE_FILE_BYTES = 7_000_000;
 
 /** The reducer's version. A bump re-reduces the log from offset 0, which starts nothing again:
  *  a request that has its settled fact is not open. */
@@ -684,7 +684,8 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
       // estimated at four characters a token.
       const spent = response.usage || estimatedUsage(inputChars, response.text);
       const written = {
-        partialText: response.text,
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- an attempt that got no text writes no `partialText`, not an empty one
+        ...(response.text && { partialText: response.text }),
         ...(firstEventAtMs !== null && { usage: priced(config.prices, request.model, spent) }),
       };
       result = live.cancelledBecause

@@ -10,9 +10,13 @@ test("a config template's and a seed repo's Worker code imports only the platfor
     const root = path.resolve(import.meta.dirname, "../..", folder);
     return (
       readdirSync(root, { recursive: true, encoding: "utf8" })
-        // `public/` is served to browsers, which never load the platform's modules
+        // `public/` is served to browsers, which never load the platform's modules. `agent-tests/`
+        // holds the agent's Node tests, which no Worker loads: they import the platform's test
+        // support (`iterate/stream/test-support`).
         .filter(
-          (file) => /\.(ts|tsx|js|mjs)$/.test(file) && !/(^|\/)(node_modules|public)\//.test(file),
+          (file) =>
+            /\.(ts|tsx|js|mjs)$/.test(file) &&
+            !/(^|\/)(node_modules|public|agent-tests)\//.test(file),
         )
         .flatMap((file) =>
           [
