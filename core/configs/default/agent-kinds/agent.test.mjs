@@ -39,13 +39,18 @@ registerHooks({
 
 const { default: agentKind } = await import("./agent.ts");
 const { kindsForTheDash } = await import("./index.ts");
+const { agentPrompt } = await import("../agent-prompt.ts");
 
 const T = "events.iterate.com/";
 /** A fake root: each context's log. */
 function fakeItx(logs = {}) {
   return {
     logs,
+    // the config repo, as the prompt reads it: no file
+    repos: { get: () => ({ readFile: async () => null }) },
     cd: (path) => ({
+      rewriteRules: { list: async () => [] },
+      whoami: async () => ({ path }),
       append: async (...events) => {
         (logs[path] ??= []).push(...events);
         return events;
@@ -115,6 +120,54 @@ test("a person's first words reach the agent when they are handled before the re
   assert.equal(added.length, 1);
   assert.match(JSON.stringify(added[0].payload), /hello/);
   await agentKind.processEvent({ event: { ...start, path, offset: 1 }, itx });
+});
+
+test("the platform can load the agent's facets: the folder names the entry module of the facet rows", async () => {
+  // a facet row's source is the folder agent/ of the config repo, and the platform reads the entry
+  // module from that folder's package.json: without it no facet loads, and the agent never answers
+  const manifest = JSON.parse(
+    readFileSync(new URL("../agent/package.json", import.meta.url), "utf8"),
+  );
+  const itx = fakeItx();
+  const path = "/agents/people/ada/agent/2026-11-23t10-00-02";
+  await newAgentFromTheDash(itx, path);
+  const entries = facetRows(itx.logs[path])
+    .filter((row) => !row.payload.name.startsWith("agent-catalog-"))
+    .map((row) => row.payload.target[2][2].mainModule);
+  assert.equal(entries.length, 5);
+  assert.deepEqual([...new Set(entries)], [manifest.main]);
+  assert.equal(readdirSync(new URL("../agent/", import.meta.url)).includes(manifest.main), true);
+});
+
+test("a new agent gets its system prompt once it starts, and a fork gets none", async () => {
+  const itx = fakeItx();
+  const path = "/agents/people/ada/agent/2026-11-23t10-00-03";
+  await newAgentFromTheDash(itx, path);
+  // the start's own fact, as every-event.ts hands it to the hook
+  const started = itx.logs[path].find((e) => e.type === `${T}agent/configured`);
+  assert.equal(started.payload.kind, "agent");
+  await agentPrompt(itx, { ...started, path });
+  const prompts = itx.logs[path].filter(
+    (e) => e.type === `${T}agent/configured` && typeof e.payload.config?.instructions === "string",
+  );
+  assert.equal(prompts.length, 1);
+  // the prompt says how words reach the person
+  assert.match(prompts[0].payload.config.instructions, /agent-ui\/message-sent/);
+  // a fork's start brings its parent's instructions: no prompt of its own
+  const fork = "/agents/people/ada/agent/2026-11-23t10-00-03/fork";
+  await agentPrompt(itx, {
+    type: `${T}agent/configured`,
+    path: fork,
+    payload: { kind: "agent", config: { instructions: "the parent's" } },
+  });
+  assert.equal(itx.logs[fork], undefined);
+  // the platform's own agents are not this hook's
+  await agentPrompt(itx, {
+    type: `${T}agent/configured`,
+    path: "/agents/onboarding",
+    payload: { kind: "agent", config: {} },
+  });
+  assert.equal(itx.logs["/agents/onboarding"], undefined);
 });
 
 test("the kind does nothing on the onboarding agent or on any agent of the platform", async () => {

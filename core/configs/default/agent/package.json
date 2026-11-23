@@ -1,0 +1,6 @@
+{
+  "name": "agent",
+  "type": "module",
+  "main": "facets.ts",
+  "types": "files.d.ts"
+}

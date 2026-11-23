@@ -145,10 +145,11 @@ const MODEL =
   "Do not search for it.";
 
 /** The start's `agent/configured` with no instructions (agent/start.ts): an agent that is no fork
- *  starts there. */
+ *  starts there. The start's config has no `instructions` key at all, so the key is optional: a
+ *  bare `z.undefined()` wants the key there, and then no agent gets a prompt. */
 const StartWithoutInstructions = z.object({
   kind: z.literal("agent"),
-  config: z.object({ instructions: z.undefined() }).optional(),
+  config: z.object({ instructions: z.undefined().optional() }).optional(),
 });
 
 async function shortHash(text: string): Promise<string> {
