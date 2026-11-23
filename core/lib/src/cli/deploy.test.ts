@@ -1223,30 +1223,58 @@ test("unfinishedDeployIn matches only a marker for the same account, stage, doma
   expect(source).toContain("deployed && !resuming?.firstDeploy");
 });
 
-test("the deploy opens no page until the pages a browser asks first work: the sign-in page, the apex, onboarding.<zone> and, for a new mind, the first owner's way through Cloudflare Access", async () => {
+test("the deploy opens no page until the pages a browser asks first work: iterate.<domain>, the apex, onboarding.<zone>, dash.<zone> and, for a new mind, the app description and Cloudflare Access", async () => {
   const mind = { controlPlaneHostname: "iterate.ada-labs.com", zone: "ada-labs.com" };
+  const CONTROL_PLANE = "https://iterate.ada-labs.com/";
   const SIGN_IN = "https://iterate.ada-labs.com/sign-in";
+  const OAUTH_META = "https://iterate.ada-labs.com/.well-known/oauth-authorization-server";
   const APEX = "https://ada-labs.com/";
   const ONBOARDING = "https://onboarding.ada-labs.com/";
+  const DASH = "https://dash.ada-labs.com/";
+  const ONBOARDING_APP = "https://onboarding.ada-labs.com/.well-known/iterate-app";
   const ACCESS = "https://iterate.ada-labs.com/sign-in/access";
   const pages = firstPagesOf({ ...mind, firstDeploy: true });
-  expect(pages.map((page) => page.address)).toEqual([SIGN_IN, APEX, ONBOARDING, ACCESS]);
+  expect(pages.map((page) => page.address)).toEqual([
+    CONTROL_PLANE,
+    SIGN_IN,
+    OAUTH_META,
+    APEX,
+    ONBOARDING,
+    DASH,
+    ONBOARDING_APP,
+    ACCESS,
+  ]);
   // a deploy over a mind asks no first owner's way, and takes the mind's own 404 for an app
   // that its owner removed
   const over = firstPagesOf({ ...mind, firstDeploy: false });
-  expect(over.map((page) => page.address)).toEqual([SIGN_IN, APEX, ONBOARDING]);
-  expect(over[2]!.works({ status: 404, location: null })).toBe(true);
-  expect(over[2]!.works({ status: 522, location: null })).toBe(false);
-  // a new mind's Onboarding app answers 401 to Node's fetch, which is no navigation; its 404
-  // says that the app is not there yet
-  expect(pages[2]!.works({ status: 401, location: null })).toBe(true);
-  expect(pages[2]!.works({ status: 404, location: null })).toBe(false);
+  expect(over.map((page) => page.address)).toEqual([
+    CONTROL_PLANE,
+    SIGN_IN,
+    OAUTH_META,
+    APEX,
+    ONBOARDING,
+    DASH,
+  ]);
+  expect(over[4]!.works({ status: 404, location: null })).toBe(true);
+  expect(over[4]!.works({ status: 522, location: null })).toBe(false);
+  // a new mind's Onboarding and Dash apps answer 401 to Node's fetch, which is no navigation; a
+  // 404 says that the app is not there yet
+  expect(pages[4]!.works({ status: 401, location: null })).toBe(true);
+  expect(pages[4]!.works({ status: 404, location: null })).toBe(false);
+  expect(pages[5]!.works({ status: 401, location: null })).toBe(true);
+  expect(pages[5]!.works({ status: 404, location: null })).toBe(false);
+  expect(pages[6]!.works({ status: 200, location: null })).toBe(true);
+  expect(pages[6]!.works({ status: 404, location: null })).toBe(false);
 
   type Answer = { status: number; location: string | null } | { error: string };
   const works: Record<string, Answer> = {
+    [CONTROL_PLANE]: { status: 302, location: "https://dash.ada-labs.com/" },
     [SIGN_IN]: { status: 200, location: null },
+    [OAUTH_META]: { status: 200, location: null },
     [APEX]: { status: 200, location: null },
     [ONBOARDING]: { status: 401, location: null },
+    [DASH]: { status: 401, location: null },
+    [ONBOARDING_APP]: { status: 200, location: null },
     [ACCESS]: {
       status: 302,
       location: "https://ada.cloudflareaccess.com/cdn-cgi/access/login/iterate.ada-labs.com",

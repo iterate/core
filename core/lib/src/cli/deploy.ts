@@ -357,16 +357,15 @@ type FirstPage = {
 
 /** THE PAGES THAT A PERSON'S BROWSER ASKS FIRST AFTER A DEPLOY. The command opens no page until
  *  each of them works from this computer, over HTTPS with no redirect followed:
- *   - the sign-in page answers 200;
+ *   - `https://<controlPlaneHostname>/`, `/sign-in`, and `/.well-known/oauth-authorization-server`:
+ *     proves `iterate.<domain>` (boundary + auth Worker + OAuth issuer metadata) is live;
  *   - the apex of the first zone answers below 400: the mind's own code (that request is also
  *     the one at which a new mind is born);
- *   - `https://onboarding.<zone>/`, THE PAGE THAT THE COMMAND OPENS: the wildcard's record,
- *     certificate and route are others than the apex's, and a control plane at the apex proves
- *     none of them. Below 500 says that the edge reached the mind. A new mind runs the template,
- *     whose Onboarding app answers 401 here: Node's fetch always says `sec-fetch-mode: cors`,
- *     which an app reads as a call and no navigation (a browser gets the redirect to the
- *     sign-in; core/boundary-worker/src/mind-host-sign-in.ts). Its 404 says the app is not
- *     there yet.
+ *   - `https://onboarding.<zone>/` and `https://dash.<zone>/` (plus on a first deploy
+ *     `https://onboarding.<zone>/.well-known/iterate-app` returning 200): proves the wildcard
+ *     record, certificate, route, and config Worker apps are live. Node's fetch sends
+ *     `sec-fetch-mode: cors`, so member apps answer 401 here (a browser redirects to sign-in);
+ *     404 says the app is not live yet.
  *   - for a new mind, `/sign-in/access`, the one way in for an owner with no passkey yet
  *     (core/auth-worker/src/access-sign-in.ts): Cloudflare Access redirects it to the team's
  *     sign-in. Until the Access application is live at the edge, the auth Worker itself answers
@@ -377,15 +376,24 @@ export function firstPagesOf(mind: {
   firstDeploy: boolean;
 }): FirstPage[] {
   const controlPlane = `https://${mind.controlPlaneHostname}`;
+  const memberHostWorks = ({ status }: { status: number }) =>
+    mind.firstDeploy ? status < 400 || status === 401 : status < 500;
   return [
+    { address: `${controlPlane}/`, works: ({ status }) => status < 400 },
     { address: `${controlPlane}/sign-in`, works: ({ status }) => status === 200 },
-    { address: `https://${mind.zone}/`, works: ({ status }) => status < 400 },
     {
-      address: onboardingUrlOf(mind.zone),
-      works: ({ status }) => (mind.firstDeploy ? status < 400 || status === 401 : status < 500),
+      address: `${controlPlane}/.well-known/oauth-authorization-server`,
+      works: ({ status }) => status === 200,
     },
+    { address: `https://${mind.zone}/`, works: ({ status }) => status < 400 },
+    { address: onboardingUrlOf(mind.zone), works: memberHostWorks },
+    { address: `https://dash.${mind.zone}/`, works: memberHostWorks },
     ...(mind.firstDeploy
       ? [
+          {
+            address: `https://onboarding.${mind.zone}/.well-known/iterate-app`,
+            works: ({ status }: { status: number }) => status === 200,
+          },
           {
             address: `${controlPlane}/sign-in/access`,
             works: ({ status, location }: { status: number; location: string | null }) =>
