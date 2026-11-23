@@ -140,13 +140,17 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
     await this.#mind().receiveEmail(mail);
   }
 
-  /** THE CONFIG'S `email` HOOK, over the link (iterate/workers `MindTarget.email`). `forward` is a
-   *  Workers RPC stub of the boundary's invocation here. capnweb sends its own stubs, its targets
-   *  and plain functions, so a function of this object's calls the stub, and capnweb hands that
-   *  function to the far end as a stub of its own: the home lab calls back through it, and it
-   *  lasts while this call does. */
-  async email({ mail, forward }: Parameters<MindTarget["email"]>[0]) {
-    await this.#mind().email({ mail, forward: (to) => forward(to) });
+  /** THE CONFIG'S `email` HOOK, over the link (iterate/workers `MindTarget.email`). `save` and
+   *  `forward` are Workers RPC stubs of the boundary's invocation here. capnweb sends its own
+   *  stubs, its targets and plain functions, so a function of this object's calls each stub, and
+   *  capnweb hands that function to the far end as a stub of its own: the home lab calls back
+   *  through it, and it lasts while this call does. */
+  async email({ mail, save, forward }: Parameters<MindTarget["email"]>[0]) {
+    await this.#mind().email({
+      mail,
+      ...(save && { save: () => save() }),
+      forward: (to) => forward(to),
+    });
   }
 
   async runAct(held: Parameters<MindTarget["runAct"]>[0]) {

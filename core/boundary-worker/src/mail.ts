@@ -39,19 +39,22 @@ const FACTS_MS = 5_000;
  *  mind, goes to the mind, with what the boundary knows of its sender. ONE DELIVERY, IN THIS ORDER
  *  (check the code against it):
  *
- *  1. `mind.receiveEmail`: the mind stores the mail. This is the one step whose failure fails the
- *     delivery, so Cloudflare delivers the mail again; the mind takes the same mail once, however
- *     often it is delivered.
+ *  1. `mind.receiveEmail`: the mind stores the mail's files and records `email/received`. This is
+ *     the one step whose failure fails the delivery, so Cloudflare delivers the mail again; the
+ *     mind takes the same mail once, however often it is delivered.
  *  2. With `MAIL_FORWARD_TO` (the stack's `mail.forwardTo`, the older way, which goes once the
  *     minds forward in their own `email`), the stack's fixed forward, below.
- *  3. `mind.email`: the config's `email` hook, with the mail and the delivery's forward
- *     (`MailForward`), under the limits above and caught: from here on nothing fails the delivery.
- *  4. THE FORWARD ENDS at the instant the hook returns or throws, its own time runs out, or the
- *     last deadline passes: one synchronous flag (`MailForward.end`), set in the callback that
- *     sees it, before any await. The last statement before Cloudflare's call checks the flag and
- *     both limits BY THE CLOCK, with nothing awaited between. A forward after the end throws
- *     EXPIRED, and Cloudflare is not asked. The mind ends its own side the instant the config's
- *     function settles (core/mind-worker/src/integrations/email-hook.ts).
+ *  3. `mind.email`: the config's `email` hook, with the mail, the delivery's save (`saveOf`: the
+ *     call of step 1 again, with the events alone, at most once) and its forward (`MailForward`),
+ *     under the limits above and caught: from here on nothing fails the delivery, a save that
+ *     fails neither: the hook sees that failure.
+ *  4. THE SAVE AND THE FORWARD END at the instant the hook returns or throws, its own time runs
+ *     out, or the last deadline passes: one synchronous flag (`MailForward.end`), set in the
+ *     callback that sees it, before any await. The last statement before Cloudflare's call, and
+ *     before the save's call of the mind, checks the flag and both limits BY THE CLOCK, with
+ *     nothing awaited between. A save or a forward after the end throws EXPIRED, and calls
+ *     nothing. The mind ends its own side the instant the config's function settles
+ *     (core/mind-worker/src/integrations/email-hook.ts).
  *  5. The forwards that the config called before the end are waited for, up to the last deadline.
  *     Each that Cloudflare answers is `email/forwarded`; each unanswered then is `email/forwarded`
  *     with `answered: false`.
@@ -104,7 +107,8 @@ export async function receivedMail(
     // steps 3 to 6
     await hook(mind, forwarding, mail.raw.path, limits, {
       mail: { ...mail, canBeForwarded: canBeForwarded !== false },
-      // A function of this invocation's: Workers RPC and capnweb each pass it as a stub.
+      // Functions of this invocation's: Workers RPC and capnweb each pass them as stubs.
+      save: saveOf(forwarding, mind, received),
       forward: (to) => forwarding.forward(to),
     });
   } finally {
@@ -280,6 +284,32 @@ class MailForward {
   end() {
     this.#live = false;
   }
+
+  /** Not yet ended, and no limit of the hook passed by the clock: the delivery's `save` checks it,
+   *  as `forward` checks the same before Cloudflare's call. */
+  get live() {
+    return this.#live && !this.pastLimits();
+  }
+}
+
+/** THE SAVE OF ONE DELIVERY (iterate/email `EmailHookArgs.save`): step 1's call of the mind once
+ *  more, with the events alone, since step 1 consumed the files' streams and stored them. The
+ *  mind takes the same `email/received` once, so a mail that step 1 recorded answers at once. It
+ *  calls the mind at most once in a delivery: a second call gets the first one's promise. It lives
+ *  as the delivery's forward does: after step 4 it throws EXPIRED and calls nothing. Its failure
+ *  is the hook's to see, never the delivery's. */
+function saveOf(
+  forwarding: MailForward,
+  mind: Pick<MindTransport, "receiveEmail">,
+  received: ReceivedEmail,
+) {
+  let saving: Promise<void> | undefined;
+  return async () => {
+    if (!forwarding.live)
+      throw codedError("EXPIRED", "not saved: the mail's delivery has ended, and with it its save");
+    saving ||= mind.receiveEmail({ events: received.events, files: [] });
+    await saving;
+  };
 }
 
 /** One append of a fact of the mail that has not answered yet. */

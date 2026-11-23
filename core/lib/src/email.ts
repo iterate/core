@@ -1,9 +1,11 @@
 // email.ts — EMAIL's events and threads: a mind's mail, every message in or out on one context,
 // `/integrations/email`, inbound as `email/received` and each
 // `itx.email.send` as `email/sent` (`email/send-failed` when the provider refuses it), all appended
-// by the platform (core/mind-worker/src/integrations/email.ts). What the config's `email` hook did
-// with a received mail is the platform's too: each forward (`email/forwarded`) and each failure of
-// the hook (`email/hook-failed`). Two are a mind's own: its config
+// by the platform (core/mind-worker/src/integrations/email.ts). The platform records each received
+// mail before the config's `email` hook runs, and the hook's `save()` asks the platform to record
+// it: either way the platform appends `email/received`, never the config. What the hook did with
+// the mail is the platform's too: each forward (`email/forwarded`) and each failure of the hook
+// (`email/hook-failed`). Two are a mind's own: its config
 // holds another mind's mail at a hop limit (`email/mind-mail-held`), which a member may set
 // (`email/mind-hop-limit-configured`).
 // The first-party `email` facet there folds them into threads (core/mind-worker/src/email/processor.ts); a config
@@ -266,7 +268,8 @@ export type ForwardableMail = z.infer<
 > & { canBeForwarded: boolean };
 
 /** WHAT THE CONFIG'S `email` HOOK IS HANDED, for one delivery of one mail (iterate/sdk
- *  `IterateConfigEntrypoint.email`). `forward(to)` sends the original, as it arrived, to a
+ *  `IterateConfigEntrypoint.email`). `save()` keeps the mail: see its own comment. `forward(to)`
+ *  sends the original, as it arrived, to a
  *  destination address that a person verified in the mind's Cloudflare account, and records
  *  `email/forwarded`. It works only while the delivery is live, and it throws a coded error:
  *  NOT_FORWARDABLE (Cloudflare forwards no mail whose sender it did not prove), FORWARDED_BEFORE
@@ -276,6 +279,13 @@ export type ForwardableMail = z.infer<
  *  message, `expiredIfTheDeliveryIsGone` below). */
 export type EmailHookArgs = {
   mail: ForwardableMail;
+  /** KEEPS THE MAIL: the fact `email/received` on `/integrations/email`, which `processEvent` then
+   *  gets. The platform appends the fact, so what it says of the sender (`sender`,
+   *  `authentication`) is the platform's words, not the config's. Once for each mail: a second
+   *  call, or a call in a redelivery, records nothing new and answers. It works only while the
+   *  delivery is live, as `forward` does, and throws EXPIRED after. The platform also records the
+   *  mail itself before the hook runs, so a config that does not call `save` loses nothing yet. */
+  save(): Promise<void>;
   forward(to: string): Promise<void>;
 };
 
@@ -289,7 +299,7 @@ export function emailForwardedKey(raw: string, to: string): string {
 /** The reduced threads (the contract's `stateSchema`). */
 export type EmailState = ProcessorState<typeof EmailContract>;
 
-/** WHAT A FORWARD THROWS WHEN ITS DELIVERY IS GONE, with no code: the runtime's words for a
+/** WHAT A SAVE OR A FORWARD THROWS WHEN ITS DELIVERY IS GONE, with no code: the runtime's words for a
  *  capability kept past the call (Workers RPC "RPC stub used after being disposed.", capnweb "This
  *  RpcImportHook was already disposed."), for an invocation that ended under the call ("The
  *  execution context responding to this call was canceled.") and for its connection ("Network
@@ -306,5 +316,8 @@ const DELIVERY_GONE =
 export function expiredIfTheDeliveryIsGone(error: unknown) {
   const words = error instanceof Error ? error.message : String(error);
   if (errorCode(error) || !DELIVERY_GONE.test(words)) return error;
-  return codedError("EXPIRED", `the mail's delivery has ended, and its forward with it (${words})`);
+  return codedError(
+    "EXPIRED",
+    `the mail's delivery has ended, and its save and forward with it (${words})`,
+  );
 }

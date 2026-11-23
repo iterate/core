@@ -5,9 +5,11 @@ export default class extends IterateConfigEntrypoint {
   // Every durable event of the mind, and the init case: AGENTS.md.
   async processEvent(_args: IterateConfigProcessEventArgs) {}
 
-  // The platform has stored this mail on /integrations/email already; replies and agents react to
-  // it in processEvent. Forward it here, while the delivery is live: await forward("a@b.c").
-  async email(_args: EmailHookArgs) {}
+  // Every mail, while its delivery is live. save() keeps it on /integrations/email, and replies and
+  // agents react to it in processEvent. Forward it here too: await forward("a@b.c").
+  async email({ save }: EmailHookArgs) {
+    await save();
+  }
 
   // Every hostname of the mind's zones but its control-plane hostname: AGENTS.md. An app's hostname is
   // `<label>.<zone>`, so the switch is on the first label; any other hostname is the homepage's:

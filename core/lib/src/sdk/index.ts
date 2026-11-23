@@ -507,9 +507,16 @@ export abstract class IterateConfigEntrypoint<
   async deliverEmail(args: EmailHookArgs): Promise<"done" | "missing"> {
     const email = implemented(this, "email");
     if (!email) return "missing";
-    // THE CONFIG'S OWN LINK TO THE FORWARD ENDS WITH THE DELIVERY: once the mind's call has
-    // returned, a call of the lent `forward` throws HERE, in this runtime, before the mind sees
-    // it. So this side says EXPIRED too (iterate/email `expiredIfTheDeliveryIsGone`).
+    // THE CONFIG'S OWN LINK TO `save` AND `forward` ENDS WITH THE DELIVERY: once the mind's call
+    // has returned, a call of either throws HERE, in this runtime, before the mind sees it. So this
+    // side says EXPIRED too (iterate/email `expiredIfTheDeliveryIsGone`).
+    const save = async () => {
+      try {
+        await args.save();
+      } catch (error) {
+        throw expiredIfTheDeliveryIsGone(error);
+      }
+    };
     const forward = async (to: string) => {
       try {
         await args.forward(to);
@@ -517,7 +524,7 @@ export abstract class IterateConfigEntrypoint<
         throw expiredIfTheDeliveryIsGone(error);
       }
     };
-    await email.call(this, { ...args, forward });
+    await email.call(this, { ...args, save, forward });
     return "done";
   }
 
@@ -562,15 +569,17 @@ export abstract class IterateConfigEntrypoint<
   abstract processEvent(args: IterateConfigProcessEventArgs): void | Promise<void>;
 
   /** EVERY MAIL TO AN ADDRESS OF THE MIND, while its delivery is live. The platform has stored the
-   *  mail on `/integrations/email` before this runs (`email/received`, its files under `/email/`),
-   *  and `processEvent` gets that event too: replies and agents react there. This hook is for what
-   *  only a live delivery can do: `forward(to)` sends the original on, as it arrived
-   *  (iterate/email `EmailHookArgs` names its errors). Nothing here can lose the mail or fail its
-   *  delivery: a throw, or a hook that runs past the boundary's time limit, is an
+   *  mail's files under `/email/` before this runs. `save()` keeps the mail: the platform appends
+   *  `email/received` on `/integrations/email`, and `processEvent` gets that event: replies and
+   *  agents react there. The platform also records the mail itself before this runs, so a hook
+   *  that does not call `save` loses nothing yet. `forward(to)` sends the original on, as it
+   *  arrived (iterate/email `EmailHookArgs` names the errors of both). Nothing here fails the
+   *  mail's delivery: a throw, or a hook that runs past the boundary's time limit, is an
    *  `email/hook-failed` fact. The platform alone calls it.
    *
    *  ```ts
-   *  async email({ mail, forward }: EmailHookArgs) {
+   *  async email({ mail, save, forward }: EmailHookArgs) {
+   *    await save();
    *    if (mail.envelope.to === "team@example.com") await forward("team@elsewhere.example");
    *  }
    *  ```

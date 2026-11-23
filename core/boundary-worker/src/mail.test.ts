@@ -148,6 +148,52 @@ test("the hook's forward sends the original and records it once for the mail and
   expect(outcomes).toEqual(["FORWARDED_BEFORE"]);
 });
 
+test("the hook's save sends the mail's events to the mind again, with no files, and two saves make one call", async () => {
+  const mail = delivered({
+    hook: async ({ save }) => {
+      await save();
+      await save();
+    },
+  });
+  await receivedMail(mail.message, mail.env(), mail.mind);
+  expect(mail).toMatchObject({
+    did: ["the mind got it", "the hook ran"],
+    appended: [],
+    saves: [[`email/received:${RAW.split("/")[2]}:hello@mind.example`]],
+  });
+});
+
+test("a save after the hook ended is EXPIRED and calls the mind not at all", async () => {
+  let kept: EmailHookArgs["save"] | undefined;
+  const mail = delivered({
+    hook: async ({ save }) => {
+      kept = save;
+    },
+  });
+  await receivedMail(mail.message, mail.env(), mail.mind);
+  expect(await kept!().catch(codeOf)).toBe("EXPIRED");
+  expect(mail).toMatchObject({ saves: [] });
+});
+
+test("a save that the mind refuses rejects in the hook, and the delivery stands", async () => {
+  const outcomes: unknown[] = [];
+  const mail = delivered({
+    save: "the mind refused it",
+    hook: async ({ save }) => {
+      outcomes.push(await save().catch((error: unknown) => String(error)));
+    },
+  });
+  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
+  expect(outcomes).toEqual(["Error: the mind refused it"]);
+  expect(mail).toMatchObject({ did: ["the mind got it", "the hook ran"], appended: [] });
+});
+
+test("a failed save that the hook does not catch never fails the delivery", async () => {
+  const mail = delivered({ save: "the mind refused it", hook: async ({ save }) => save() });
+  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
+  expect(mail.saves).toHaveLength(1);
+});
+
 test("the stack's fixed forward runs first, through the same forward: the hook's forward of the mail to that address is refused, and one to another goes", async () => {
   const outcomes: unknown[] = [];
   const mail = delivered({
@@ -541,9 +587,12 @@ function delivered(
     /** What the config's `email` hook does, in the mind; a string: the mind cannot be reached for
      *  it, with those words. */
     hook?: ((args: EmailHookArgs) => Promise<void>) | string;
+    /** The mind refuses the hook's save, with these words. */
+    save?: string;
   } = {},
 ) {
   const did: string[] = [];
+  const saves: unknown[] = [];
   const received: unknown[] = [];
   const appended: { path: string; events: unknown[] }[] = [];
   const hooked: unknown[] = [];
@@ -567,6 +616,8 @@ function delivered(
     received,
     /** The mail that the config's hook was handed. */
     hooked,
+    /** The idempotency keys of each call of the mind that the hook's save made. */
+    saves,
     // The cast: of Cloudflare's message, the handler reads the envelope, the headers and the bytes and
     // calls `forward`.
     message: {
@@ -590,7 +641,16 @@ function delivered(
       MAIL_FORWARD_TO: forwardTo,
     }),
     mind: {
-      receiveEmail: async (mail: { events: { payload?: unknown }[] }) => {
+      receiveEmail: async (mail: {
+        events: { idempotencyKey?: string; payload?: unknown }[];
+        files: unknown[];
+      }) => {
+        // a call with no files is the hook's save
+        if (mail.files.length === 0) {
+          saves.push(mail.events.map((event) => event.idempotencyKey));
+          if (fails.save) throw new Error(fails.save);
+          return;
+        }
         if (fails.mind) throw new Error(fails.mind);
         did.push("the mind got it");
         received.push(...mail.events.map((event) => event.payload));

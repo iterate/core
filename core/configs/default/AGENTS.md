@@ -96,15 +96,19 @@ and calls the files beside it:
   case says who may come: none for a public site, `this.auth.require` for members,
   `this.auth.requirePerson` for anyone signed in. A fetch route can take a hostname's requests
   first ([apps.md](apps.md)).
-- `email({ mail, forward })` runs for every mail to an address of the mind, while its delivery
-  is live. The platform has stored the mail on `/integrations/email` before, and `processEvent`
-  gets its `email/received` too: replies and agents react there. `await forward("a@b.c")`
-  sends the original on, as it arrived, to an address that a person verified as a destination
+- `email({ mail, save, forward })` runs for every mail to an address of the mind, while its
+  delivery is live. The platform has stored the mail's files under `/email/` before.
+  `await save()` keeps the mail: the platform appends `email/received` on
+  `/integrations/email`, once for each mail, and `processEvent` gets it: replies and agents
+  react there. The platform also records the mail itself before the hook today, so a hook that
+  does not call `save` loses nothing yet; call it all the same. `await forward("a@b.c")` sends
+  the original on, as it arrived, to an address that a person verified as a destination
   in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
   (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
   (15 s of its own: the wait for Cloudflare's answer to a forward does not count), loses no
-  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each forward: the
-  capability ends when `email` returns, and a forward that is still running then ends EXPIRED.
+  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each save and forward:
+  both capabilities end when `email` returns, a call after that throws EXPIRED, and a forward
+  that is still running then ends EXPIRED.
 - `itx.config.<name>(…)` reaches every public method of the class: the mind's own API, for its
   agents and its pages. The template's methods are in `api.ts`; add one there or to
   `worker.ts`'s class.

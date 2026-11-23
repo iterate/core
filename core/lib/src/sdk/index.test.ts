@@ -60,20 +60,25 @@ test("a config that lacks the three abstract methods, as the loader never type-c
     status: 501,
     text: "This mind's config has no fetch method, so it serves no page.\n",
   });
-  expect(await entrypoint.deliverEmail({ mail: {} as never, forward: async () => {} })).toBe(
-    "missing",
-  );
+  expect(
+    await entrypoint.deliverEmail({
+      mail: {} as never,
+      save: async () => {},
+      forward: async () => {},
+    }),
+  ).toBe("missing");
 });
 
-test("deliverEmail hands email the mail and the forward, and its throw is the caller's", async () => {
-  const forwarded: string[] = [];
+test("deliverEmail hands email the mail, the save and the forward, and its throw is the caller's", async () => {
+  const did: string[] = [];
   const entrypoint = configEntrypoint([]);
   const args = {
     mail: { subject: "hello" } as never,
-    forward: async (to: string) => void forwarded.push(to),
+    save: async () => void did.push("saved"),
+    forward: async (to: string) => void did.push(`forwarded to ${to}`),
   };
   expect(await entrypoint.deliverEmail(args)).toBe("done");
-  expect(forwarded).toEqual(["team@elsewhere.example"]);
+  expect(did).toEqual(["saved", "forwarded to team@elsewhere.example"]);
   await expect(
     entrypoint.deliverEmail({ ...args, mail: { subject: "throw" } as never }),
   ).rejects.toThrow("the hook failed");
@@ -91,7 +96,7 @@ test("a forward that the config calls after the delivery ended throws EXPIRED in
     }
   })({} as never, {} as never);
   const lateCallOf = async (lent: EmailHookArgs["forward"]) => {
-    await entrypoint.deliverEmail({ mail: {} as never, forward: lent });
+    await entrypoint.deliverEmail({ mail: {} as never, save: async () => {}, forward: lent });
     return await kept!("team@elsewhere.example").catch((error: unknown) => error);
   };
   // the lent stub is gone once the mind's call has returned: workerd throws at the call itself
@@ -110,6 +115,32 @@ test("a forward that the config calls after the delivery ended throws EXPIRED in
   expect(errorCode(refused)).toBe("REFUSED");
   const other = await lateCallOf(() => Promise.reject(new Error("something else")));
   expect(errorCode(other)).toBeUndefined();
+});
+
+test("a save that the config calls after the delivery ended throws EXPIRED in the config's own runtime, with the runtime's words", async () => {
+  let kept: EmailHookArgs["save"] | undefined;
+  const entrypoint = new (class extends IterateConfigEntrypoint {
+    override processEvent() {}
+    override fetch() {
+      return new Response("Not found\n", { status: 404 });
+    }
+    override async email({ save }: EmailHookArgs) {
+      kept = save;
+    }
+  })({} as never, {} as never);
+  await entrypoint.deliverEmail({
+    // the cast: this hook reads no field of the mail
+    mail: {} as never,
+    // the lent stub is gone once the mind's call has returned: workerd throws at the call itself
+    save: () => {
+      throw new Error("RPC stub used after being disposed.");
+    },
+    forward: async () => {},
+  });
+  const late = await kept!().catch((error: unknown) => error);
+  expect(errorCode(late)).toBe("EXPIRED");
+  // the cast: EXPIRED is a coded Error, as the line above proves
+  expect((late as Error).message).toContain("RPC stub used after being disposed.");
 });
 
 test("an event another mind signed reaches processMindEvent alone, with that mind's domain", async () => {
@@ -508,8 +539,9 @@ function configEntrypoint(
     override processEvent(args: IterateConfigProcessEventArgs) {
       return handler?.(args);
     }
-    override async email({ mail, forward }: EmailHookArgs) {
+    override async email({ mail, save, forward }: EmailHookArgs) {
       if (mail.subject === "throw") throw new Error("the hook failed");
+      await save();
       await forward("team@elsewhere.example");
     }
     override fetch() {

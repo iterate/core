@@ -21,15 +21,19 @@ lives in `processEvent`.
   app's hostname is `<label>.<zone>` (`blog.example.com`). A request a fetch route takes never
   reaches it: the platform sends it to the route's target first (`iterate tunnel <port>` sets a
   route per tunnel; `itx.fetchRoutes.set` sets one by hand).
-- `email({ mail, forward })` runs for every mail to an address of the mind, while its delivery
-  is live. The platform has stored the mail on `/integrations/email` before, and `processEvent`
-  gets its `email/received` too: replies and agents react there. `await forward("a@b.c")`
-  sends the original on, as it arrived, to an address that a person verified as a destination
+- `email({ mail, save, forward })` runs for every mail to an address of the mind, while its
+  delivery is live. The platform has stored the mail's files under `/email/` before.
+  `await save()` keeps the mail: the platform appends `email/received` on
+  `/integrations/email`, once for each mail, and `processEvent` gets it: replies and agents
+  react there. The platform also records the mail itself before the hook today, so a hook that
+  does not call `save` loses nothing yet; call it all the same. `await forward("a@b.c")` sends
+  the original on, as it arrived, to an address that a person verified as a destination
   in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
   (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
   (15 s of its own: the wait for Cloudflare's answer to a forward does not count), loses no
-  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each forward: the
-  capability ends when `email` returns, and a forward that is still running then ends EXPIRED.
+  mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each save and forward:
+  both capabilities end when `email` returns, a call after that throws EXPIRED, and a forward
+  that is still running then ends EXPIRED.
 
 `worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every

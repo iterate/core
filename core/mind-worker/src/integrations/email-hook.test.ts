@@ -24,6 +24,34 @@ test("the config's forward reaches the boundary's capability, and the SENT mark 
   expect([...mind.marked]).toEqual([`email/sent:${RAW}:team@elsewhere.example`]);
 });
 
+test("the config's save reaches the boundary's capability", async () => {
+  const mind = fakeMind(async ({ save }) => {
+    await save();
+  });
+  await runEmailHook(mind.deps, mind.args);
+  expect(mind).toMatchObject({ did: ["saved"], appended: [] });
+});
+
+test("a save kept past the config's function is EXPIRED, and the boundary is not asked", async () => {
+  let kept: EmailHookArgs["save"] | undefined;
+  const mind = fakeMind(async ({ save }) => {
+    kept = save;
+  });
+  await runEmailHook(mind.deps, mind.args);
+  expect(await kept!().catch(errorCode)).toBe("EXPIRED");
+  expect(mind).toMatchObject({ did: [], appended: [] });
+});
+
+test("from a boundary that hands no save, which recorded the mail itself, the config's save answers", async () => {
+  const mind = fakeMind(async ({ save }) => {
+    await save();
+    mind.did.push("the config went on");
+  });
+  const { save: _save, ...older } = mind.args;
+  await runEmailHook(mind.deps, older);
+  expect(mind).toMatchObject({ did: ["the config went on"], appended: [] });
+});
+
 test("a mind that dies after its check and before Cloudflare is asked leaves no mark: the next delivery forwards", async () => {
   const mind = fakeMind(async ({ forward }) => {
     await forward("team@elsewhere.example");
@@ -198,7 +226,7 @@ test.each([
     expect(caught).toMatchObject([
       {
         code: "EXPIRED",
-        message: `the mail's delivery has ended, and its forward with it (${gone.message})`,
+        message: `the mail's delivery has ended, and its save and forward with it (${gone.message})`,
       },
     ]);
     expect(mind).toMatchObject({
@@ -325,6 +353,9 @@ function fakeMind(
     conflict: false,
     args: {
       mail: { raw: { path: RAW, contentType: "message/rfc822", size: 1 }, subject: "hi" } as never,
+      save: async () => {
+        did.push("saved");
+      },
       forward: async (to: string) => {
         if (fails.forward) throw fails.forward;
         did.push(`forwarded to ${to}`);

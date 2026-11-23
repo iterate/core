@@ -27,12 +27,17 @@ export function forwardEveryMethod<Instance extends object>(
  *  came. */
 export function relayTo(target: () => MindTarget) {
   class Relay extends RpcTarget {
-    /** The config's `email` hook (iterate/workers `MindTarget.email`). capnweb hands `forward` in as
-     *  a stub of its own, which lasts while this call does and calls back over the link to the
-     *  boundary. It never goes into Workers RPC as it is: a function of this isolate's calls it, and
-     *  Workers RPC hands the local Mind Worker a stub of that function. */
-    email({ mail, forward }: Parameters<MindTarget["email"]>[0]) {
-      return target().email({ mail, forward: (to) => forward(to) });
+    /** The config's `email` hook (iterate/workers `MindTarget.email`). capnweb hands `save` and
+     *  `forward` in as stubs of its own, which last while this call does and call back over the
+     *  link to the boundary. Neither goes into Workers RPC as it is: a function of this isolate's
+     *  calls each, and Workers RPC hands the local Mind Worker a stub of that function. A boundary
+     *  of an older build hands no `save`. */
+    email({ mail, save, forward }: Parameters<MindTarget["email"]>[0]) {
+      return target().email({
+        mail,
+        ...(save && { save: () => save() }),
+        forward: (to) => forward(to),
+      });
     }
   }
   // the cast: a Workers RPC stub answers each of the mind's methods by name

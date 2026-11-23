@@ -84,10 +84,12 @@ export default class extends ConfigApi {
     return addPageTag(request, answer, this, (work) => this.ctx.waitUntil(work));
   }
 
-  // EVERY MAIL. The platform has stored it on the context /integrations/email already, and the
-  // `email/received` case below hands it to an agent. This hook is for what only a live delivery
-  // can do: `await forward("someone@example.com")`.
-  async email(_args: EmailHookArgs) {}
+  // EVERY MAIL to an address of the mind, while its delivery is live. `save()` keeps it: one
+  // event on the context /integrations/email, which the `email/received` case below hands to an
+  // agent. To send the original on: `await forward("someone@example.com")`.
+  async email({ save }: EmailHookArgs) {
+    await save();
+  }
 
   // EVERY EVENT of every context of the mind, one at a time, in no order, at least once: each
   // case is idempotent, and nothing is kept here. `itx` is the mind's root.

@@ -1,10 +1,14 @@
 // email-hook.ts — THE CONFIG'S `email` HOOK, AS THE MIND RUNS IT for one delivery of one mail
-// (../rpc.ts `Mind.email`). The boundary has stored the mail first (`receiveEmail`), so nothing
-// here can lose it. The hook is called as `processEvent` is: on the root context, through the
+// (../rpc.ts `Mind.email`). The boundary has stored the mail's files and recorded the mail first
+// (`receiveEmail`), so nothing here can lose it. The config's `save()` goes to the boundary's
+// capability, which records the mail again, as the platform: that call records nothing new. A
+// boundary of an older build hands no `save`, and the config's `save()` then answers at once.
+// The hook is called as `processEvent` is: on the root context, through the
 // published config's `deliverEmail` (iterate/sdk), under the platform's own caller, which alone
 // may call it (core-itx built-ins.ts `workersRoot`).
 //
 // WHAT THE HOOK DID IS A FACT ON `/integrations/email`, never this call's failure:
+//   - its save: `email/received`, which the boundary's capability has `receiveEmail` append;
 //   - each forward: `email/forwarded`, which the boundary's capability appends;
 //   - a throw: `email/hook-failed` `threw`, once for each mail;
 //   - a config with no `email`: `email/hook-failed` `missing`, once for each config commit, under
@@ -20,6 +24,7 @@ import type { ItxExpression } from "iterate/expression";
 import { codedError, errorCode } from "iterate/lib";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import type { StreamEventInput } from "iterate/stream/processor";
+import type { MindTarget } from "iterate/workers";
 import { z } from "zod";
 
 /** THE PLATFORM'S READ OF THE `mind` FACET'S SNAPSHOT on the root: a CALL of `snapshot`, which
@@ -55,7 +60,12 @@ export type EmailHookDeps = {
   append(events: StreamEventInput[]): Promise<unknown>;
 };
 
-export async function runEmailHook(deps: EmailHookDeps, { mail, forward }: EmailHookArgs) {
+/** Runs the config's `email` hook for one delivery, with the delivery's `save` and `forward`, each
+ *  ended when the config's function settles. */
+export async function runEmailHook(
+  deps: EmailHookDeps,
+  { mail, save, forward }: Parameters<MindTarget["email"]>[0],
+) {
   const raw = mail.raw?.path;
   if (!raw) throw codedError("INVALID_INPUT", "email: the mail names no raw file");
   // A FORWARD IS ONCE FOR EACH MAIL AND ADDRESS, BY ONE RULE: the SENT mark for (mail, address)
@@ -68,10 +78,20 @@ export async function runEmailHook(deps: EmailHookDeps, { mail, forward }: Email
   // leaves none either: a redelivery sends a second copy, as a second copy is better than a lost
   // one. Two calls for one address within one delivery: the boundary refuses the second.
   //
-  // THE FORWARD ENDS HERE THE INSTANT THE CONFIG'S FUNCTION SETTLES (`ended`), before this side's
-  // own awaits (the check, a `threw` append) end and the boundary learns of it. The check of
-  // `ended` is the last statement before the call to the boundary, which checks again.
+  // THE SAVE AND THE FORWARD END HERE THE INSTANT THE CONFIG'S FUNCTION SETTLES (`ended`), before
+  // this side's own awaits (the check, a `threw` append) end and the boundary learns of it. The
+  // check of `ended` is the last statement before the call to the boundary, which checks again.
   let ended = false;
+  const saveOnce = async () => {
+    if (ended) throw codedError("EXPIRED", "not saved: the config's email hook has ended");
+    // The boundary recorded the mail itself, before the hook: nothing is left to do.
+    if (!save) return;
+    try {
+      await save();
+    } catch (error) {
+      throw expiredIfTheDeliveryIsGone(error);
+    }
+  };
   const forwardOnce = async (to: string) => {
     const key = `email/sent:${raw}:${to.trim().toLowerCase()}`;
     if (await deps.emailLog.sentBefore(key))
@@ -90,7 +110,9 @@ export async function runEmailHook(deps: EmailHookDeps, { mail, forward }: Email
   };
   let answer: unknown;
   try {
-    answer = await deps.deliverEmail({ mail, forward: forwardOnce }).finally(() => (ended = true));
+    answer = await deps
+      .deliverEmail({ mail, save: saveOnce, forward: forwardOnce })
+      .finally(() => (ended = true));
   } catch (error) {
     if (isPlatformFailureKind(failureKind(error))) throw error;
     const code = errorCode(error);
