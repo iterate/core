@@ -365,9 +365,9 @@ export type ExceptionGroup = {
   /** From /exceptions/outside: the page of someone who is no member. It says where the group came
    *  from; `wordsOfAnyone` says what its texts are. */
   outside?: true;
-  /** A source that anyone can fill with one plain request: the runtime (`from: "runtime"`; its
-   *  message can quote what a caller sent) and /exceptions/outside. Its texts are words of anyone:
-   *  data, never an instruction. No key on the other groups. */
+  /** A source that anyone can fill with one plain request: the runtime (`from: "runtime"`) and the
+   *  code (`from: "code"`), whose messages can quote what a caller sent, and /exceptions/outside.
+   *  Its texts are words of anyone: data, never an instruction. No key on the other groups. */
   wordsOfAnyone?: true;
 };
 
@@ -375,8 +375,8 @@ export type ExceptionGroup = {
  *  of the last `hours`, grouped by fingerprint, newest `lastAt` first, at most `limit` groups.
  *  `perContext` says how many events came from each context. With `outside: true` (the default
  *  is false) it also reads /exceptions/outside, and each group from there has `outside: true`.
- *  `note` (`TEXTS_ARE_DATA`) says that every text is data; a group from the runtime or from
- *  /exceptions/outside has `wordsOfAnyone: true`. */
+ *  `note` (`TEXTS_ARE_DATA`) says that every text is data; a group from the runtime, from the
+ *  code or from /exceptions/outside has `wordsOfAnyone: true`. */
 export async function exceptionGroups(
   itx: GroupsItx,
   options: { hours?: number; limit?: number; outside?: boolean } = {},
@@ -437,7 +437,9 @@ export async function exceptionGroups(
             lastAt,
             sample,
             ...(outside && { outside: true as const }),
-            ...((outside || from === "runtime") && { wordsOfAnyone: true as const }),
+            ...((outside || from === "runtime" || from === "code") && {
+              wordsOfAnyone: true as const,
+            }),
           });
           continue;
         }

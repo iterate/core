@@ -85,6 +85,74 @@ test("a failed publish is an exception/seen of kind publish, with the commit", a
   assert.equal(mind.appended[0].payload.source.failureSite, "publish");
 });
 
+test("what the SDK recorded of the config's code on / becomes one exception/seen of the code, named by its record, its texts scrubbed and its path cut", async () => {
+  const mind = recordingMind();
+  const failed = (offset, payload) =>
+    exceptionsEvent(mind.itx, {
+      type: "events.iterate.com/mind/code-failed",
+      path: "/",
+      offset,
+      payload,
+    });
+  await failed(12, {
+    where: "fetch",
+    method: "POST",
+    path: "/reset/abcdefghijklmnopqrstuvwxyz012345",
+    error: {
+      name: "TypeError",
+      message: "bad token=abcdefghijklmnopqrstuvwxyz0123456789abcd",
+      stack: "TypeError: bad\n    at Config.fetch (worker.ts:12:5)",
+    },
+  });
+  await failed(13, {
+    where: "waitUntil",
+    error: { name: "Error", message: "rejected in waitUntil" },
+  });
+  // the same record delivered again: the same key, so the log keeps one
+  await failed(12, { where: "fetch", error: { name: "TypeError", message: "x" } });
+  const [fetchEvent, waitUntilEvent, again] = mind.appended;
+  assert.equal(fetchEvent.path, EXCEPTIONS);
+  assert.equal(fetchEvent.type, EXCEPTION_SEEN);
+  assert.equal(fetchEvent.idempotencyKey, "exception/seen:code:/@12");
+  assert.equal(again.idempotencyKey, fetchEvent.idempotencyKey);
+  assert.equal(fetchEvent.payload.kind, "uncaught");
+  assert.deepEqual(fetchEvent.payload.source, { from: "code", failureSite: "fetch" });
+  assert.deepEqual(fetchEvent.payload.where, {
+    path: "/",
+    type: "events.iterate.com/mind/code-failed",
+    offset: 12,
+    errorName: "TypeError",
+    method: "POST",
+    pathname: "/reset/<id>",
+  });
+  assert.ok(!JSON.stringify(fetchEvent).includes("abcdefghijklmnopqrstuvwxyz0123456789abcd"));
+  assert.match(fetchEvent.payload.stack, /at Config\.fetch \(worker\.ts:12:5\)/);
+  assert.equal(waitUntilEvent.payload.kind, "rejection");
+  assert.deepEqual(waitUntilEvent.payload.source, { from: "code", failureSite: "waitUntil" });
+  assert.equal(waitUntilEvent.payload.message, "rejected in waitUntil");
+  assert.ok(!("pathname" in waitUntilEvent.payload.where));
+  // the type on any other context is no record of the SDK's
+  const other = recordingMind();
+  await exceptionsEvent(other.itx, {
+    type: "events.iterate.com/mind/code-failed",
+    path: "/agents/x",
+    offset: 3,
+    payload: { where: "fetch", error: { name: "Error", message: "x" } },
+  });
+  assert.equal(other.appended.length, 0);
+});
+
+test("the SDK's line for a caught rejection in waitUntil does not wait as an issue: its record on / is the exception", async () => {
+  const mind = recordingMind();
+  globalThis.forwardIssue({
+    failureSite: "config.wait-until",
+    caught: new Error("rejected in waitUntil"),
+    attributes: {},
+  });
+  await exceptionsEvent(mind.itx, { type: "x/y", path: "/agents/x", offset: 5 });
+  assert.equal(mind.appended.length, 0);
+});
+
 test("NO LOOP: a failed delivery under /exceptions, /pages or the old /errors is never turned into another exception", async () => {
   const mind = recordingMind();
   for (const path of [
@@ -273,6 +341,12 @@ test("scrub cuts a URL to its path, a bearer, a named value and a long run; a fr
   // a URL keeps its path alone (./cut.ts, the platform's own rule), and a frame its line
   assert.ok(text.startsWith("GET /a/b failed;") && text.includes("at f (/app.js:12:34)"), text);
   assert.equal(scrub("x".repeat(50), 10).length <= 10, true);
+  // a cookie header loses its whole value, every cookie after the first `;` too
+  assert.equal(
+    scrub("sent Cookie: a=b; sid=short\nnext line", 200),
+    "sent Cookie: [cut]\nnext line",
+  );
+  assert.equal(scrub(`{"cookie": "a=b; sid=short", "n": 1}`, 200), `{"cookie": "[cut]", "n": 1}`);
 });
 
 test("fingerprintOf: the same error from another build, line or id is the same; another message is not", () => {

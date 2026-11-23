@@ -21,7 +21,7 @@ import { contexts } from "./host.ts";
 import { statelessExpressionFetch } from "./iterate-context.ts";
 import { personItxSession } from "./person-context.ts";
 import { serveSession } from "./session.ts";
-import { expressionFetchErrorAnswer } from "./unavailable.ts";
+import { expressionFetchErrorAnswer, failedPageAnswer } from "./unavailable.ts";
 
 /** THE LEG OF A LENT STUB'S UPGRADE, DIALLED FROM OUTSIDE THE MIND'S WORKER
  *  (./context/fetch-upgrade.ts `LentFetchHolder`), or null when `request` is none: it goes to the
@@ -147,7 +147,8 @@ export async function serveHostRequest(args: {
       return unserved("no-rule");
     }
     if (unserved && code === "RPC_STUB_OFFLINE") return unserved("stub-offline");
-    return expressionFetchErrorAnswer(error, label);
+    // a person's own page load gets words; every other caller the answer as it is
+    return await failedPageAnswer(args.request, expressionFetchErrorAnswer(error, label), error);
   }
 }
 

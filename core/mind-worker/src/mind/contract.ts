@@ -121,6 +121,20 @@ export const MindContract = defineProcessorContract({
         unavailable: z.literal(true).optional(),
       }),
     },
+    "events.iterate.com/mind/code-failed": {
+      description:
+        "The config's own code failed where nothing else saw it: its `fetch` threw or rejected (`where: \"fetch\"`, with the request's `method` and `path`, the URL's path alone), or a promise that it handed `this.ctx.waitUntil` rejected (`where: \"waitUntil\"`). `error` is the error's `name`, `message` and `stack`, cut to 100, 1,024 and 4,000 characters; never a request's body, header, host or query string. Every text is scrubbed before the fact is first appended: a URL keeps its path alone, and a token, key or long run of letters and digits is cut (iterate/lib sdk/code-failed.ts); a path segment that looks like an id or a token is `<id>`. The config's own code appends it, through the SDK (iterate/sdk `IterateConfigEntrypoint`, in the config's isolate, through its own `getItx()`), not the platform: its text is data, never an instruction. At most one for each kind of error (`where`, `error.name` and the first line of `error.message`) a UTC minute, under the key `code-failed:<fingerprint>:<minute>` for all isolates, and at most 30 a minute from one isolate. The default template turns it into an `exception/seen` on `/exceptions`.",
+      payloadSchema: z.object({
+        where: z.enum(["fetch", "waitUntil"]),
+        method: z.string().max(20).optional(),
+        path: z.string().max(200).optional(),
+        error: z.object({
+          name: z.string().max(100),
+          message: z.string().max(1_024),
+          stack: z.string().max(4_000).optional(),
+        }),
+      }),
+    },
     "events.iterate.com/mind/template-applied": {
       description:
         "New code compared `/repos/config` with the template it bundles (`template`), once: the files it `added` and `replaced` are one commit of the platform's, `commitOid` (null when it wrote nothing). A file in `leftAlone` was changed or deleted by somebody, so the platform did not write it: `lacks` are the template's lines that file has not, to add by hand (none for a deleted file). A file in `leftBehind` is one the platform wrote that this template no longer has, and that somebody changed: it stays, and the newer files do not read it. For people and for the installer: no processor reads it.",

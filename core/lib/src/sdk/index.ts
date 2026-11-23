@@ -34,7 +34,9 @@ import {
 // (../cause.ts).
 import { causeOfRequest, currentCause, runCausedBy } from "../cause.ts";
 import { type EmailHookArgs, expiredIfTheDeliveryIsGone } from "../email.ts";
+import { errorCode, reportIssue } from "../lib.ts";
 import { auth } from "./auth.ts";
+import { codeFailedFact, type CodeFailedWhere, scrubbedError } from "./code-failed.ts";
 import {
   currentCallerPath,
   currentOnBehalfOf,
@@ -423,18 +425,65 @@ export abstract class IterateConfigEntrypoint<
 
   constructor(ctx: ExecutionContext, env: Env) {
     super(ctx, env);
-    // The author's `fetch` runs under the cause its Request carries (../cause.ts). The loader
-    // never type-checks a config, so a class may lack the abstract `fetch`: each request then
-    // gets a page that says so, never a TypeError (the publication records the lack once:
-    // `mind/worker-updated`'s `missing`).
+    // WHAT THE CONFIG'S OWN CODE THREW, which nothing else sees (./code-failed.ts): a throw of
+    // its `fetch`, and a rejection of a promise it hands `this.ctx.waitUntil`, are each one
+    // `mind/code-failed` fact on `/`, appended after the answer through the runtime's own
+    // `waitUntil`. Recording never throws: the author's error is what the caller gets.
+    const keepAlive = ctx.waitUntil;
+    const hold = (promise: Promise<unknown>) => keepAlive.call(ctx, promise);
+    const record = (where: CodeFailedWhere, caught: unknown, request?: Request) => {
+      try {
+        const fact = codeFailedFact(where, caught, request);
+        if (fact) hold(this.#appendCodeFailed(fact));
+      } catch (error) {
+        reportIssue("config.code-failed", error);
+      }
+    };
+    // The author's `fetch` runs under the cause its Request carries (../cause.ts), and its throw
+    // or rejection reaches the caller unchanged. The loader never type-checks a config, so a
+    // class may lack the abstract `fetch`: each request then gets a page that says so, never a
+    // TypeError (the publication records the lack once: `mind/worker-updated`'s `missing`).
     const serve = implemented(this, "fetch");
     this.fetch = (request: Request) =>
       serve
-        ? runCausedBy(causeOfRequest(request), () => serve.call(this, request), "clear")
+        ? runCausedBy(
+            causeOfRequest(request),
+            async () => {
+              try {
+                return await serve.call(this, request);
+              } catch (error) {
+                record("fetch", error, request);
+                throw error;
+              }
+            },
+            "clear",
+          )
         : new Response("This mind's config has no fetch method, so it serves no page.\n", {
             status: 501,
             headers: { "content-type": "text/plain; charset=utf-8" },
           });
+    // workerd lets a loaded class give its own `ctx` an own `waitUntil`, and the author's
+    // `this.ctx.waitUntil` then calls it (core/mind-worker/src/context/config-code-failed.test.ts).
+    // A rejection is caught there, logged (scrubbed, as its fact is) and recorded; `waitUntil`
+    // from `cloudflare:workers` is not caught.
+    ctx.waitUntil = (promise: Promise<unknown>) =>
+      hold(
+        promise.catch((error: unknown) => {
+          reportIssue("config.wait-until", scrubbedError(error));
+          record("waitUntil", error);
+        }),
+      );
+  }
+
+  /** One `mind/code-failed` on `/`, through the config's own scope. A failed append is reported
+   *  once and dropped; a key that another isolate wrote first is the same fact. */
+  async #appendCodeFailed(fact: StreamEventInput): Promise<void> {
+    try {
+      using itx = this.getItx();
+      await itx.append(fact);
+    } catch (error) {
+      if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") reportIssue("config.code-failed", error);
+    }
   }
 
   /** The platform's delivery of one event (the dispatch boundary refuses any other caller),

@@ -630,10 +630,11 @@ test("what broke, with outside: the page errors of everyone who is no member too
   assert.ok(none.reads.every((read) => read.path === EXCEPTIONS));
 });
 
-test("what broke: the runtime's groups and the outside's are words of anyone; a handler's and a member's page's have no such key", async () => {
+test("what broke: the runtime's groups, the code's and the outside's are words of anyone; a handler's and a member's page's have no such key", async () => {
   const mind = exceptionsLog(
     [
       seen("run", "2026-11-21T10:00:00.000Z", { source: { from: "runtime", failureSite: "mind" } }),
+      seen("cod", "2026-11-21T10:30:00.000Z", { source: { from: "code", failureSite: "fetch" } }),
       seen("hnd", "2026-11-21T11:00:00.000Z", {
         kind: "publish",
         source: { from: "handler", failureSite: "publish" },
@@ -647,6 +648,7 @@ test("what broke: the runtime's groups and the outside's are words of anyone; a 
   const byPrint = Object.fromEntries(answer.groups.map((group) => [group.fingerprint, group]));
   assert.equal(byPrint.run.wordsOfAnyone, true);
   assert.equal(byPrint.run.outside, undefined);
+  assert.equal(byPrint.cod.wordsOfAnyone, true);
   assert.equal(byPrint.out.wordsOfAnyone, true);
   assert.equal(byPrint.out.outside, true);
   for (const print of ["hnd", "pag"]) {

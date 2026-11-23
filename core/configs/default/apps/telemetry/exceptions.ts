@@ -16,12 +16,15 @@
 //   "page"     the browser, on a page of an app (page-events.ts appends it at once)
 //   "handler"  a delivery that failed for good, or a publish that failed (the platform's records)
 //   "issue"    what this repo's code reported with `reportIssue`
+//   "code"     what this repo's code threw and nothing caught: a throw of its `fetch`, a rejection
+//              of a promise handed `this.ctx.waitUntil` (the SDK's `mind/code-failed` on /)
 //   "runtime"  what only Cloudflare's runtime saw: a Worker that crashed (crashes.ts, a job each minute)
 //
 // Two parts are here:
 // - `exceptionsEvent`, which worker.ts calls for every event: the two failures the platform
-//   records become `exception/seen`, and the reported issues that wait are appended. The platform
-//   writes those two already, each on the context where it happened; nobody saw them there.
+//   records, and what the SDK recorded of this repo's code, become `exception/seen`, and the
+//   reported issues that wait are appended. Each of those three is on the context where it
+//   happened already; nobody saw it there.
 // - `exceptionSeen`: one append to /exceptions or /exceptions/outside, capped. page-events.ts
 //   calls it for a page error, crashes.ts for a crash.
 //
@@ -30,7 +33,7 @@
 // members'. A failed append is dropped: nothing here reports its own failure, and
 // nothing under /exceptions, /pages or /errors is ever turned into another exception.
 import { errorCode, forwardIssues } from "iterate/lib";
-import { cut } from "./cut.ts";
+import { cut, pathOf } from "./cut.ts";
 /* oxlint-disable iterate/simple-truthiness-check -- a payload has no key for what it lacks (errors.md), and a text from a browser or a store may be anything, whatever its declared type */
 
 export const EXCEPTIONS = "/exceptions";
@@ -59,8 +62,10 @@ export type Itx = {
 
 /** A text with what must never be kept cut out of it: first every URL-like run cut to its path,
  *  and a `code=`, `state=`, `token=` or bearer token out (./cut.ts, the platform's own rule); then
- *  a basic token, a `key=` or `password:` and its value, and any long run of letters and digits
- *  that could be a key or a token. The route of the platform's own tag does the same
+ *  a basic token, a cookie header's whole value, a `key=` or `password:` and its value, and any
+ *  long run of letters and digits that could be a key or a token. The SDK scrubs a
+ *  `mind/code-failed` by the same rule (iterate/lib sdk/code-failed.ts). The route of the
+ *  platform's own tag does the same but for the cookie header
  *  (core/auth-worker/src/page-events.ts: `scrub(cut(text))`). */
 export function scrub(text: unknown, max: number): string {
   // The raw text is cut to twice its bound BEFORE any pattern runs: the URL patterns cost the
@@ -68,14 +73,18 @@ export function scrub(text: unknown, max: number): string {
   // 2,000 cost 5 ms, measured 22 Nov 2026). Text past the bound is never kept anyway.
   // A number is written as text; an object is no text (its `String()` may throw).
   const raw = typeof text === "string" ? text : typeof text === "number" ? String(text) : "";
-  return cut(raw.slice(0, 2 * max))
-    .replace(/\b(bearer|basic)\s+[^\s"',;)]+/gi, "$1 [cut]")
-    .replace(
-      /\b(token|key|secret|password|authorization|cookie)(["']?\s*[:=]\s*["']?)(?!bearer\b|basic\b)[^\s"',;)]+/gi,
-      "$1$2[cut]",
-    )
-    .replace(/[A-Za-z0-9_\-+/=]{32,}/g, "[cut]")
-    .slice(0, max);
+  return (
+    cut(raw.slice(0, 2 * max))
+      .replace(/\b(bearer|basic)\s+[^\s"',;)]+/gi, "$1 [cut]")
+      // a cookie header's whole value: its cookies are split by `;`, where the next pattern stops
+      .replace(/\b((?:set-)?cookie)(["']?\s*[:=]\s*["']?)[^\n"']*/gi, "$1$2[cut]")
+      .replace(
+        /\b(token|key|secret|password|authorization|cookie)(["']?\s*[:=]\s*["']?)(?!bearer\b|basic\b)[^\s"',;)]+/gi,
+        "$1$2[cut]",
+      )
+      .replace(/[A-Za-z0-9_\-+/=]{32,}/g, "[cut]")
+      .slice(0, max)
+  );
 }
 
 /** How many events each source appended in the running minute, in this isolate. */
@@ -121,8 +130,9 @@ export function fingerprintOf(parts: {
 
 export type Seen = {
   /** What kind of failure: "uncaught", "rejection", "render", "module-load" for a page;
-   *  "dead-letter", "publish" for a handler; "issue" for a reported issue; "uncaught",
-   *  "cpu-limit", "memory-limit", "hung", "internal" for the runtime. */
+   *  "dead-letter", "publish" for a handler; "issue" for a reported issue; "uncaught" (a throw
+   *  of `fetch`), "rejection" (in `waitUntil`) for the code; "uncaught", "cpu-limit",
+   *  "memory-limit", "hung", "internal" for the runtime. */
   kind: string;
   message: string;
   stack?: string;
@@ -131,7 +141,7 @@ export type Seen = {
   lastAt?: string;
   /** Who saw it, and the code it ran: `from`, then the app or the failure site, then the build. */
   source: {
-    from: "page" | "handler" | "issue" | "runtime";
+    from: "page" | "handler" | "issue" | "code" | "runtime";
     app?: string;
     failureSite?: string;
     build?: string;
@@ -229,7 +239,8 @@ const reported: {
   attributes: Record<string, unknown>;
 }[] = [];
 forwardIssues((issue) => {
-  if (reported.length >= 20) return;
+  // the SDK's line for a caught rejection in `waitUntil`: its `mind/code-failed` is the exception
+  if (reported.length >= 20 || issue.failureSite === "config.wait-until") return;
   const error = issue.caught instanceof Error ? issue.caught : undefined;
   reported.push({
     failureSite: scrub(issue.failureSite, MAX.short),
@@ -246,10 +257,10 @@ forwardIssues((issue) => {
   });
 });
 
-/** For every event of the mind (worker.ts): the two failures the platform records become
- *  `exception/seen` on /exceptions, and the reported issues that wait are appended. It never
- *  throws, and never acts on an event of a context that holds exceptions or page events: an
- *  exception about an exception would feed itself. */
+/** For every event of the mind (worker.ts): the two failures the platform records, and what the
+ *  SDK recorded of this repo's code on /, become `exception/seen` on /exceptions, and the reported
+ *  issues that wait are appended. It never throws, and never acts on an event of a context that
+ *  holds exceptions or page events: an exception about an exception would feed itself. */
 export async function exceptionsEvent(
   itx: Itx,
   event: { type: string; path: string; offset: number; payload?: unknown },
@@ -260,8 +271,9 @@ export async function exceptionsEvent(
     const failed =
       event.type === DELIVERY_FAILED ||
       event.type === "events.iterate.com/mind/worker-update-failed";
+    const codeFailed = event.type === "events.iterate.com/mind/code-failed" && event.path === "/";
     // every other event, with nothing waiting: no call at all
-    if (!failed && reported.length === 0) return;
+    if (!failed && !codeFailed && reported.length === 0) return;
     for (const issue of reported.splice(0)) {
       const sent = await exceptionSeen(itx, undefined, {
         kind: "issue",
@@ -272,9 +284,31 @@ export async function exceptionsEvent(
       });
       if (!sent) break;
     }
-    if (!failed) return;
     // the cast: a payload is JSON, so an object's keys are text; each value is checked where it is read
     const payload = (event.payload ?? {}) as Record<string, unknown>;
+    if (codeFailed) {
+      // the config's own code wrote it, through the SDK (iterate/sdk code-failed.ts): its text is
+      // data, and a throw of `fetch` can quote what anyone sent. The cast, as the payload's: an
+      // object in JSON has text keys, and each value is checked where it is read.
+      const error = (payload.error ?? {}) as Record<string, unknown>;
+      const where = scrub(payload.where, 20);
+      await exceptionSeen(itx, `code:${event.path}@${event.offset}`, {
+        kind: where === "waitUntil" ? "rejection" : "uncaught",
+        message: String(error.message ?? ""),
+        stack: String(error.stack ?? ""),
+        source: { from: "code", failureSite: where },
+        where: {
+          path: event.path,
+          type: event.type,
+          offset: event.offset,
+          errorName: scrub(error.name, MAX.short),
+          ...(typeof payload.method === "string" && { method: scrub(payload.method, 20) }),
+          ...(typeof payload.path === "string" && { pathname: pathOf(payload.path) }),
+        },
+      });
+      return;
+    }
+    if (!failed) return;
     const delivery = event.type === DELIVERY_FAILED;
     // the platform's own record, named: a redelivery of it appends nothing
     await exceptionSeen(itx, `handler:${event.path}@${event.offset}`, {

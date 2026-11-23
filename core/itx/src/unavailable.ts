@@ -60,8 +60,7 @@ export function expressionFetchErrorAnswer(error: unknown, itxExpression: string
       itxExpression,
       message: String(error),
     });
-  const message = error instanceof Error ? error.message : String(error);
-  return new Response(`expression fetch error: ${message}\n`, {
+  return new Response(`expression fetch error: ${messageOf(error)}\n`, {
     status,
     headers: {
       ...unavailable?.headers,
@@ -69,3 +68,24 @@ export function expressionFetchErrorAnswer(error: unknown, itxExpression: string
     },
   });
 }
+
+/** THE PAGE A PERSON'S BROWSER SHOWS when the mind's site failed: a 500 answer to the browser's
+ *  own navigation (`sec-fetch-dest: document`) says the error in words, and that the mind tries to
+ *  record it: a throw of the config's code is the SDK's `mind/code-failed`, the kernel's own is
+ *  its issue line. It promises no record: the SDK's bounds drop a fact, and an append can fail.
+ *  Every other answer, and every other caller, gets `answer` byte for byte: an agent reads
+ *  "expression fetch error: " (iterate/agents results-preamble.ts). */
+export async function failedPageAnswer(
+  request: Request,
+  answer: Response,
+  error: unknown,
+): Promise<Response> {
+  if (answer.status !== 500 || request.headers.get("sec-fetch-dest") !== "document") return answer;
+  await answer.body?.cancel();
+  return new Response(
+    `This page failed: ${messageOf(error)}\n\nThe mind tries to record this error for its owners.\n`,
+    { status: 500, headers: { "content-type": "text/plain; charset=utf-8" } },
+  );
+}
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
