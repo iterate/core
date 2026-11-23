@@ -253,6 +253,15 @@ that the boundary kept for a mind that runs elsewhere while it was away (`iterat
   `github`.
 - **An app** of a mind uses its own name too: `ai-subscriptions` (the Claude and Codex accounts'
   app, internal-packages/ai-subscriptions, and `apps/ai-subscriptions/` of a mind's config repo).
+- **A channel** of an agent uses its own name, as an integration does: `agent-ui` is the web and
+  mobile chat (`agent-ui/message-received` is what its composer creates, and
+  `agent-ui/message-sent` is the agent's words for it), beside `slack`.
+- **A protocol between processors** uses its own name. `llm-request` holds the facts by which one
+  processor asks a model and another makes the request. Each request maker has a namespace of its
+  own, named after the LLM API it speaks, for what only it knows (the exact bytes of an attempt,
+  the provider's raw frames): `openai-responses`, `anthropic-messages`, `chat-completions`,
+  `google-generate-content`. `turn-decider` is the processor beside an agent that decides when it
+  must answer now.
 - **`test`** holds types that only tests append. Production code never matches a `test/*` type. A
   test contract may keep a slug of its own (`counter`), but its events go under `test/`. A test must
   not borrow a production namespace for a type that does not exist.
