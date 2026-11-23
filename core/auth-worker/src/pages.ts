@@ -408,7 +408,7 @@ export function consentPage(input: {
       body: `${
         input.host
           ? `<h1>${name} wants to use ${text(input.host)} as you</h1>
-        <p>It learns that you are <strong>${text(input.email)}</strong>, and gets nothing else in ${mind}.</p>`
+        <p>It learns that you are <strong>${text(input.email)}</strong>, and can do at ${text(input.host)} what you can do there. For a member of ${mind}, an app can go as far as running scripts that read and change everything in this mind.</p>`
           : `<h1>${name} wants to access ${mind}</h1>
         <p>It will act as <strong>${text(input.email)}</strong> through ${text(input.resource)}, and can read and change everything in this mind.</p>`
       }

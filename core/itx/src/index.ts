@@ -15,7 +15,7 @@ export type { LentFetchHolder } from "./context/fetch-upgrade.ts";
 export { verifyOnBehalfOf } from "./on-behalf-of.ts";
 export { sessionContext } from "./iterate-context.ts";
 export { serveSession } from "./session.ts";
-export { fetchUpgradeLegResponse, serveHostRequest } from "./serve-host.ts";
+export { fetchUpgradeLegResponse, mcpRunRequest, serveHostRequest } from "./serve-host.ts";
 export { sha256Hex, signClaims, stampCaller, verifyClaims, type Caller } from "./caller.ts";
 export {
   causeHeader,

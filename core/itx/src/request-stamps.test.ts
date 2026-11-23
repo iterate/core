@@ -270,6 +270,134 @@ test.for<{ asks: string; path: string; challenge: string }>([
   },
 );
 
+// AN APP'S OWN MCP SERVER ASKS FOR A RUN (iterate/sdk `auth.mcpRun`). The kernel reads who asks
+// from the request it holds, and hands the mind Worker's handler the message and that caller.
+test("an app's MCP run for a member runs as that member, through the host, with a Request of the platform's own", async () => {
+  const { status, body, ran } = await askMcpRun(
+    {
+      method: "POST",
+      headers: {
+        ...FORGED,
+        authorization: "Bearer of-the-app",
+        "mcp-protocol-version": "2025-06-18",
+      },
+      body: "{}",
+    },
+    { principal: MEMBER, grant: "grant_owner", person: OWNER },
+  );
+  expect({ status, body }).toEqual({ status: 200, body: "ran" });
+  expect(ran).toEqual([
+    {
+      message: JSON.parse(runMessage()),
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-method": "tools/call",
+        "mcp-name": "run",
+        "mcp-protocol-version": "2025-06-18",
+      },
+      caller: {
+        principal: MEMBER,
+        grant: "grant_owner",
+        person: OWNER,
+        via: { appPage: "mcp.example.org" },
+      },
+    },
+  ]);
+});
+
+test.for<{ who: string; caller: Parameters<typeof serveHostRequest>[0]["caller"] }>([
+  { who: "nobody", caller: { principal: null } },
+  { who: "a person who is no member", caller: { principal: null, person: VISITOR } },
+  {
+    who: "another mind",
+    caller: {
+      principal: null,
+      mind: { actor: "ab".repeat(32), kind: "mind", hostname: "iterate.peer.example" },
+    },
+  },
+])("an app's MCP run for $who is refused, and nothing runs", async ({ caller }) => {
+  const { status, answer, ran } = await askMcpRun({ method: "POST", body: "{}" }, caller);
+  expect({ status, challenge: answer.headers.get("WWW-Authenticate"), ran }).toEqual({
+    status: 401,
+    challenge: 'Bearer realm="iterate"',
+    ran: [],
+  });
+});
+
+test.for<{ what: string; message: string }>([
+  {
+    what: "another method",
+    message: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+  },
+  {
+    what: "another tool",
+    message: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "x" } }),
+  },
+  {
+    what: "no script",
+    message: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "run", arguments: {} },
+    }),
+  },
+  { what: "a batch", message: `[${runMessage()}]` },
+  {
+    what: "a notification",
+    message: JSON.stringify({ ...JSON.parse(runMessage()), id: undefined }),
+  },
+  { what: "no JSON", message: "run it" },
+])("an app's MCP run whose message is $what is no run", async ({ message }) => {
+  const { status, ran } = await askMcpRun(
+    { method: "POST", headers: { "x-test-message": message }, body: "{}" },
+    { principal: MEMBER },
+  );
+  expect({ status, ran }).toEqual({ status: 502, ran: [] });
+});
+
+// THE MESSAGE IS BOUNDED IN BYTES, AS IT ARRIVES. An app's answer may be a stream with no length,
+// or say a length that is not its own: the kernel counts what it reads and stops at 1 MiB.
+test("an app's MCP run whose message never ends is cut at the first chunk past 1 MiB, and nothing runs", async () => {
+  endlessChunksPulled = 0;
+  const { status, ran } = await askMcpRun(
+    { method: "POST", headers: { "x-test-message": "endless" }, body: "{}" },
+    { principal: MEMBER },
+  );
+  expect({ status, ran }).toEqual({ status: 502, ran: [] });
+  // 64 KiB a chunk: the seventeenth crosses the limit. A stream may be asked for a few chunks
+  // ahead of its reader, so the count is bounded, not exact.
+  expect(endlessChunksPulled).toBeGreaterThanOrEqual(17);
+  expect(endlessChunksPulled).toBeLessThanOrEqual(64);
+});
+
+test("an app's MCP run of fewer than 1 MiB characters and more than 1 MiB bytes is too long", async () => {
+  // two bytes a letter: 600,000 letters are 1.2 MB
+  const message = JSON.stringify({
+    ...JSON.parse(runMessage()),
+    params: { name: "run", arguments: { script: "é".repeat(600_000) } },
+  });
+  expect(message.length).toBeLessThan(1024 * 1024);
+  const { status, ran } = await askMcpRun(
+    { method: "POST", headers: { "x-test-message": "long" }, body: message },
+    { principal: MEMBER },
+  );
+  expect({ status, ran }).toEqual({ status: 502, ran: [] });
+});
+
+test("an app's MCP run on a GET is refused, and where the host serves no run the header goes nowhere", async () => {
+  const get = await askMcpRun({}, { principal: MEMBER });
+  expect({ status: get.status, ran: get.ran }).toEqual({ status: 405, ran: [] });
+  const answer = await serveHostRequest({
+    ctx,
+    request: new Request("https://mcp.example.org/asks-mcp-run", { method: "POST", body: "{}" }),
+    caller: { principal: MEMBER },
+    itxSessions: true,
+  });
+  expect(answer.headers.get("x-iterate-serve")).toBeNull();
+});
+
 test("a request stamped with another mind reaches a fetch route's target as that mind, with no member", async () => {
   const request = new Request("https://routed.example.org/post", { headers: mindStamped() });
   const answer = await serveHostRequest({ ctx, request, caller: stampedCallerOf(request) });
@@ -535,6 +663,54 @@ function narrowOut(request: Request) {
   );
 }
 
+/** What an app's own MCP server hands over: one `tools/call` of `run`. */
+function runMessage() {
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "tools/call",
+    params: { name: "run", arguments: { script: "async (itx) => itx.whoami()" } },
+  });
+}
+
+const MEMBER = { actor: OWNER.userId, email: OWNER.email };
+
+/** How many chunks the kernel took of `endlessMessage`. */
+let endlessChunksPulled = 0;
+
+/** A body of 64 KiB chunks that never ends. */
+function endlessMessage() {
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      endlessChunksPulled += 1;
+      controller.enqueue(new Uint8Array(64 * 1024).fill(32));
+    },
+  });
+}
+
+/** A request to an app that asks for an MCP run, with the host's run handler recorded. */
+async function askMcpRun(
+  init: RequestInit,
+  caller: Parameters<typeof serveHostRequest>[0]["caller"],
+) {
+  const ran: { message: unknown; headers: Record<string, string>; caller: unknown }[] = [];
+  const answer = await serveHostRequest({
+    ctx,
+    request: new Request("https://mcp.example.org/asks-mcp-run", init),
+    caller,
+    itxSessions: true,
+    mcpRun: async (message, as) => {
+      ran.push({
+        message: await message.json(),
+        headers: Object.fromEntries(message.headers),
+        caller: as,
+      });
+      return new Response("ran");
+    },
+  });
+  return { status: answer.status, body: await answer.text(), answer, ran };
+}
+
 /** The last Request that a loaded worker's `fetch` got here. */
 let lastRequest: Request | undefined;
 
@@ -550,6 +726,13 @@ function answerOf(request: Request) {
   if (pathname === "/act") return actOutbound(request);
   if (pathname === "/asks-itx")
     return new Response(null, { headers: { "x-iterate-serve": "itx" } });
+  if (pathname === "/asks-mcp-run") {
+    const asked = request.headers.get("x-test-message");
+    // a stream with no length and no end; and the request's own body, sent back as it came
+    const message =
+      asked === "endless" ? endlessMessage() : asked === "long" ? request.body : asked;
+    return new Response(message || runMessage(), { headers: { "x-iterate-serve": "mcp-run" } });
+  }
   if (pathname === "/asks-person-itx")
     return new Response(null, {
       headers: { "x-iterate-serve": "person-itx", "x-iterate-serve-context": "/" },

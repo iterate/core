@@ -165,6 +165,31 @@ export const auth = {
       })
     );
   },
+  /** ONE `run` OF AN MCP SERVER OF THE MIND'S OWN, AS THE MEMBER WHO ASKS. A config's own MCP
+   *  server owns every word a client's model reads (its instructions, its tools' descriptions),
+   *  and hands a member's `tools/call` of `run` to the platform with this answer: the member
+   *  guard's refusal, or the JSON-RPC message for the platform to answer in this answer's place,
+   *  as it answers `run` at the mind's own `/mcp`. The platform decides who the caller is, from
+   *  the request it holds: the member the boundary stamped on a POST. So the script runs with
+   *  that member's reach and name, never with this worker's (`this.getItx()`). The run's own
+   *  record names the member and this host (`source.principal`, `source.via.appPage`), and what
+   *  the script appends names them as who it was for (`source.onBehalfOf.principal`,
+   *  `source.onBehalfOf.via.appPage`). The platform takes a `tools/call` of
+   *  `run` alone; the answer is an MCP answer (JSON, or an event stream that keeps a long run's
+   *  connection open).
+   *
+   *  ```js
+   *  if (call.method === "tools/call" && call.params?.name === "run")
+   *    return this.auth.mcpRun(request, { jsonrpc: "2.0", id: call.id, method: "tools/call",
+   *      params: { name: "run", arguments: { script: call.params.arguments.script },
+   *        _meta: call.params._meta } });
+   *  ``` */
+  mcpRun(request: Request, message: McpRunMessage): Response {
+    return (
+      auth.require(request) ||
+      Response.json(message, { headers: { [ITERATE_SERVE_HEADER]: "mcp-run" } })
+    );
+  },
   /** A SIGNED-IN PERSON'S LIVE VIEW OF ONE CONTEXT, for the page they are on: answer this from
    *  the path the page opens its WebSocket on (a capnweb session). It answers the person guard's
    *  refusal (`requirePerson`, with the same `{ guests: true }` for a page that takes guests), or
@@ -244,6 +269,17 @@ export const auth = {
       return new Response(null, { status: 307, headers: { location: "/.iterate/sign-out" } });
     return null;
   },
+};
+
+/** The one message `auth.mcpRun` hands over: a JSON-RPC `tools/call` of the tool `run`. */
+export type McpRunMessage = {
+  jsonrpc: "2.0";
+  id: string | number;
+  method: "tools/call";
+  /** `_meta`: the call's own, as the client sent it. MCP from 2026-07-28 on carries each
+   *  request's envelope there (the protocol version, the client's capabilities), and the
+   *  platform's handler refuses such a call without it. */
+  params: { name: "run"; arguments: { script: string }; _meta?: Record<string, unknown> };
 };
 
 /** `{ guests: true }`: this route takes a guest too (see GUESTS above). `{ minds: true }`: and a

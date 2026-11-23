@@ -18,7 +18,7 @@ import { FILES_PATH, serveMindFileRequest } from "./context/file-urls.ts";
 import type { Env } from "./env.ts";
 import { MCP_WEBHOOK_PATH, serveMcpWebhook } from "./integrations/mcp.ts";
 import { serveWebhook, WEBHOOKS_PATH } from "./integrations/webhooks.ts";
-import { serveMcp } from "./mcp.ts";
+import { serveMcp, serveMcpRun } from "./mcp.ts";
 import { appendAsPlatform } from "./platform-append.ts";
 
 export async function mindResponse(request: Request, env: Env, ctx: ExecutionContext) {
@@ -27,6 +27,15 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
   if (leg) return leg;
   const config = mindWorkerConfigOf(env);
   const url = new URL(request.url);
+  /** A signed file URL of this mind, read here: what a `run` shows its caller as images. */
+  const readSignedFile = (signedUrl: string) =>
+    serveMindFileRequest({
+      bucket: env.FILES,
+      secret: config.signingKey.exposeSecret(),
+      // a read: nothing is uploaded
+      recordUpload: () => Promise.resolve(),
+      request: new Request(signedUrl),
+    });
   if (!isControlPlaneHostname(config, url.hostname)) {
     const host = hostRequestOf(request);
     return serveHostRequest({
@@ -34,6 +43,7 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
       request: host.request,
       caller: { ...stampedCallerOf(request), cause: host.cause },
       itxSessions: true,
+      mcpRun: (message, caller) => serveMcpRun(message, caller, readSignedFile),
     });
   }
   // Of the control plane, the boundary sends the mind the API and MCP alone.
@@ -68,16 +78,7 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
     // the API itself is a session that the boundary ends: `Mind.api` (./rpc.ts) is the mind's part
     return new Response("Not found\n", { status: 404 });
   }
-  if (route === "mcp")
-    return serveMcp(request, (signedUrl) =>
-      serveMindFileRequest({
-        bucket: env.FILES,
-        secret: config.signingKey.exposeSecret(),
-        // a read: nothing is uploaded
-        recordUpload: () => Promise.resolve(),
-        request: new Request(signedUrl),
-      }),
-    );
+  if (route === "mcp") return serveMcp(request, readSignedFile);
   return new Response("Not found\n", { status: 404 });
 }
 

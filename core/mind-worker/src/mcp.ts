@@ -15,6 +15,12 @@ export async function serveMcp(
   return mcpResponse(request, caller, readSignedFile);
 }
 
+/** ONE `run` FOR AN MCP SERVER OF THE MIND'S OWN CONFIG (core/itx/src/serve-host.ts
+ *  `mcpRunAnswer`): `message` is one `tools/call` of `run`, and `caller` the member the boundary
+ *  stamped. The same handler as above, so a run is the same run at either address. */
+export const serveMcpRun = (message: Request, caller: Caller, readSignedFile: ReadSignedFile) =>
+  mcpResponse(message, caller, readSignedFile);
+
 const runInstructions =
   "One tool, `run({ script })`, runs a script of yours against this iterate mind. Its description is the guide: how to inspect the mind, change its code and read the platform's source.";
 

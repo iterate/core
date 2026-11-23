@@ -291,6 +291,27 @@ test.for(["GET", "POST"])("a %s stamped with a mind gets the 401 that nobody get
   expect(mind?.status).toBe(401);
 });
 
+test("an MCP run is handed over for a member alone: the message, and the header that asks", async () => {
+  const message = {
+    jsonrpc: "2.0" as const,
+    id: 7,
+    method: "tools/call" as const,
+    params: { name: "run" as const, arguments: { script: "async (itx) => itx.whoami()" } },
+  };
+  const member = { "x-itx-principal": JSON.stringify({ actor: "user_1", email: "a@example.com" }) };
+  const handed = auth.mcpRun(workerRequest("POST", member), message);
+  expect({
+    status: handed.status,
+    serve: handed.headers.get("x-iterate-serve"),
+    body: await handed.json(),
+  }).toEqual({ status: 200, serve: "mcp-run", body: message });
+  for (const headers of [{}, byMind, { ...member, origin: "https://evil.example" }]) {
+    const refused = auth.mcpRun(workerRequest("POST", headers), message);
+    expect(refused.headers.get("x-iterate-serve")).toBeNull();
+    expect(refused.status).toBeGreaterThanOrEqual(401);
+  }
+});
+
 test("a mind asking for the member's itx gets the refusal, not the socket", () => {
   const answer = auth.itx(workerRequest("GET", { upgrade: "websocket", ...byMind }));
   expect({ status: answer.status, serve: answer.headers.get("x-iterate-serve") }).toEqual({

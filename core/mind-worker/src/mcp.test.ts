@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { shownImages } from "./mcp.ts";
+import { mcpRunRequest } from "core-itx";
+import { serveMcpRun, shownImages } from "./mcp.ts";
 
 test("a result that names no image is answered as before", async () => {
   for (const value of [{ n: 1 }, "text", { "itx/images": "/shots/a.png" }, { "itx/images": [] }])
@@ -230,6 +231,46 @@ const files: Record<
     readAs: "text/plain",
   },
 };
+
+// A RUN THAT A CONFIG'S OWN MCP SERVER HANDED OVER (core/itx/src/serve-host.ts `mcpRunAnswer`)
+// reaches the handler as the Request that the kernel makes. A client that speaks MCP 2026-07-28
+// must name the method and the tool in headers too, or the SDK refuses the call before the tool.
+// From that version on a call also carries its envelope in `params._meta`, which a config's
+// server hands over with the call.
+test.for<{ version: string; meta?: Record<string, unknown> }>([
+  { version: "2025-06-18" },
+  {
+    version: "2026-07-28",
+    meta: {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientCapabilities": {},
+      "io.modelcontextprotocol/clientInfo": { name: "a client", version: "1" },
+    },
+  },
+])(
+  "the kernel's Request for a handed-over run reaches the tool `run` under MCP $version",
+  async ({ version, meta }) => {
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "run", arguments: { script: "async () => 1" }, _meta: meta },
+    });
+    const answer = await serveMcpRun(
+      mcpRunRequest(new URL("https://mcp.example.org/mcp"), body, version),
+      { principal: { actor: "user_owner", email: "owner@example.com" } },
+      () => Promise.reject(new Error("no file is read")),
+    );
+    const text = await answer.text();
+    // Here no mind is behind the tool, so its call fails: as an `isError` result of the tool
+    // itself, which shows that the request passed the SDK's checks and reached it.
+    expect({ status: answer.status, reachedTheTool: /"isError":true/.test(text) }).toEqual({
+      status: 200,
+      reachedTheTool: true,
+    });
+  },
+);
+
 const list = async (paths: string[]) =>
   paths.map((path) =>
     Object.hasOwn(files, path)

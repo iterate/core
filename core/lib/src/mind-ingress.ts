@@ -14,7 +14,8 @@ export const ITERATE_CONTROL_PLANE_HOSTNAME_HEADER = "x-iterate-control-plane-ho
 /** WHAT A CONFIG WORKER'S ANSWER ASKS THE PLATFORM TO SERVE IN ITS PLACE, on a mind host:
  *  `itx` is the member's own itx over a WebSocket (iterate/sdk `auth.itx`), and `person-itx` a
  *  signed-in person's narrow view of one context (iterate/sdk `auth.personItx`), the context that
- *  `ITERATE_SERVE_CONTEXT_HEADER` names. An answer, never a call: the platform serves it for the
+ *  `ITERATE_SERVE_CONTEXT_HEADER` names; and `mcp-run` one call of the MCP tool `run`, the
+ *  JSON-RPC message that is the answer's body (iterate/sdk `auth.mcpRun`). An answer, never a call: the platform serves it for the
  *  caller the boundary stamped on the request it still holds, so the config worker names no
  *  caller. The platform drops both headers from every answer it does not honour, so they never
  *  reach a browser. */
