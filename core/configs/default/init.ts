@@ -10,6 +10,7 @@ import { installAgents } from "iterate/agents/install";
 import { publishAgentKinds } from "iterate/agents/kinds";
 import { kindsForTheDash } from "./agent-kinds/index.ts";
 import { sayMindForm } from "./cloud-deliveries.ts";
+import { ensureIterateCoreRepo } from "./iterate-core.ts";
 import { removeOwnTelemetryQueryRule } from "./telemetry.ts";
 
 /** One step of the publish hook (the `mind/worker-updated` case). A step that throws is reported
@@ -40,4 +41,7 @@ export async function init(itx: IterateConfigProcessEventArgs<"agents">["itx"]) 
   // `itx.telemetry.query` is the platform's alone: the row an earlier turn-on wrote, which
   // pointed it at `itx.config.telemetryQuery`, goes (telemetry.ts).
   await step("telemetry-query-rule", () => removeOwnTelemetryQueryRule(itx));
+  // A local mirror of github.com/iterate/core at /repos/github.com/iterate/core (iterate-core.ts),
+  // so every mind's agents can inspect the platform's source locally.
+  await step("iterate-core-repo", () => ensureIterateCoreRepo(itx));
 }

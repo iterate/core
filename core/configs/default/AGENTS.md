@@ -337,6 +337,10 @@ them: the ways to sign in, the sign-in page, and a worked example.
 
 ## How the platform works
 
-The platform's source is public at https://github.com/iterate/core: read it before you guess how a
-capability behaves. `main` can differ from the code this mind runs: where they disagree, what a
-call answers is right.
+This mind keeps a local copy of the platform's public source (`https://github.com/iterate/core`)
+at `/repos/github.com/iterate/core` (synced daily; call
+`await itx.repos.get("/repos/github.com/iterate/core").pull()` to refresh it). Read it before you
+guess how a capability behaves:
+`await itx.repos.get("/repos/github.com/iterate/core").listFiles()` and
+`await itx.repos.get("/repos/github.com/iterate/core").readFile("core/AGENTS.md")`.
+`main` can differ from the code this mind runs: where they disagree, what a call answers is right.

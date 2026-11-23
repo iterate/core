@@ -31,6 +31,7 @@ import { cloudDeliveryEvent, otherMindEvent } from "./deliveries.ts";
 import { everyEvent } from "./every-event.ts";
 import { homepage } from "./homepage.ts";
 import { init, step } from "./init.ts";
+import { ITERATE_CORE_SYNC_REQUESTED, iterateCoreSyncEvent } from "./iterate-core.ts";
 import { mailDeliveryFailed, mailReceived } from "./mail.ts";
 import { cloudflareClient, me, publicProfile } from "./website.ts";
 
@@ -114,6 +115,9 @@ export default class extends ConfigApi {
         break;
       case "events.iterate.com/exception/sweep-requested": // the crash schedule fired
         await crashSweepEvent(itx, event);
+        break;
+      case ITERATE_CORE_SYNC_REQUESTED: // pull latest github.com/iterate/core into /repos/github.com/iterate/core
+        await iterateCoreSyncEvent(itx, event);
         break;
       case "events.iterate.com/email/received": // a mail came: it goes to the agent it is for
         await mailReceived(itx, event);

@@ -76,6 +76,12 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
     description:
       "This mind's code: a commit to main publishes the mind. Its AGENTS.md says how the code works.",
   },
+  {
+    path: "/repos/github.com/iterate/core",
+    title: "iterate/core",
+    description:
+      "Local mirror of the platform's public source (https://github.com/iterate/core), synced daily so agents can inspect how the platform works.",
+  },
   { path: "/repos/<name>", title: "Repo <name>", description: "The git repository <name>." },
   {
     path: "/secrets",
