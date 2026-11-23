@@ -1,5 +1,9 @@
-// agent-start.test.mjs — how the kind `agent` (agent-kinds/agent.ts) starts an agent
-// (agent-start.ts), and its guard, with a fake `itx`. Run it with `node --test agent-start.test.mjs`.
+// agent-kinds/agent.test.mjs — how the kind `agent` (agent.ts) starts an agent (../agent-start.ts),
+// its guard, and where the Dash is told of it (index.ts), with a fake `itx`. Run it from the
+// config's root with `node --test agent-kinds/agent.test.mjs`.
+//
+// IT LIVES IN THIS FOLDER, NOT IN THE ROOT: a publish loads every module file in the config's root,
+// and a `node:` import there refuses the publish (lint/config-published-modules.test.ts).
 //
 // The platform's loader makes `import agentFiles from "./agent/"` every file under agent/, by path.
 // Node has no such import: the hooks below give the same module.
@@ -33,8 +37,8 @@ registerHooks({
   },
 });
 
-const { default: agentKind } = await import("./agent-kinds/agent.ts");
-const { kindsForTheDash } = await import("./agent-kinds/index.ts");
+const { default: agentKind } = await import("./agent.ts");
+const { kindsForTheDash } = await import("./index.ts");
 
 const T = "events.iterate.com/";
 /** A fake root: each context's log. */
