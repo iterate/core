@@ -34,6 +34,11 @@ import {
   stepEvent,
   stepMindEvent,
 } from "../../configs/default/apps/onboarding/steps.ts";
+import {
+  launchOnboardingAgent,
+  ONBOARDING_AGENT,
+  renderOnboardingTasksOverview,
+} from "../../configs/default/apps/onboarding/launch.ts";
 import { openCloud } from "../../configs/default/apps/onboarding/open-cloud.ts";
 import {
   aiStatus,
@@ -1942,7 +1947,202 @@ test("onboarding page is a centered no-AI wizard with no AgentChat, the optional
   expect(pageJs).toContain("Done: your mind is set up");
   expect(pageJs).toContain('data-action="open-dash"');
   expect(pageJs).toContain("AI check passed");
+  expect(pageJs).toContain("https://tasks.${zone}/?tag=onboarding");
   expect(pageJs).not.toContain("window.location.assign(dashOnboardingUrl)");
+});
+
+test("renderOnboardingTasksOverview formats onboarding cards, depends-on links, and filtered Tasks board URLs", () => {
+  const { text, tasks } = renderOnboardingTasksOverview(
+    {
+      "tasks/onboarding-website.md":
+        "---\nstatus: in-progress\ntags: [onboarding, first-sitting]\npriority: high\nagent: /agents/onboarding/website\n---\n\n# Build a first public homepage\n\nMake a public page at your domain.\n",
+      "tasks/onboarding-telemetry.md":
+        "---\nstatus: todo\ntags: [onboarding, first-sitting]\npriority: medium\nagent: /agents/onboarding\ndepends-on: [tasks/onboarding-website.md]\n---\n\n# Inspect live visits\n\nCheck visits via itx.telemetry.query.\n",
+      "tasks/other.md": "---\nstatus: todo\ntags: [personal]\n---\n\n# Buy milk\n",
+    },
+    "example.com",
+  );
+  expect(tasks.map((task) => task.path)).toEqual([
+    "tasks/onboarding-telemetry.md",
+    "tasks/onboarding-website.md",
+  ]);
+  expect(text).toContain("https://tasks.example.com/?tag=onboarding");
+  expect(text).toContain(
+    "https://tasks.example.com/?tag=onboarding&status=in-progress&status=todo",
+  );
+  expect(text).toContain("Depends on: tasks/onboarding-website.md (in-progress)");
+  expect(text).not.toContain("Buy milk");
+});
+
+test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions, tasks & dependencies overview, opener, and immediate background subagents (idempotently)", async () => {
+  const mind = fakeMind();
+  const created: string[] = [];
+  const launchItx = {
+    ...mind.itx,
+    agents: {
+      create: async (path: string) => {
+        created.push(path);
+      },
+    },
+  };
+  const first = await launchOnboardingAgent(launchItx);
+  expect(first).toMatchObject({ launched: true });
+  expect(first.tasksCount).toBeGreaterThanOrEqual(10);
+  expect(created).toEqual([
+    ONBOARDING_AGENT,
+    "/agents/onboarding/research",
+    "/agents/onboarding/website",
+    "/agents/onboarding/sandbox",
+  ]);
+  const onboardingEvents = mind.chat();
+  expect(onboardingEvents.map((event) => event.idempotencyKey)).toEqual([
+    "onboarding:init:instructions",
+    "onboarding:init:tasks-overview",
+    `opener:${ONBOARDING_AGENT}`,
+    "onboarding:helpers-started",
+  ]);
+  expect(JSON.stringify(onboardingEvents[0]?.payload)).toContain("Onboarding agent instructions");
+  expect(onboardingEvents[0]?.payload).toMatchObject({
+    role: "developer",
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  });
+  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
+    "https://tasks.example.com/?tag=onboarding",
+  );
+  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
+    "Depends on: tasks/onboarding-website.md (in-progress)",
+  );
+  expect(onboardingEvents[2]?.payload).toMatchObject({ role: "developer" });
+  expect(onboardingEvents[2]?.payload).not.toHaveProperty("llmRequestPolicy");
+  // Background stalker (`research`), website maker (`website`), and `sandbox` subagents started immediately
+  expect(mind.logs.get("/agents/onboarding/research")).toHaveLength(1);
+  expect(mind.logs.get("/agents/onboarding/website")).toHaveLength(1);
+  expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
+
+  // Re-running launch is idempotent and appends nothing twice
+  await launchOnboardingAgent(launchItx);
+  expect(mind.chat()).toHaveLength(4);
+  expect(mind.logs.get("/agents/onboarding/research")).toHaveLength(1);
+  expect(mind.logs.get("/agents/onboarding/website")).toHaveLength(1);
+});
+
+test("launchOnboardingAgent makes the tasks repo with the template's cards once, reads it after, and launches without it when the repo was deleted", async () => {
+  const mind = fakeMind();
+  const agents = { create: async () => {} };
+  /** A repo collection with one repo, `/repos/tasks`: unborn, then at the commit it is given. */
+  const tasksRepo = (deleted = false) => {
+    const made: string[] = [];
+    const commits: { parent: string | null; changes: { path: string; content: string }[] }[] = [];
+    let files: Record<string, string> | null = null;
+    return {
+      made,
+      commits,
+      repos: {
+        create: async (path: string) => {
+          if (deleted) throw new Error(`repo ${path}: deleted — not re-creatable`);
+          made.push(path);
+        },
+        get: (path: string) => ({
+          tip: async () => (path === "/repos/tasks" && files ? "c1" : null),
+          modules: async () =>
+            Object.fromEntries(
+              Object.entries(files || {}).map(([name, text]) => [
+                name.slice("tasks/".length),
+                text,
+              ]),
+            ),
+          commitFiles: async (input: (typeof commits)[number]) => {
+            commits.push(input);
+            files = Object.fromEntries(input.changes.map(({ path, content }) => [path, content]));
+          },
+        }),
+      },
+    };
+  };
+
+  const repo = tasksRepo();
+  const first = await launchOnboardingAgent({ ...mind.itx, agents, repos: repo.repos });
+  expect(repo).toMatchObject({ made: ["/repos/tasks"] });
+  expect(repo.commits).toHaveLength(1);
+  expect(repo.commits[0]!.parent).toBeNull();
+  const seeded = repo.commits[0]!.changes.map(({ path }) => path);
+  expect(seeded).toContain("tasks/onboarding-website.md");
+  expect(seeded.every((path) => /^tasks\/onboarding-[a-z-]+\.md$/.test(path))).toBe(true);
+  expect(first).toMatchObject({ tasksCount: seeded.length });
+  // the overview names the repo the cards are in
+  expect(JSON.stringify(mind.chat()[1]?.payload)).toContain("/repos/tasks");
+
+  // a second launch reads the repo as it is, and commits nothing
+  const again = await launchOnboardingAgent({ ...mind.itx, agents, repos: repo.repos });
+  expect(repo.commits).toHaveLength(1);
+  expect(again).toMatchObject({ tasksCount: seeded.length });
+
+  // a tasks repo that was deleted is not made again, and the launch still answers
+  const gone = tasksRepo(true);
+  const without = await launchOnboardingAgent({ ...fakeMind().itx, agents, repos: gone.repos });
+  expect(without).toMatchObject({ launched: true });
+  expect(gone.commits).toHaveLength(0);
+  expect(without).toMatchObject({ tasksCount: seeded.length });
+});
+
+test("POST /verify-ai launches /agents/onboarding on success and does not create it on failure", async () => {
+  const app = onboardingApp();
+  const createdOk: string[] = [];
+  const mindOk = fakeMind();
+  const okHost = {
+    auth,
+    getItx: () => ({
+      ...mindOk.itx,
+      agents: {
+        create: async (path: string) => {
+          createdOk.push(path);
+        },
+      },
+      [Symbol.dispose]() {},
+    }),
+  };
+  const okRes = await app.fetch(
+    new Request("https://onboarding.example.com/verify-ai", { method: "POST" }),
+    okHost as never,
+  );
+  expect(okRes).toMatchObject({ status: 200 });
+  expect(await okRes.json()).toMatchObject({ ok: true, provider: "ai-gateway" });
+  expect(createdOk).toEqual([
+    ONBOARDING_AGENT,
+    "/agents/onboarding/research",
+    "/agents/onboarding/website",
+    "/agents/onboarding/sandbox",
+  ]);
+  expect(mindOk.chat().map((event) => event.idempotencyKey)).toEqual([
+    "onboarding:init:instructions",
+    "onboarding:init:tasks-overview",
+    `opener:${ONBOARDING_AGENT}`,
+    "onboarding:helpers-started",
+  ]);
+
+  const createdFail: string[] = [];
+  const mindFail = fakeMind();
+  const failHost = {
+    auth,
+    getItx: () => ({
+      ...mindFail.itx,
+      ai: { run: async () => new Response('{"error":"no credit"}', { status: 402 }) },
+      agents: {
+        create: async (path: string) => {
+          createdFail.push(path);
+        },
+      },
+      [Symbol.dispose]() {},
+    }),
+  };
+  const failRes = await app.fetch(
+    new Request("https://onboarding.example.com/verify-ai", { method: "POST" }),
+    failHost as never,
+  );
+  expect(failRes).toMatchObject({ status: 200 });
+  expect(await failRes.json()).toMatchObject({ ok: false });
+  expect(createdFail).toEqual([]);
+  expect(mindFail.chat()).toEqual([]);
 });
 
 test("one note at the owner's signed rule, which starts the agent's turn: with the balance when the credit came, and with the reason when it did not", async () => {
@@ -2205,6 +2405,11 @@ function fakeMind(
   const itx = {
     whoami: async () => ({ path: "/", mindSlug: "mind.example.com", mindId: MIND_ID }),
     url: async () => "https://example.com/",
+    agents: {
+      create: async (path: string) => {
+        logOf(path);
+      },
+    },
     cd: (path: string) => ({
       readEvents: async (after = 0) => ({
         events: logOf(path).filter((e) => e.offset > after),

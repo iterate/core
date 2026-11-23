@@ -1,0 +1,939 @@
+/* app.css — the board's own layout. @iterate-com/ui's stylesheet holds the classes its own
+   components use and no others, so what this page adds is written here as plain CSS, on the
+   theme's variables (apps/theme.css): a change of theme changes the board with every other app. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* a line in place of the board: it is being read, it could not be read, nothing matches */
+.tasks-note {
+  padding: 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+.tasks-link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.tasks-empty {
+  height: 100%;
+}
+
+/* ── the bar in the shell's header: the filter, the rows, what is saved, "New task" ── */
+.tasks-bar {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tasks-search {
+  position: relative;
+  display: flex;
+  flex: 0 1 18rem;
+  min-width: 7rem;
+  align-items: center;
+}
+
+.tasks-search > svg {
+  position: absolute;
+  left: 0.6rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.tasks-search > input {
+  height: 1.875rem;
+  padding-left: 1.9rem;
+}
+
+/* what filters the board now, in a line above the board: one chip for each, and a press lets go
+   of it. The line scrolls sideways when it is longer than the page. */
+.tasks-picked {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.375rem;
+  overflow-x: auto;
+  padding: 0.625rem 1rem 0;
+  scrollbar-width: none;
+}
+
+.tasks-picked > .tasks-link {
+  flex: none;
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+}
+
+/* the board fills what the line of chips leaves */
+.tasks-picked + .board {
+  height: calc(100% - 2.125rem);
+}
+
+.tasks-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.3rem;
+  height: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.4rem 0 0.6rem;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tasks-chip:hover {
+  background: var(--accent);
+}
+
+.tasks-chip-of {
+  color: var(--muted-foreground);
+}
+
+.tasks-chip > svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.tasks-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.tasks-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.tasks-save > svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.tasks-save[data-failed] {
+  color: var(--destructive);
+}
+
+/* a long value (an agent's name) is cut before the row's count, which stands over the button's end */
+.tasks-nav-label {
+  min-width: 0;
+  max-width: calc(100% - 1.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── the board: one grid of columns, scrolled both ways, with the columns' names kept on top ── */
+.board {
+  --column: minmax(13.5rem, 1fr);
+  height: 100%;
+  overflow: auto;
+  padding: 0 1rem 2rem;
+  overscroll-behavior-x: contain;
+}
+
+.board-head,
+.board-cells {
+  display: grid;
+  grid-template-columns: repeat(var(--columns), var(--column));
+  gap: 0.75rem;
+  min-width: min-content;
+}
+
+.board-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.75rem 0 0.5rem;
+  background: var(--background);
+}
+
+.board-column-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0 0.25rem 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.board-column-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-column-count {
+  color: var(--muted-foreground);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.board-column-add {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
+.board-row + .board-row {
+  margin-top: 1.25rem;
+}
+
+/* a row's name, when the board is in rows by a dimension: it stays at the left while the row
+   scrolls sideways */
+.board-row-name {
+  position: sticky;
+  left: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0 0 0.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.board-row-of {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.board-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 5rem;
+  padding: 0.5rem;
+  border-radius: calc(var(--radius) + 2px);
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+  transition:
+    background-color 120ms,
+    box-shadow 120ms;
+}
+
+.board-cell[data-over] {
+  background: color-mix(in oklab, var(--primary) 9%, var(--muted));
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--primary) 45%, transparent);
+}
+
+/* the faint plus under a cell's cards: there when the pointer is in the cell, or it has focus */
+.board-cell-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.75rem;
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background: none;
+  color: var(--muted-foreground);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity 120ms,
+    background-color 120ms;
+}
+
+.board-cell-add > svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.board-cell:hover > .board-cell-add,
+.board-cell-add:focus-visible {
+  opacity: 1;
+}
+
+.board-cell-add:hover {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  color: var(--foreground);
+}
+
+.board-more {
+  align-self: flex-start;
+  padding: 0.25rem 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* ── a card ── */
+.task {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  cursor: grab;
+  transition:
+    border-color 120ms,
+    box-shadow 120ms,
+    opacity 120ms;
+  position: relative;
+}
+
+.task:hover {
+  border-color: color-mix(in oklab, var(--foreground) 22%, var(--border));
+  box-shadow: 0 2px 6px rgb(0 0 0 / 7%);
+}
+
+.task[data-dragging] {
+  opacity: 0.4;
+}
+
+.task-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.task-title {
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.task-title:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* the card's menu: over the card's corner when the pointer is on the card or the menu is open, so
+   the title has the card's whole width. On a screen that is touched nothing hovers: there it is
+   always shown, and the title leaves it room. */
+.task-menu {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  background: var(--card);
+  color: var(--muted-foreground);
+  opacity: 0;
+}
+
+.task:hover .task-menu,
+.task-menu:focus-visible,
+.task-menu[aria-expanded="true"],
+.task-menu[data-popup-open] {
+  opacity: 1;
+}
+
+/* wide enough for "In progress" on one line */
+.task-menu-popup {
+  min-width: 11rem;
+}
+
+@media (hover: none) {
+  .task-menu,
+  .board-cell-add {
+    opacity: 1;
+  }
+
+  .task-title {
+    padding-right: 1.75rem;
+  }
+}
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.task-meta:empty {
+  display: none;
+}
+
+.task-folder {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-tag {
+  height: 1.125rem;
+  padding: 0 0.4rem;
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+
+/* a value of a dimension on a card is a button: a press filters the board by it */
+.task-value {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.task-value:hover > [data-slot="badge"],
+.task-value.task-owner:hover,
+.task-value.task-agent:hover {
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+.task-value[aria-pressed="true"] > [data-slot="badge"],
+.task-value.task-owner[aria-pressed="true"],
+.task-value.task-agent[aria-pressed="true"] {
+  box-shadow: 0 0 0 1.5px var(--primary);
+}
+
+.task-value:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* a priority's dot: red for the top ones, amber for high, grey for the rest */
+.task-priority > i {
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-right: 0.3rem;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+}
+
+.task-value:is(
+    [data-value="urgent"],
+    [data-value="critical"],
+    [data-value="p0"],
+    [data-value="highest"]
+  )
+  > .task-priority
+  > i {
+  background: oklch(0.63 0.21 25);
+}
+
+.task-value:is([data-value="high"], [data-value="p1"]) > .task-priority > i {
+  background: oklch(0.75 0.15 75);
+}
+
+/* who has the task: its agent and its owner, at the card's right edge */
+.task-people {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.task-agent {
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.task-agent > svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.task-owner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  font-size: 0.5625rem;
+  font-weight: 600;
+}
+
+/* a change that is not in the repo yet */
+.task-unsaved {
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-left: auto;
+  border-radius: 999px;
+  background: oklch(0.75 0.15 75);
+}
+
+.task-people + .task-unsaved {
+  margin-left: 0;
+}
+
+/* ── the box for a new task ── */
+.task-composer {
+  cursor: auto;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
+}
+
+.task-composer > textarea {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  outline: none;
+  resize: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.task-composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+/* ── a status's mark: one colour a status, the same in a column's head and in a card's menu ── */
+.status-mark {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.status-mark[data-status="backlog"] {
+  color: var(--muted-foreground);
+}
+
+.status-mark[data-status="todo"] {
+  color: light-dark(oklch(0.55 0 0), oklch(0.75 0 0));
+}
+
+.status-mark[data-status="in-progress"] {
+  color: light-dark(oklch(0.72 0.16 80), oklch(0.82 0.15 85));
+}
+
+.status-mark[data-status="in-review"] {
+  color: light-dark(oklch(0.62 0.15 150), oklch(0.75 0.16 150));
+}
+
+.status-mark[data-status="done"] {
+  color: light-dark(oklch(0.55 0.2 275), oklch(0.7 0.16 275));
+}
+
+.status-mark[data-status="own"] {
+  color: light-dark(oklch(0.6 0.19 25), oklch(0.72 0.17 25));
+}
+
+/* ── a phone: a column is most of the screen wide, and the board snaps to one ── */
+@media (max-width: 640px) {
+  .board {
+    --column: 82vw;
+    padding: 0 0.75rem 2rem;
+    scroll-snap-type: x proximity;
+  }
+
+  .board-column-head,
+  .board-cell {
+    scroll-snap-align: center;
+  }
+
+  .tasks-search {
+    flex: 1 1 auto;
+  }
+
+  /* the bar has room for the buttons, not for their words: "Group" without its value, and "New
+     task" as its plus alone */
+  .tasks-wide {
+    display: none;
+  }
+
+  .tasks-picked {
+    padding-inline: 0.75rem;
+  }
+}
+
+/* ── the task sheet: a task open at the right of the board ── */
+/* The kit's sheet is a narrow panel; a task wants room for its text and the comments beside it.
+   These rules are not in a layer, so they stand over the kit's utilities, which are. */
+.task-sheet {
+  gap: 0;
+  width: min(100vw, 60rem);
+  max-width: none;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.task-sheet-top {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.75rem 3.25rem 0.5rem 1.5rem;
+  outline: none;
+}
+
+.task-sheet-kind {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.task-sheet-path {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the head, the saving line and the text scroll as one page under the sheet's top */
+.task-sheet-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.task-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.25rem 1.5rem 0.75rem;
+}
+
+/* a text edited in place: it looks like text until it is pointed at or typed in */
+.task-box {
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0.2rem 0.4rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.task-box:hover {
+  border-color: var(--border);
+}
+
+.task-box:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 30%, transparent);
+}
+
+.task-box::placeholder {
+  color: var(--muted-foreground);
+}
+
+.task-title-box {
+  width: calc(100% + 0.8rem);
+  margin: 0 -0.4rem;
+  resize: none;
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.25;
+  /* as tall as its text: a long title is two lines, not a scrolling box */
+  field-sizing: content;
+}
+
+.task-properties {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.375rem 1rem;
+  width: 100%;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.task-property {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-height: 1.75rem;
+}
+
+.task-property > dt {
+  color: var(--muted-foreground);
+}
+
+.task-property > dd {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  margin: 0;
+}
+
+.task-property > dd > [data-slot="native-select-wrapper"] {
+  width: auto;
+  min-width: 9rem;
+}
+
+.task-property .task-box {
+  width: min(100%, 16rem);
+}
+
+.task-property-text {
+  padding-left: 0.4rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+}
+
+/* the task's agent in the sheet: a link to its chat in the Dash */
+.task-agent-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.task-agent-link:hover {
+  color: var(--foreground);
+  text-decoration-color: currentColor;
+}
+
+.task-add-property {
+  margin-left: -0.4rem;
+  color: var(--muted-foreground);
+}
+
+/* tags: a chip for each, and a box that adds one */
+.task-chips {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  height: 1.375rem;
+  border-radius: 999px;
+  padding: 0 0.25rem 0 0.55rem;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  font-size: 0.75rem;
+}
+
+.task-chip > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.task-chip > button:hover,
+.task-chip > button:focus-visible {
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--foreground);
+  outline: none;
+}
+
+.task-chip > button > svg {
+  width: 0.7rem;
+  height: 0.7rem;
+}
+
+.task-property .task-chips-box {
+  width: 7rem;
+}
+
+/* where the two kinds of change stand: the title and properties, and the text */
+.task-saving {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.task-saving-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.task-saving-part > svg {
+  flex: none;
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.task-saving-part[data-pending] {
+  color: var(--foreground);
+}
+
+.task-saving-part[data-failed] {
+  color: var(--destructive);
+}
+
+/* the Docs editor fills the rest; its own bar stays at the top of the sheet's page as it scrolls */
+.task-text {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* In its Rich view the editor draws the frontmatter as a list of properties. The sheet's head is
+   that list here, with controls, so the editor's is not drawn twice. Its Markdown view still shows
+   the frontmatter as it is written, and there it can be typed in. */
+.task-text .docs-properties {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .task-sheet {
+    width: 100vw;
+    border-left: 0;
+  }
+
+  .task-sheet-top,
+  .task-head,
+  .task-saving {
+    padding-inline: 1rem;
+  }
+
+  .task-sheet-top {
+    padding-right: 3.25rem;
+  }
+
+  .task-title-box {
+    font-size: 1.1875rem;
+  }
+}
+
+/* ── "Needs a person": a list in place of the board (app.js `NeedsPage`) ── */
+.needs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 48rem;
+  margin: 0;
+  padding: 1rem;
+  list-style: none;
+}
+
+.needs-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.needs-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.needs-asks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding-inline-start: 1.5rem;
+  font-size: 0.8125rem;
+}
+
+/* an ask's answer box (app.js `Ask`): the field takes the row, the button keeps its own width */
+/* under an ask: who asked it, a link to that agent's chat in the Dash */
+.needs-asker {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: fit-content;
+  margin-top: 0.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-decoration: none;
+}
+
+a.needs-asker:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.needs-asker > svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.needs-answer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.needs-answer > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.needs-blocked {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}

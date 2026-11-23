@@ -1,0 +1,17 @@
+{
+  "name": "Tasks",
+  "short_name": "Tasks",
+  "description": "The mind's tasks as a board: the markdown files under tasks/ in its config repo.",
+  "start_url": "/",
+  "display": "browser",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "iterate": {
+    "for": "members"
+  }
+}

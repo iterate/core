@@ -20,12 +20,18 @@ const PROCESSORS_MODULE = "apps/docs/processors/classes.ts";
  *  open on the passkey, since it is for members (../open-files.ts answers it to anyone). */
 const DOCS: AppDescription = { name: "Docs", icon: "/icon.svg", for: "members" };
 
+let cachedProcessorsVersion: Promise<string> | undefined;
+
+/** Where the Docs processors' classes are and which version of them this commit holds. Shared by
+ *  Docs and Tasks so both start one doc's processors under one name. */
+export async function processorsAnswer(): Promise<{ mainModule: string; version: string }> {
+  return {
+    mainModule: PROCESSORS_MODULE,
+    version: await (cachedProcessorsVersion ||= versionOf(processors)),
+  };
+}
+
 export function docsApp() {
-  // The processors' source as TEXT (a folder import hands files over, it does not load them), for
-  // one thing: a name for this version of it. The page starts a doc's processor from this repo's
-  // files under that name, so a commit that changes the processors starts them anew, and a commit
-  // that changes anything else (every autosave is one) leaves them running.
-  let version: Promise<string> | undefined;
   return {
     /** The app's description and icon, for anyone: worker.ts asks this before its guard
      *  (../open-files.ts). */
@@ -40,11 +46,7 @@ export function docsApp() {
         return await noteResponse(request, (path) => itx.files.get(path).bytes());
       }
       // Where the processors' classes are and which version of them this commit holds.
-      if (pathname === "/processors.json")
-        return Response.json({
-          mainModule: PROCESSORS_MODULE,
-          version: await (version ||= versionOf(processors)),
-        });
+      if (pathname === "/processors.json") return Response.json(await processorsAnswer());
       // The page's own socket (public/app.js opens it), and what @iterate-com/ui's shell asks of
       // its host: the mind's issuer, the one mind this app serves, and its "Sign out".
       const page = host.auth.memberPage(request);

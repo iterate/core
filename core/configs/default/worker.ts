@@ -21,6 +21,7 @@ import {
 } from "./apps/onboarding/steps.ts";
 import { meetApp } from "./apps/meet/app.ts";
 import { startMeeting } from "./apps/meet/meeting.ts";
+import { tasksApp } from "./apps/tasks/app.ts";
 import { callSnapshot } from "./call/snapshot.ts";
 import { endShare, shareAgent, type ShareItx, shareLinks } from "./call/share-api.ts";
 // import { guestbookApp } from "./apps/guestbook/app.ts";
@@ -41,7 +42,7 @@ import {
   sayMindForm,
   signedByIterate,
 } from "./cloud-deliveries.ts";
-import { cloudHandoverEvent, iterateLetInEvent, onboardingOpenedEvent } from "./cloud-handover.ts";
+import { cloudHandoverEvent, iterateLetInEvent } from "./cloud-handover.ts";
 import {
   CLIENT_DOCUMENT_PATH,
   cloudflareBilling,
@@ -115,6 +116,9 @@ const dash = dashApp();
 // (apps.md, "Meet"). The call's facet class is call.ts.
 const meet = meetApp();
 const onboarding = onboardingApp();
+// Tasks: a board of the markdown files under tasks/ of the repo it points at. To show another
+// repo's tasks, name that repo here (apps/tasks/app.ts).
+const tasks = tasksApp({ repo: "/repos/tasks" });
 // The guestbook, an example of an app for end users, people who are not members (people.md, "The
 // guestbook"). To turn it on, uncomment this line, its import above and its case in `fetch`.
 // const guestbook = guestbookApp();
@@ -143,19 +147,6 @@ export default class extends IterateConfigEntrypoint {
         await publishStep("agents", () => installAgents(itx));
         // where each kind's file is, for the Dash's agent view (`agentKinds`, above)
         await publishStep("agent-kinds", () => publishAgentKinds(itx, agentKinds));
-        // The onboarding agent, where a new owner starts. It reads onboarding.md. Its first
-        // message is written by the Cloud's handover (cloud-handover.ts), or, on a mind with no
-        // Cloud, by its first turn, which the Dash starts when the owner opens its chat
-        // (apps/dash/public/app.js, `openers`). Its first subagents start at that same moment
-        // (the `agent/context-added` case, below). Creating it starts no
-        // model turn. An owner who deleted it has no onboarding agent, for good: the platform
-        // refuses to make a deleted agent again, and that is no fault of the publish.
-        await publishStep("onboarding-agent", () =>
-          itx.agents.create("/agents/onboarding").catch((error: unknown) => {
-            if (!/\bdeleted\b/.test(error instanceof Error ? error.message : String(error)))
-              throw error;
-          }),
-        );
         // Tell iterate Cloud that this mind reads its deliveries in the mind form
         // (cloud-deliveries.ts, and `processMindEvent` below). Keep both, or the Cloud sends the
         // key form alone.
@@ -330,13 +321,6 @@ export default class extends IterateConfigEntrypoint {
         // gets it as their quoted words (cloud-handover.ts).
         await cloudHandoverEvent(itx, event);
         break;
-      case "events.iterate.com/agent/context-added":
-        // The owner first opened the onboarding chat: the first subagents (research, website,
-        // sandbox) start in the background, once, on a mind that had no handover
-        // (cloud-handover.ts `onboardingOpenedEvent`)
-        await onboardingOpenedEvent(itx, event);
-        await cloudDeliveryEvent(itx, event);
-        break;
       case "events.iterate.com/mind-meld/configured":
         // The owner signed the rule that lets iterate.iterate.com add events under
         // /minds/<its id>/ (ITERATE_MIND):
@@ -458,6 +442,8 @@ export default class extends IterateConfigEntrypoint {
           this.auth.require(request) ||
           onboarding.fetch(request, this)
         );
+      case "tasks": // the tasks board, for members: markdown files under tasks/
+        return tasks.open?.(request) || this.auth.require(request) || tasks.fetch(request, this);
       // case "guestbook": // the guestbook, for everyone: no guard here, its routes ask for who they need
       //   return guestbook.fetch(request, this);
       // case "telegram": // an integration package's own pages and webhook, one of `integrations`

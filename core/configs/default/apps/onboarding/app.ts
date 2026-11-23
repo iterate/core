@@ -8,6 +8,7 @@
 //   GET  /open-cloud             303 to this mind's /sign-in/open, on to its page on iterate Cloud (open-cloud.ts)
 // worker.ts guards the host before this file runs: only a member gets here, and nothing of the
 // mind is read or written for anyone else.
+import type { IterateContextApiWith } from "iterate/api";
 import { type AppDescription, serveFiles, type IterateConfigEntrypoint } from "iterate/sdk";
 import theme from "../theme.css";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
@@ -16,6 +17,7 @@ import { openFile } from "../open-files.ts";
 import index from "./index.html";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import files from "./public/";
+import { launchOnboardingAgent } from "./launch.ts";
 import { openCloud } from "./open-cloud.ts";
 import { onboardingCards, runStep, stepContext } from "./steps.ts";
 import { aiStatus, collectOpenAiKey, verifyAi } from "./verify-ai.ts";
@@ -49,8 +51,14 @@ export function onboardingApp() {
         return await answer(async () => collectOpenAiKey(itx));
       }
       if (pathname === "/verify-ai" && request.method === "POST") {
-        using itx = host.getItx();
-        return await answer(async () => verifyAi(itx));
+        using itx = host.getItx() as IterateContextApiWith<"agents"> & Disposable;
+        return await answer(async () => {
+          const result = await verifyAi(itx);
+          // The moment AI is proven working, create /agents/onboarding with its bespoke
+          // instructions, generated tasks & dependencies overview, opener, and background subagents.
+          if (result.ok) await launchOnboardingAgent(itx);
+          return result;
+        });
       }
       if (pathname === "/open-cloud" && request.method === "GET") {
         using itx = host.getItx();

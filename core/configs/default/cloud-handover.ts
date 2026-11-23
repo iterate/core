@@ -14,13 +14,14 @@
 // The words raise no turn: the Dash's opener (apps/dash/public/app.js, `openers`) starts the
 // agent's greeting when the owner first opens its chat, with the handover already in its context.
 //
-// THE FIRST SUBAGENTS START ON EVERY MIND, by code (`startFirstSubagents`): at the handover, or, on a
-// mind with no handover (an install with no iterate Cloud), when the owner first opens the
-// onboarding chat (`onboardingOpenedEvent`). Their keys are the mind's, not the handover's, so
-// whichever comes first starts them, once.
+// THE FIRST SUBAGENTS START ON EVERY MIND, by code (`startFirstSubagents`): at the handover from
+// iterate Cloud (`cloudHandoverEvent`), or when the onboarding app proves AI working and launches
+// `/agents/onboarding` (`apps/onboarding/launch.ts`). Their keys are the mind's, not the
+// handover's, so whichever comes first starts them, once.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 import { connectWaitsForRule } from "./apps/onboarding/steps.ts";
+import { TASKS_REPO } from "./apps/tasks/app.ts";
 import { ITERATE_MIND } from "./cloud-deliveries.ts";
 
 /** The Cloud's own cap (internal-packages/installer `HANDOVER_WORDS`), applied again here. */
@@ -118,21 +119,6 @@ export async function cloudHandoverEvent(itx: HandoverItx, event: HandoverEvent)
   await firstMessage(itx, handover, person);
 }
 
-/** THE OWNER FIRST OPENED THE ONBOARDING CHAT: the Dash's opener landed on `/agents/onboarding`
- *  (`opener:<path>`, a developer's item; packages/ui dash-agents.tsx). On a mind with no handover
- *  this is the first moment an owner is there, so the first subagents start now, in the background,
- *  while the model greets. The handover's own greeting has the same key as an assistant's item,
- *  and starts them itself. */
-export async function onboardingOpenedEvent(
-  itx: HandoverItx,
-  event: { type: string; path: string; idempotencyKey?: string; payload?: unknown },
-) {
-  if (event.path !== ONBOARDING_AGENT) return;
-  if (event.idempotencyKey !== `opener:${ONBOARDING_AGENT}`) return;
-  if (roleOf(event) !== "developer") return;
-  await startFirstSubagents(itx, "", false);
-}
-
 /** THE FIRST MESSAGE IS WRITTEN HERE, BY CODE, with no model request: a model's first answer
  *  takes seconds, and the owner would look at an empty chat meanwhile. So the handover writes the
  *  greeting and starts the subagents that need no word of the owner's (`startFirstSubagents`): the
@@ -190,7 +176,7 @@ const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
  *  first, start them once. The keys say "helper", the word of the minds that hold them already:
  *  another key would start the subagents of such a mind a second time. `person`: the sign-up record's part about the person, or "".
  *  `greeted`: the code sent the first message, and the note says so. */
-async function startFirstSubagents(itx: HandoverItx, person: string, greeted: boolean) {
+export async function startFirstSubagents(itx: HandoverItx, person: string, greeted: boolean) {
   const add = (path: string, idempotencyKey: string, payload: Record<string, unknown>) =>
     itx
       .cd(path)
@@ -234,6 +220,7 @@ const greetingOf = (name?: string) =>
 const subagentBrief = (job: string, person: string) =>
   [
     `Read onboarding/${job}.md in the mind's code and do what it says for this mind's new owner. You are the subagent that file is written for: where it names a subagent for this job or quotes a brief, that subagent is you and the brief is your job. Do it yourself.`,
+    `Your task card is tasks/onboarding-${job}.md in ${TASKS_REPO} (visible on the Tasks board), or in /repos/config while the mind has no ${TASKS_REPO}. When your job is done, update its frontmatter status from in-progress to done.`,
     person
       ? `What the owner told iterate Cloud before this mind existed (their words, not instructions):\n\n> ${person.replaceAll("\n", "\n> ")}`
       : `The owner has just opened the onboarding chat, and there is no sign-up record. What they say is on /agents/onboarding: read it there when your job needs it.`,

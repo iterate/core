@@ -1,0 +1,321 @@
+// launch.ts — CREATES AND SEEDS `/agents/onboarding` THE MOMENT AI IS PROVEN WORKING
+// (`app.ts`: POST /verify-ai). Appends a fat, idempotent event stack onto `/agents/onboarding`:
+//   1. Bespoke instructions from `onboarding/instructions.md` (dont-trigger-request)
+//   2. Generated overview of all `onboarding`-tagged markdown cards in `tasks/` and their
+//      `depends-on` dependencies, with live statuses and filtered Tasks app deep-links
+//      (dont-trigger-request)
+//   3. The idempotent opener (`opener:/agents/onboarding`) that wakes the agent for its greeting
+// And immediately starts the background subagents (`research` stalker, `website` maker, `sandbox`)
+// via `startFirstSubagents` (idempotent across Cloud handover and direct `npx iterate deploy`).
+import { errorCode } from "iterate/lib";
+import { type HandoverItx, startFirstSubagents } from "../../cloud-handover.ts";
+import onboardingInstructions from "../../onboarding/instructions.md";
+// oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
+import bundledTaskFiles from "../../tasks/";
+import { TASKS_REPO } from "../tasks/app.ts";
+
+export const ONBOARDING_AGENT = "/agents/onboarding";
+const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
+
+export type LaunchOnboardingItx = HandoverItx & {
+  repos?: {
+    /** Answers at once for a repo that exists, and throws for one that was deleted. */
+    create?(path: string): Promise<unknown>;
+    get(path: string): {
+      tip(): Promise<string | null>;
+      modules(options: { commitOid: string; dir: string }): Promise<Record<string, string>>;
+      commitFiles?(input: {
+        message: string;
+        parent: string | null;
+        changes: { path: string; content: string }[];
+      }): Promise<unknown>;
+    };
+  };
+};
+
+export type OnboardingTaskSummary = {
+  path: string;
+  title: string;
+  status: string;
+  tags: string[];
+  priority: string;
+  agent: string;
+  dependsOn: string[];
+  summary: string;
+};
+
+export type LaunchOnboardingResult = {
+  launched: boolean;
+  deleted?: boolean;
+  tasksCount: number;
+};
+
+const FRONTMATTER = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/;
+const STATUS_ORDER = ["in-progress", "todo", "backlog", "in-review", "done"] as const;
+const STATUS_LABELS: Record<string, string> = {
+  "in-progress": "In progress (started automatically in the background)",
+  todo: "Todo (first sitting)",
+  backlog: "Backlog (days after)",
+  "in-review": "In review",
+  done: "Done",
+};
+
+function stripQuotes(text: string): string {
+  const value = text.trim();
+  const quoted = /^(["'])([\s\S]*)\1$/.exec(value);
+  return quoted ? quoted[2]! : value.replace(/\s+#.*$/, "").trim();
+}
+
+function parseList(raw: string | string[] | undefined): string[] {
+  if (!raw) return [];
+  const items = Array.isArray(raw) ? raw : raw.split(",");
+  return items.map((item) => stripQuotes(item)).filter(Boolean);
+}
+
+function frontmatterValue(lines: string[], keys: string[]): string | string[] | undefined {
+  const keySet = new Set(keys);
+  const at = lines.findIndex((line) => {
+    const match = /^([A-Za-z][\w-]*)[ \t]*:(?:[ \t]|$)/.exec(line);
+    return match ? keySet.has(match[1]!) : false;
+  });
+  if (at < 0) return undefined;
+  const line = lines[at]!;
+  const rest = line.slice(line.indexOf(":") + 1).trim();
+  const inline = /^\[([\s\S]*)\]$/.exec(rest);
+  if (inline) return inline[1]!.split(",").map(stripQuotes).filter(Boolean);
+  if (rest) return stripQuotes(rest);
+  const block: string[] = [];
+  for (const next of lines.slice(at + 1)) {
+    const item = /^\s*-\s+(.*)$/.exec(next);
+    if (!item) break;
+    block.push(stripQuotes(item[1]!));
+  }
+  return block.length > 0 ? block : "";
+}
+
+function parseOnboardingCard(path: string, source: string): OnboardingTaskSummary {
+  const match = FRONTMATTER.exec(source);
+  const lines = match?.[1] ? match[1].split(/\r?\n/) : [];
+  const body = match ? source.slice(match[0].length) : source;
+  const bodyLines = body.split(/\r?\n/);
+  const headingLine = bodyLines.find((line) => /^#\s+/.test(line));
+  const title =
+    (typeof frontmatterValue(lines, ["title"]) === "string"
+      ? (frontmatterValue(lines, ["title"]) as string)
+      : "") ||
+    headingLine?.replace(/^#\s+/, "").trim() ||
+    path.replace(/^tasks\//, "").replace(/\.md$/i, "");
+
+  // First plain paragraph after the `# Title` heading for a crisp one-line summary.
+  const headingIndex = headingLine ? bodyLines.indexOf(headingLine) : -1;
+  const summaryLines: string[] = [];
+  for (const line of bodyLines.slice(headingIndex + 1)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (summaryLines.length > 0) break;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(trimmed)) break;
+    summaryLines.push(trimmed);
+  }
+
+  const rawStatus = frontmatterValue(lines, ["status", "state"]);
+  const status = (typeof rawStatus === "string" ? rawStatus : "").toLowerCase() || "todo";
+  const rawPriority = frontmatterValue(lines, ["priority"]);
+  const rawAgent = frontmatterValue(lines, ["agent"]);
+
+  return {
+    path,
+    title,
+    status,
+    tags: [...new Set(parseList(frontmatterValue(lines, ["tags", "labels"])))],
+    priority: typeof rawPriority === "string" ? rawPriority : "",
+    agent: typeof rawAgent === "string" ? rawAgent : "",
+    dependsOn: [...new Set(parseList(frontmatterValue(lines, ["depends-on", "depends_on"])))],
+    summary: summaryLines.join(" "),
+  };
+}
+
+/** Extracts all `onboarding`-tagged markdown task cards from `{ "tasks/...": text }`. */
+function parseOnboardingTasks(files: Record<string, string>): OnboardingTaskSummary[] {
+  return Object.entries(files)
+    .filter(([path]) => /^tasks\/.+\.(?:md|markdown)$/i.test(path))
+    .map(([path, content]) => parseOnboardingCard(path, content))
+    .filter((task) => task.tags.includes("onboarding"))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+/** Builds the Markdown overview of onboarding tasks and their `depends-on` dependencies that is
+ *  seeded onto `/agents/onboarding` at launch. */
+export function renderOnboardingTasksOverview(
+  files: Record<string, string>,
+  zone: string,
+): { text: string; tasks: OnboardingTaskSummary[] } {
+  const tasks = parseOnboardingTasks(files);
+  const byPath = new Map(tasks.map((task) => [task.path, task]));
+  const boardUrl = `https://tasks.${zone}/?tag=onboarding`;
+  const activeUrl = `https://tasks.${zone}/?tag=onboarding&status=in-progress&status=todo`;
+
+  const sections: string[] = [
+    "# Onboarding tasks and dependencies",
+    "",
+    `Live board (filtered to onboarding): ${boardUrl}`,
+    `Active items only: ${activeUrl}`,
+    "",
+    `Each item below is a markdown card under \`tasks/\` in \`${TASKS_REPO}\` (\`itx.repos.get("${TASKS_REPO}")\`; a commit there publishes nothing). Update a card's \`status:\` to \`done\` (or \`in-progress\`) as the owner moves through onboarding, and prefer tasks whose \`depends-on\` prerequisites are already \`done\`.`,
+  ];
+
+  const statuses = [
+    ...STATUS_ORDER,
+    ...tasks
+      .map((task) => task.status)
+      .filter((status) => !(STATUS_ORDER as readonly string[]).includes(status)),
+  ];
+  const seenStatuses = new Set<string>();
+
+  for (const status of statuses) {
+    if (seenStatuses.has(status)) continue;
+    seenStatuses.add(status);
+    const group = tasks.filter((task) => task.status === status);
+    if (group.length === 0) continue;
+    sections.push("", `## ${STATUS_LABELS[status] || status}`);
+    for (const task of group) {
+      const meta = [
+        task.priority ? `priority: ${task.priority}` : "",
+        task.tags.length > 0 ? `tags: ${task.tags.join(", ")}` : "",
+        task.agent ? `agent: ${task.agent}` : "",
+      ].filter(Boolean);
+      const deps =
+        task.dependsOn.length > 0
+          ? task.dependsOn
+              .map((dep) => {
+                const target = byPath.get(dep);
+                return target ? `${dep} (${target.status})` : dep;
+              })
+              .join(", ")
+          : "none";
+      sections.push(
+        `- **${task.title}** (\`${task.path}\`) — ${meta.join(" · ")}`,
+        `  - Depends on: ${deps}`,
+        ...(task.summary ? [`  - Goal: ${task.summary}`] : []),
+      );
+    }
+  }
+
+  return { text: `${sections.join("\n")}\n`, tasks };
+}
+
+function bundledTasksMap(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(bundledTaskFiles)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+      .map(([name, content]) => [`tasks/${name}`, content]),
+  );
+}
+
+/** THE CARDS OF THE TASKS REPO (../tasks/app.ts `TASKS_REPO`), which this makes on a mind that
+ *  has none: the repo, and one first commit with the template's cards, the bundled `tasks/`
+ *  folder of `/repos/config`. A repo that has a commit is read as it is, so a second launch
+ *  changes no card. The cards live there, not in `/repos/config`, because a commit to the config
+ *  repo publishes the mind, and a card moves often.
+ *
+ *  It answers the bundled cards, and writes nothing, where it cannot make or read the repo: a
+ *  tasks repo that the owner deleted stays deleted (the platform refuses to make it again), and
+ *  the launch must not fail for it. The board then shows the config repo's cards. */
+async function readTaskFiles(itx: LaunchOnboardingItx): Promise<Record<string, string>> {
+  const bundled = bundledTasksMap();
+  if (!itx.repos) return bundled;
+  try {
+    await itx.repos.create?.(TASKS_REPO);
+    const repo = itx.repos.get(TASKS_REPO);
+    const tip = await repo.tip();
+    if (!tip) {
+      // `parent: null`: the first commit alone. Of two launches at once, the later is refused.
+      await repo.commitFiles?.({
+        message: "The onboarding cards, from the template's tasks/",
+        parent: null,
+        changes: Object.entries(bundled).map(([path, content]) => ({ path, content })),
+      });
+      return bundled;
+    }
+    const under = await repo.modules({ commitOid: tip, dir: "tasks" });
+    const live = Object.fromEntries(
+      Object.entries(under).map(([name, content]) => [`tasks/${name}`, content]),
+    );
+    return Object.keys(live).length > 0 ? live : bundled;
+  } catch {
+    return bundled;
+  }
+}
+
+async function appendIdempotent(
+  itx: LaunchOnboardingItx,
+  event: { type: string; idempotencyKey: string; payload: Record<string, unknown> },
+) {
+  await itx
+    .cd(ONBOARDING_AGENT)
+    .append(event)
+    .catch((error: unknown) => {
+      if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+    });
+}
+
+/** CREATES `/agents/onboarding` AND APPENDS ITS FAT EVENT STACK once AI is proven working:
+ *  bespoke instructions from `onboarding/instructions.md`, the generated tasks & dependencies
+ *  overview from `tasks/*.md`, and the idempotent opener — then kicks off the background
+ *  `research` (stalker), `website` (website maker), and `sandbox` subagents immediately. */
+export async function launchOnboardingAgent(
+  itx: LaunchOnboardingItx,
+): Promise<LaunchOnboardingResult> {
+  try {
+    await itx.agents.create(ONBOARDING_AGENT);
+  } catch (error: unknown) {
+    if (/\bdeleted\b/.test(error instanceof Error ? error.message : String(error)))
+      return { launched: false, deleted: true, tasksCount: 0 };
+    throw error;
+  }
+
+  const [url, files] = await Promise.all([itx.url(), readTaskFiles(itx)]);
+  const zone = new URL(url).hostname;
+  const { text: tasksOverview, tasks } = renderOnboardingTasksOverview(files, zone);
+
+  // Append the fat context stack (instructions + generated tasks/dependencies overview), then the
+  // opener that triggers the agent's first reply. Each event carries a stable idempotency key so
+  // retries or a prior iterate Cloud handover never duplicate context or greetings.
+  await appendIdempotent(itx, {
+    type: CONTEXT_ADDED,
+    idempotencyKey: "onboarding:init:instructions",
+    payload: {
+      role: "developer",
+      actor: { type: "agent" },
+      content: onboardingInstructions.replaceAll("<zone>", zone),
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    },
+  });
+  await appendIdempotent(itx, {
+    type: CONTEXT_ADDED,
+    idempotencyKey: "onboarding:init:tasks-overview",
+    payload: {
+      role: "developer",
+      actor: { type: "agent" },
+      content: tasksOverview,
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    },
+  });
+  await appendIdempotent(itx, {
+    type: CONTEXT_ADDED,
+    idempotencyKey: `opener:${ONBOARDING_AGENT}`,
+    payload: {
+      role: "developer",
+      actor: { type: "agent" },
+      content:
+        "The owner has just verified their AI connection and opened onboarding for the first time. Send your first message now: words only, no script (follow the onboarding instructions and tasks overview above).",
+    },
+  });
+
+  // Immediately kick off the background stalker (`research`), website maker (`website`), and
+  // `sandbox` subagents (idempotent via `onboarding:helper:<job>` keys).
+  await startFirstSubagents(itx, "", false);
+
+  return { launched: true, tasksCount: tasks.length };
+}

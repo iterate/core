@@ -33,9 +33,9 @@ const AGENT = "/agents/onboarding";
 const CLOUD_STEP = "connect-iterate-cloud";
 const CLOUDFLARE_STEP = "connect-cloudflare";
 
-/** The idempotent opener for /agents/onboarding, matching Dash's apps/dash/public/app.js. */
-const OPENER =
-  "The owner has just opened this chat for the first time and has typed nothing yet. Send your first message now: words only, no script (onboarding.md, 'Your first message').";
+/** Recovery nudge if a launched onboarding turn settled without a reply. */
+const WAKE_RETRY =
+  "Your AI connection is verified and ready. Send your first greeting to the owner now: words only, no script.";
 
 // ── the member's itx ──
 const socket = new WebSocket(new URL("/itx", location.href.replace(/^http/, "ws")));
@@ -61,6 +61,7 @@ const hostSession =
 const mind = new URL((await hostSession).issuer).hostname;
 const zone = location.hostname.split(".").slice(1).join(".");
 const dashOnboardingUrl = `https://dash.${zone}/agents${AGENT}`;
+const onboardingTasksUrl = `https://tasks.${zone}/?tag=onboarding`;
 
 async function ask(path, method = "GET") {
   const response = await fetch(path, { method });
@@ -882,12 +883,12 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
     wakeTriggeredRef.current = true;
     wakeStartOffsetRef.current = events.at(-1)?.offset ?? 0;
 
+    // POST /verify-ai has already created /agents/onboarding, seeded its instructions and tasks
+    // overview, appended its opener, and started the background subagents. Only send a recovery
+    // wake if the latest triggered turn already settled without producing a model reply.
     (async () => {
       try {
-        await itx.agents.create(AGENT).catch(() => {});
         const stub = agent.stub || itx.cd(AGENT);
-        // Find the last event that triggers an LLM turn (user/developer context or incoming
-        // message; assistant notices like credit-spent do not trigger a turn).
         const lastTrigger = [...events]
           .reverse()
           .find(
@@ -897,18 +898,7 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
                 (event.payload?.role === "user" || event.payload?.role === "developer") &&
                 event.payload?.llmRequestPolicy?.behaviour !== "dont-trigger-request"),
           );
-        if (!lastTrigger) {
-          await stub
-            .append({
-              type: "events.iterate.com/agent/context-added",
-              idempotencyKey: `opener:${AGENT}`,
-              payload: { role: "developer", content: OPENER },
-            })
-            .catch(() => {});
-          return;
-        }
-        // Only append a recovery wake turn when the latest triggered turn has already settled
-        // without producing a model reply; never duplicate a pending or in-flight opener.
+        if (!lastTrigger) return;
         const lastSettled = [...events]
           .reverse()
           .find((event) => event.type === "events.iterate.com/agent/llm-request-settled");
@@ -924,7 +914,7 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
             .append({
               type: "events.iterate.com/agent/context-added",
               idempotencyKey: `onboarding-wake:${lastSettled.offset}`,
-              payload: { role: "developer", content: OPENER },
+              payload: { role: "developer", content: WAKE_RETRY },
             })
             .catch(() => {});
         }
@@ -1039,7 +1029,18 @@ function DoneStep({ verifyResult, aiStatus, cloudCard, onReviewAi }) {
       <//>
 
       <${CardFooter} className="wizard-actions">
-        <${Button} variant="outline" data-action="review-ai" onClick=${onReviewAi}> AI settings <//>
+        <div className="wizard-actions-group">
+          <${Button} variant="outline" data-action="review-ai" onClick=${onReviewAi}>
+            AI settings
+          <//>
+          <a
+            className=${buttonVariants({ variant: "outline" })}
+            href=${onboardingTasksUrl}
+            data-action="open-tasks"
+          >
+            Onboarding tasks
+          </a>
+        </div>
         <a
           className=${buttonVariants({ variant: "default" })}
           href=${dashOnboardingUrl}

@@ -33,6 +33,7 @@ import {
   BookOpenIcon,
   BotIcon,
   ChartLineIcon,
+  CircleCheckIcon,
   CompassIcon,
   FolderGit2Icon,
   HistoryIcon,
@@ -104,12 +105,6 @@ const pages = [
     // highlight, read. What the agent does there carries THAT MEMBER's stamp in the log, and the
     // page's audit row for the call names no caller. A jailed agent gets nothing. apps.md, "The
     // Dash", says what it costs.
-    // what the mind says first in an agent's empty chat, the first time anyone opens it: the
-    // onboarding agent greets a new owner (onboarding.md is what it is told)
-    openers: {
-      "/agents/onboarding":
-        "The owner has just opened this chat for the first time and has typed nothing yet. Send your first message now: words only, no script (onboarding.md, 'Your first message').",
-    },
   },
   {
     id: "integrations",
@@ -176,6 +171,12 @@ const apps = [
     about: "Set up this mind step by step.",
     host: "onboarding",
     icon: SparklesIcon,
+  },
+  {
+    name: "Tasks",
+    about: "Tasks and onboarding cards as a board.",
+    host: "tasks",
+    icon: CircleCheckIcon,
   },
 ].map((app) => ({ ...app, href: `https://${app.host}.${zone}` }));
 

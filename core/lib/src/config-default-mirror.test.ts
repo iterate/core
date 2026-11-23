@@ -82,7 +82,7 @@ test("the homepage answers GET and HEAD of / alone: anything else that no case t
   });
 });
 
-test.for(["docs", "dash", "onboarding"])(
+test.for(["docs", "dash", "onboarding", "tasks"])(
   "the %s app says what it is and shows its icon to anyone, and nothing else before a sign-in",
   async (host) => {
     const refusal = new Response("Sign in\n", { status: 401 });
@@ -123,7 +123,7 @@ test("the Dash leads to every other app the default worker mounts", () => {
   // the hosts the worker's `fetch` answers: one `case "<host>":` each
   const worker = readFileSync(new URL("../../configs/default/worker.ts", import.meta.url), "utf8");
   const mounted = [...worker.matchAll(/^ {6}case "([a-z]+)":/gm)].map(([, host]) => host);
-  expect(mounted).toEqual(["docs", "dash", "meet", "onboarding"]);
+  expect(mounted).toEqual(["docs", "dash", "meet", "onboarding", "tasks"]);
   const linked = [...String(dashFiles["app.js"]).matchAll(/\bhost: "([a-z]+)"/g)].map(
     ([, host]) => host,
   );
