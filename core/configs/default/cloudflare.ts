@@ -11,7 +11,7 @@
 //   cloudflareLastHour         the mind's own Workers in the last hour (`itx.config.cloudflareLastHour`)
 //   cloudflareBillingToken,    a second credential, for the cost of the account alone
 //   cloudflareBilling
-//   cloudflareConnectionEvent  what worker.ts calls for every event: the check of a new grant,
+//   cloudflareConnectionEvent  what every-event.ts calls for every event: the check of a new grant,
 //                              and the connection's card on the Dash's Integrations page
 //
 // THE MIND IS ITS OWN CLIENT. No OAuth client is made in the account and nobody pastes a token.

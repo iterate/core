@@ -1,7 +1,7 @@
 # Mail and its replies
 
 Who gets the mail that reaches the mind, and how a reply finds its agent: the
-`events.iterate.com/email/received` and `email/delivery-failed` cases of `worker.ts`, and
+`events.iterate.com/email/received` and `email/delivery-failed` cases of `worker.ts`, which call `mail.ts`, and
 `mail-replies.ts`, whose header has the rules in their order.
 
 The `events.iterate.com/email/received` case hands each email a member sends to the mind

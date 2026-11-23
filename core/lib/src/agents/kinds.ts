@@ -1,13 +1,13 @@
 // agents/kinds.ts — KINDS OF AGENT. An agent kind is one file in a mind's config repo
 // (`agent-kinds/<kind>.ts` by convention) whose default export is an `AgentKind`: what its agents
 // are called in the catalog, its server half (the shape of an `Integration`'s `processEvent`), what
-// the Dash reads of an agent's log, and its chat view. A config repo's worker names its kinds,
+// the Dash reads of an agent's log, and its chat view. A config repo names its kinds (core/configs/default/agent-kinds/index.ts),
 //
 //   import { makeAgentKind } from "iterate/agents/kinds";
-//   const agentKinds = [makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts"))];
+//   export const agentKinds = [makeAgentKind(import.meta, () => import("./iterate.ts"))];
 //
-// runs each kind's `processEvent` beside the integrations, and calls `publishAgentKinds` on every
-// publish (core/configs/default/worker.ts). The view is the Agents
+// its worker runs each kind's `processEvent` beside the integrations, and calls `publishAgentKinds` on every
+// publish (core/configs/default/every-event.ts, init.ts). The view is the Agents
 // app's business: it runs in a sandboxed frame there, and `@iterate-com/ui/agent-kind-view` gives
 // `View` its React type. Nothing here needs React or `cloudflare:workers`, so a browser's code can
 // name these types too.

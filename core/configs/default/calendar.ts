@@ -1,4 +1,4 @@
-// calendar.ts — GOOGLE CALENDAR'S PUSH (worker.ts, the `google/calendar-*` case). The primary
+// calendar.ts — GOOGLE CALENDAR'S PUSH (deliveries.ts, the `google/calendar-*` case). The primary
 // calendar of a Google account that a member connected through iterate Cloud's Google client puts
 // each changed event on the mind's log as it changes, with no polling. Three events drive it:
 //

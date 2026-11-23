@@ -7,7 +7,7 @@ The owner should come away with (an owner who builds software): how the agents r
 Certain, from the code:
 
 - `agents.ts` at the top of the mind's code exports the agents' two classes from `iterate/agents`;
-  `installAgents(itx)` in `worker.ts` finds them there by name. Every agent runs from that file's
+  `installAgents(itx)` in `init.ts` finds them there by name. Every agent runs from that file's
   own bundle: a commit to `worker.ts` or a page alone leaves the agents as they are.
 - The loop's own code is iterate's package `iterate/agents`, which comes from the platform and a
   platform deploy upgrades. Its source: https://github.com/iterate/core, `core/lib/src/agents/`.

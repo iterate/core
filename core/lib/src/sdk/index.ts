@@ -372,9 +372,9 @@ export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = 
 };
 
 /** WHAT A MIND HOSTS BESIDE ITS OWN CODE — an integration package (iterate-telegram,
- *  iterate-github, …: github.com/jonastemplestein/iterategrations), two hooks the config repo's
- *  `worker.ts` lists in `const integrations: Integration[]` and dispatches to
- *  (core/configs/default/worker.ts). A package's install hook is its `mind/worker-updated` case:
+ *  iterate-github, …: github.com/jonastemplestein/iterategrations), two hooks the config repo
+ *  lists in `const integrations: Integration[]` and its worker dispatches to
+ *  (core/configs/default/integrations.ts, every-event.ts). A package's install hook is its `mind/worker-updated` case:
  *  there it registers its card on the mind's `/integrations` context (iterate/integrations),
  *  keyed by that event's path and offset, so the Dash lists it after every publish and a retry
  *  appends nothing new. A package keeps nothing across calls: not the host, not a scope, not a
@@ -402,7 +402,7 @@ export type Integration = {
 };
 
 /** Stateless config entrypoint, the default export of a mind's config repo; its init handles
- *  `events.iterate.com/mind/worker-updated` (core/configs/default/worker.ts). */
+ *  `events.iterate.com/mind/worker-updated` (core/configs/default/worker.ts, init.ts). */
 export abstract class IterateConfigEntrypoint<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {

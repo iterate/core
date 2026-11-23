@@ -1,4 +1,4 @@
-// gmail.ts — GMAIL'S PUSH (worker.ts, the `google/gmail-*` case). A Gmail mailbox that a member
+// gmail.ts — GMAIL'S PUSH (deliveries.ts, the `google/gmail-*` case). A Gmail mailbox that a member
 // connected through iterate Cloud's Google client puts each new message on the mind's log as it
 // arrives, with no polling. Three events drive it:
 //

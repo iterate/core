@@ -1,7 +1,7 @@
 // page-events.ts — THE PAGE TAG OF THIS MIND (page-events.md). Jonas, 21 Nov 2026: one script in
 // every page of every app, which says what people did there and what broke there.
 //
-// worker.ts calls these parts for every request of every host:
+// page-tag.ts calls these parts, for worker.ts's `fetch`, for every request of every host:
 // - `pageEventsRoute`: `GET /.page.js` is the tag's script (public/page.js), and
 //   `POST /.page-events` takes what a page sends and appends it:
 //
@@ -34,7 +34,7 @@
 // runs before it sends, and `scrub` after it). Nothing here wakes an agent. THE BOUNDS:
 // - A HOST REPORTS ONLY AFTER THE MIND SERVED IT A PAGE WITH THE TAG (`hostTagged`, `hostKnown`):
 //   the list `page-events/hosts` in kv, at most 200, and as many in an isolate. Any label under
-//   the domain reaches this Worker; worker.ts serves the homepage of a label that is no app with
+//   the domain reaches this Worker; homepage.ts serves the homepage of a label that is no app with
 //   `x-page-events: off`, so it gets no tag, and its report gets what the host answers.
 // - This host's own page alone, 64,000 bytes and 20 records a send.
 // - The minute's counts of `within`, in this isolate. THE TRUST LINE IS A MEMBER, never "anyone
@@ -558,8 +558,8 @@ let zone: string | null = null;
 const servedName = (hostname: string, ofZone: string) =>
   hostname === ofZone ||
   (hostname.endsWith(`.${ofZone}`) && !hostname.slice(0, -ofZone.length - 1).includes("."));
-/** THIS HOST SERVED A PAGE WITH THE TAG: worker.ts calls it when an answer takes the tag, and
- *  only an app's page takes it (worker.ts serves the homepage of a label that is no app with
+/** THIS HOST SERVED A PAGE WITH THE TAG: page-tag.ts calls it when an answer takes the tag, and
+ *  only an app's page takes it (homepage.ts serves the homepage of a label that is no app with
  *  `x-page-events: off`). Null when this isolate knows the host already, or knows 200: no call at
  *  all. Else the isolate knows it at once, and a promise (for `waitUntil`) puts it on the list in
  *  kv: read, add, put, never past 200 hosts, after the isolate's write before it. What the read
@@ -772,7 +772,7 @@ const quietOf = (request: Request) =>
  *  the visitor, the host, the country,
  *  the place and the browser; no screen, no time on the page, no error, no `tag`. Only a browser's own navigation counts (it
  *  says `sec-fetch-dest: document`, which a crawler does not), and only a page that was served.
- *  Null for any other answer; else a promise for worker.ts to keep alive (`waitUntil`). */
+ *  Null for any other answer; else a promise for page-tag.ts to keep alive (`waitUntil`). */
 export function pageRequested(
   request: Request,
   answer: Response,
@@ -916,7 +916,7 @@ export async function pageEventsRoute(request: Request, host: Host): Promise<Res
 
 const done = (status: number) =>
   new Response(null, { status, headers: { "cache-control": "no-store" } });
-/** THE ANSWER TO A SEND THAT WAS DROPPED after the checks: 202, nothing appended. worker.ts answers
+/** THE ANSWER TO A SEND THAT WAS DROPPED after the checks: 202, nothing appended. page-tag.ts answers
  *  it too when the route throws, which it never should. */
 export const droppedBatch = () => done(202);
 

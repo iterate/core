@@ -50,6 +50,9 @@ import {
 export const CRASH_SWEEP_ON = true;
 
 export const SWEEPS = `${EXCEPTIONS}/sweeps`;
+/** The tick's type. A `worker.ts` that its owner changed can name it in its case: a template
+ *  update leaves that file alone and replaces this one, so the name must stay.
+ *  @public */
 export const SWEEP_REQUESTED = "events.iterate.com/exception/sweep-requested";
 export const SWEEP_FAILED = "events.iterate.com/exception/sweep-failed";
 /** The key of the crash job's schedule on /exceptions/sweeps. */
@@ -216,7 +219,7 @@ export type SweepItx = Itx & {
  *  holds more than 1,000, so it cannot grow for good. */
 const landed = new Set<string>();
 
-/** THE SWEEP, at each `exception/sweep-requested` (worker.ts). It never throws. */
+/** THE SWEEP, at each `exception/sweep-requested` (`crashSweepEvent`). It never throws. */
 export async function crashSweep(
   itx: SweepItx,
   event: { offset: number },
@@ -272,6 +275,18 @@ export async function crashSweep(
       )
       .catch(() => {});
   }
+}
+
+/** The crash job's tick (worker.ts's `exception/sweep-requested` case): what only Cloudflare's
+ *  runtime saw goes to /exceptions. It never throws. With its switch off (`CRASH_SWEEP_ON`), a
+ *  tick that was still due runs nothing. Only the platform's own tick runs it (`sweepTick`): the
+ *  schedule's stamp on /exceptions/sweeps. An event of the same type anywhere else, signed or
+ *  not, starts no query. */
+export async function crashSweepEvent(
+  itx: SweepItx,
+  event: Parameters<typeof sweepTick>[0] & { offset: number },
+): Promise<void> {
+  if (CRASH_SWEEP_ON && sweepTick(event)) await crashSweep(itx, event);
 }
 
 type Schedules = {

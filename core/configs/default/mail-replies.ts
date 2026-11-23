@@ -1,4 +1,4 @@
-// mail-replies.ts — WHO GETS A RECEIVED MAIL. worker.ts's `email/received` case asks here.
+// mail-replies.ts — WHO GETS A RECEIVED MAIL. mail.ts's `mailReceived` asks here.
 //
 // Two rules, in this order:
 // 1. A REPLY GOES BACK TO THE AGENT THAT WROTE. When the mail's thread holds a mail that an agent
@@ -45,7 +45,7 @@ export type MindMail = { hops: number };
 
 export type MailTarget =
   | { agent: string; from: "member" | "outside" | "mind" }
-  /** the thread's own agent, which worker.ts names from the thread */
+  /** the thread's own agent, which mail.ts names from the thread */
   | { agent: null; from: "member" | "mind" }
   | null;
 
@@ -95,7 +95,7 @@ export function mindMailHeld(mind: MindMail | null | undefined, limit: number) {
 }
 
 /** HOW THIS MIND TAKES ANOTHER MIND'S MAIL: the hop limit, and the allowed peers, as addresses
- *  and whole domains (lower case). worker.ts reads it from the mail log at each mind's mail. */
+ *  and whole domains (lower case). mail.ts reads it from the mail log at each mind's mail. */
 export type MindMailSettings = { limit: number; addresses: string[]; domains: string[] };
 
 /** Who appended a setting: a person in their own session (`principal`), or a script a person ran

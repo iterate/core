@@ -3,7 +3,7 @@
 // reaches nothing else of the mind. An entry waits until a member approves it; a member can remove
 // any entry. Other agents write through the app's own MCP server at /mcp, signed in the same way.
 //
-// It is an example to copy: worker.ts mounts it with one line, which is commented out (people.md,
+// It is an example to copy: worker.ts mounts it with three lines (people.md,
 // "The guestbook"). A person who is no member signs in with a code that the mind mails to their
 // address: the app names "email" first (`GUESTBOOK`), so the sign-in page opens on the address
 // form, and the mail comes from this hostname's zone under the app's name.

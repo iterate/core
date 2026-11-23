@@ -40,7 +40,7 @@ The owner should come away with: the mind sees every request, error and event of
   `telemetryToken()`: ask again while `wide` is true. A destroy of the stack leaves the token
   in the account: its member deletes it then. A repair needs the two permissions back: `telemetryTurnOn()` then
   fails on a list call with a 403.
-- A mind whose `worker.ts` was changed has no `itx.config.telemetryToken` after an update: its
+- A mind whose `api.ts` was changed, or whose `worker.ts` does not extend `ConfigApi`, has no `itx.config.telemetryToken` after an update: its
   owner takes the new lines as `template-updates.md` says.
 - `spans` has `timestamp, worker, path, version_id, trace_id, span_id, parent_span_id, seq, name,
 kind, status, duration_ms, cpu_time_ms, wall_time_ms, outcome, entrypoint, durable_object_id,

@@ -227,7 +227,7 @@ Which words interrupt is decided by how they arrive, not by who wrote them:
 - Words sent with `message()` from any other context do not. They carry `from`.
 - Words with `{ trigger: false }` do not. They stay context only.
 - Words that a relay appends as a raw `agent/context-added` do not. Slack, email, mail, X DMs and
-  the Cloud hand-over (`core/configs/default/worker.ts`, `cloud-handover.ts`) all do that, so a
+  the Cloud hand-over (`core/configs/default/mail.ts`, `deliveries.ts`, `cloud-handover.ts`) all do that, so a
   person who writes through them does not interrupt.
 
 It ends a model's answer and nothing else: a script that is running goes on.

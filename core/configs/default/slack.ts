@@ -1,4 +1,4 @@
-// slack.ts — THE SLACK AGENT (worker.ts, `slack/webhook-received`): one agent for each Slack
+// slack.ts — THE SLACK AGENT (deliveries.ts, `slack/webhook-received`): one agent for each Slack
 // thread, at `/agents/slack/<team>/<channel>/<thread>`. Every member message in a channel the bot
 // is in, with or without a mention, reaches the agent of its thread, which decides whether to
 // answer or stay silent. The agent answers by calling Slack's Web API

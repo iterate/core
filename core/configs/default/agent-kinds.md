@@ -1,25 +1,25 @@
 # Kinds of agent
 
 What a kind of agent is, how to write one, and where an agent that a member starts on the Dash is
-born: `agent-kinds/`, the `agentKinds` list in `worker.ts`, `agents.ts` and `iterate/agents/kinds`.
+born: `agent-kinds/`, the `agentKinds` list in `agent-kinds/index.ts`, `agents.ts` and `iterate/agents/kinds`.
 
-`installAgents(itx)` in the init case
+`installAgents(itx)` in the init case (`init.ts`)
 finds the agents' two classes in `agents.ts` by its name. Every agent runs from that file's own bundle, so a commit that
 changes only `worker.ts` or a page leaves the agents running.
 
 Any context under `/agents` is an agent, and its kind is what the catalog lists it as: `iterate` for
 iterate's own, `claude` for a Claude Code session, or one of your own. A kind is one file
 (`agent-kinds/<kind>.ts` by convention) whose default export `satisfies AgentKind`, named in
-`worker.ts`. `iterate/agents/kinds` has `makeAgentKind` and `AgentKind`;
+`agent-kinds/index.ts`. `iterate/agents/kinds` has `makeAgentKind` and `AgentKind`;
 `@iterate-com/ui/agent-kind-view`'s `AgentKind` is the same with the view typed:
 
 ```ts
-// worker.ts
+// agent-kinds/index.ts
 import { makeAgentKind } from "iterate/agents/kinds";
 
-const agentKinds = [
-  makeAgentKind(import.meta, () => import("./agent-kinds/iterate.ts")),
-  makeAgentKind(import.meta, () => import("./agent-kinds/grok.ts")),
+export const agentKinds = [
+  makeAgentKind(import.meta, () => import("./iterate.ts")),
+  makeAgentKind(import.meta, () => import("./grok.ts")),
 ];
 
 // agent-kinds/grok.ts
@@ -50,8 +50,8 @@ Every kind shares two things: the catalog row (kind, status, activity, title), a
 rows and its chat. `itx.agents.list()` reads every row and wakes no agent;
 `itx.agents.get(path).recent({ minutes: 5 })` is what one agent did in that window (status labels,
 summaries, words in and out, scripts, and `lastScript`), read from its log in the same event types
-for every kind. `worker.ts` runs each kind's `processEvent` beside the integrations, and on every
-publish writes where each kind's file is to the mind's KV (`agent-kinds`), where the Dash finds
+for every kind. `every-event.ts` runs each kind's `processEvent` beside the integrations, and on every
+publish `init.ts` writes where each kind's file is to the mind's KV (`agent-kinds`), where the Dash finds
 it. The Dash's agent view runs `view` in a sandboxed frame with only that agent's log and verbs; there, a
 server-only import is a stand-in that throws if the view touches it. A kind whose agents run
 elsewhere (iterate's in the platform) needs no `processEvent`.

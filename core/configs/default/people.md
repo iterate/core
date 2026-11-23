@@ -159,7 +159,16 @@ and the page is a reduction of that log.
 
 It is off in a new mind. To turn it on:
 
-1. In `worker.ts`, uncomment the three guestbook lines: the import, `guestbookApp()` and the
-   `case "guestbook"` in `fetch`.
+1. In `worker.ts`, add three lines: the import beside the other apps' imports, the app beside
+   the other apps' constants, and its case in `#route`'s `switch`, after `case "tasks"`. The
+   guestbook has no guard in `fetch`: its routes ask for who they need.
+
+   ```ts
+   import { guestbookApp } from "./apps/guestbook/app.ts";
+   const guestbook = guestbookApp();
+         case "guestbook": // the guestbook, for everyone
+           return guestbook.fetch(request, this);
+   ```
+
 2. A person who is no member signs in with a code that the mind mails to their address (at most
    20 such codes an hour). The sign-in makes them no member.

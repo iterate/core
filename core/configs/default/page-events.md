@@ -1,7 +1,7 @@
 # The page tag
 
 Every HTML page of every app of this mind reports what people did there and what broke there. No
-page adds a script for it: `worker.ts` puts the tag first into each page's `<head>`. The code is
+page adds a script for it: `worker.ts`'s `fetch` puts the tag first into each page's `<head>` (`apps/telemetry/page-tag.ts`). The code is
 `apps/telemetry/page-events.ts` and its script `apps/telemetry/public/page.js`. Errors go to
 `/exceptions` for a member, or to `/exceptions/outside` for anyone else ([errors.md](errors.md));
 the rest to the one context `/pages`, and each payload's `app` is the host's first label (`site`
@@ -15,7 +15,7 @@ tag (below, "The bounds").
 Every page of every host, for everyone. One switch closes the outside half: `audience` in
 `apps/telemetry/page-events.ts`. Set it to `"members"`, and after the next publish a member's pages
 alone get the tag and report; for anyone else every answer of every host is as it was before the
-tag (`pageTagFor`, the first line of `worker.ts`'s `fetch`). It is `"everyone"` now.
+tag (`pageTagFor`, which each function of `apps/telemetry/page-tag.ts` asks first). It is `"everyone"` now.
 
 **The trust line is a member, never "anyone signed in".** Anyone can sign in on a host that takes
 people who are not members, with no act of a member. So `memberOf` asks the platform for a
@@ -235,7 +235,7 @@ No tag either for a framed document, a download, an encoded body, or a page whos
 Script: 30 sends a minute, 20 records a send, 100 waiting.
 
 **A host reports only after the mind served it a page with the tag.** Any label under the domain
-reaches this Worker. `worker.ts` calls `hostTagged` when an answer takes the tag, and the hostname
+reaches this Worker. `addPageTag` (`apps/telemetry/page-tag.ts`) calls `hostTagged` when an answer takes the tag, and the hostname
 goes on the list `page-events/hosts` in kv (at most 200; an isolate keeps at most 200 too, and the
 bound is checked before a host is added). Only an app's page takes the tag: the homepage of a label
 that is no app answers with `x-page-events: off`, so an invented name never goes on the list. The

@@ -10,8 +10,8 @@ are also the plainest examples of how a mind is configured.
   (`mind.template`, core/alchemy). It has the homepage, the Dash (agents, onboarding and the
   rest), the docs app, a call on any agent with its voice agent, and a guestbook
   that is off (`apps/`), the agents (`agents.ts`), the agent kinds (`agent-kinds/`), cases in
-  `worker.ts` that hand email, Slack and X messages to agents, and the place for the integration packages the
-  mind hosts. Its init case (`mind/worker-updated`) installs the apps and sets no schedule: an
+  `worker.ts` (`mail.ts`, `deliveries.ts`) that hand email, Slack and X messages to agents, and the place for the integration packages the
+  mind hosts (`integrations.ts`). Its init case (`mind/worker-updated`) installs the apps and sets no schedule: an
   idle mind sleeps. Its `AGENTS.md` says the rest.
 - `minimal/` — the homepage and an empty `processEvent`: no agents, no schedules. A creation that
   names no template gets this one.

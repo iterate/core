@@ -4,7 +4,7 @@
 //   profile/profile.json   { "name": "Ada's mind", "description": "What it is, in plain text." }
 //   profile/icon.svg       one square SVG: the mind's logo and its favicon
 //
-// worker.ts imports the folder and answers three paths of the mind's website from it, for anyone:
+// website.ts imports the folder and answers three paths of the mind's website from it, for anyone:
 //
 //   /.well-known/iterate-profile   { name, description, icon } as JSON, and nothing else
 //   /favicon.svg, /favicon.ico     the icon
@@ -23,7 +23,7 @@
 // what the schema says, the name is the zone and the description is empty; `problem` says what is
 // wrong, to an agent alone. With no `icon.svg`, or one over the bound, there is no icon: the two
 // icon paths answer 404 and `icon` is null. A folder with no file left is no folder: the loader
-// refuses worker.ts's import of it, and that commit does not publish (`mind/worker-update-failed`
+// refuses the import of it, and that commit does not publish (`mind/worker-update-failed`
 // says so). Keep `profile.json`.
 //
 // A READER OF ANOTHER MIND'S PROFILE treats all of it as an outside person's: the name and the

@@ -4,7 +4,7 @@ iterate Cloud is at `https://cloud.iterate.com`: every `client` below names it a
 a secret keeps the origin it was made with (`ITERATE_CLOUD` in `cloud-deliveries.ts` is the
 template's one constant for it). What comes after the connect that `AGENTS.md` shows: GitHub's deliveries, Gmail and Calendar, more
 scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of this repo:
-`gmail.ts`, `calendar.ts`, `cloud-scopes.ts`, `cloud-accounts.ts` and their cases in `worker.ts`.
+`gmail.ts`, `calendar.ts`, `cloud-scopes.ts`, `cloud-accounts.ts` and their cases in `deliveries.ts`.
 
 - For GitHub, name the
   accounts whose repositories the mind works with,
@@ -42,7 +42,7 @@ scopes, X, the Dash's Integrations page, an MCP server, and the GitHub mirror of
   both forms: test a delivery with it, and keep what you make of one on its `context`, the mind's
   own `/integrations/<provider>/<account>`. The mind tells the Cloud that it reads that form
   (`sayMindForm`), and the Cloud sends it to no other mind: a `worker.ts` of your own must keep
-  `processMindEvent` and the init step `mind-form` for that to stay true.
+  `processMindEvent` and the init step `mind-form` (`init.ts`) for that to stay true.
 - A Gmail mailbox connected this way is watched (`gmail.ts`): each new message arrives as
   `events.iterate.com/google/gmail-message-added` on `/integrations/google/<address>`, with
   `{ id, threadId, labelIds, from, to, cc, subject, date, messageId, snippet, receivedAt }`. Read
@@ -172,7 +172,7 @@ connected to. To connect a service, a member asks an agent; then it shows there.
   `null` removes its rows). A button leads to an absolute `url`; a page of the mind's own is
   `await itx.url({ hostname, path })`. Or a button calls ONE function of this config, as the
   member who pressed it: `{ label: "Connect", call: { name: "cloudflareConnect", args: [] } }`,
-  a name of `worker.ts`'s entrypoint and JSON arguments. A button acts on the press; the whole
+  a method name of the config's class (`api.ts`) and JSON arguments. A button acts on the press; the whole
   call, `name(args)`, is its title. A button with a `confirm` asks first: the page's dialog shows
   the question as the card's words, and below it the whole call. Write a `confirm` for a button
   that cannot be undone (Remove, Disconnect), and for no other. After the call, the page goes on
@@ -181,7 +181,7 @@ connected to. To connect a service, a member asks an agent; then it shows there.
   heading.
 
   The page calls only a function that the config offers to buttons. It asks
-  `itx.config.integrationCalls()` once, and that METHOD of `worker.ts`'s entrypoint answers the
+  `itx.config.integrationCalls()` once, and that METHOD of the config's class (`api.ts`) answers the
   names (`INTEGRATION_CALLABLE` in `cloud-accounts.ts`): add the function of a new button there.
   Write `integrationCalls`, and each function that a button calls, as a method, never as an arrow
   field (`integrationCalls = () => [...]`): Workers RPC reaches a class's methods alone. With no
@@ -201,7 +201,7 @@ connected to. To connect a service, a member asks an agent; then it shows there.
 To keep `/repos/config` and a GitHub repository one history through iterate Cloud's GitHub App, a member links
 them once: `linkThroughCloud(itx, { repository: "acme/config" })` from
 `@iterate-com/github-sync/install`, after a connect that names the repository's account. From
-then on `worker.ts` keeps them in step (its `github/webhook-received` and
+then on `deliveries.ts` keeps them in step (its `github/webhook-received` and
 `repo/commit-completed` case): a push to the repository's main is pulled, which publishes the
 mind, and a commit here is pushed. What moved, and what could not, is a
 `config/github-mirrored` fact on the mind's root. When the two histories have diverged nothing moves, until a member calls

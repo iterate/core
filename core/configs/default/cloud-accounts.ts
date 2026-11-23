@@ -1,5 +1,5 @@
 // cloud-accounts.ts — EVERY SECTION OF THE DASH'S INTEGRATIONS PAGE THAT THE MIND CAN WORK OUT BY
-// ITSELF (worker.ts calls `cloudAccountsEvent` for every event). The name is from its first
+// ITSELF (every-event.ts calls `cloudAccountsEvent` for every event). The name is from its first
 // section; a mind's own worker.ts imports it by that name. Three sections, each a heading card
 // with cards under it:
 //
@@ -690,7 +690,7 @@ function saidOfRemove(path: string, cloud: RemovedAccount["cloud"]): string {
   );
 }
 
-/** THE FUNCTIONS THIS CONFIG OFFERS TO A CARD'S BUTTON: worker.ts answers them as
+/** THE FUNCTIONS THIS CONFIG OFFERS TO A CARD'S BUTTON: api.ts answers them as
  *  `itx.config.integrationCalls()`, and the Dash calls a button's function only when its name is
  *  among them (iterate/integrations `INTEGRATION_CALLS`). A card of your own whose button calls a
  *  function of this config names it here too. */

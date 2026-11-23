@@ -18,7 +18,7 @@ tab closes. The first person who typed is the commit's author, the others are `C
   a package that cannot be fetched there stops the whole mind from publishing. The processors are
   at a path the publication does not resolve, and are loaded from this repo's files when a doc
   first opens. So a package that fails breaks Docs alone. Keep it so: do not import
-  `apps/docs/processors/` from `worker.ts`, and do not move it to `backend.ts`.
+  `apps/docs/processors/` from `worker.ts` or a file it imports, and do not move it to `backend.ts`.
 - **To edit a doc as an agent, commit it.** `itx.repos.get("/repos/config").commitFiles(...)` as
   for any file. The open editors take the commit in: the processor merges it with what people
   typed since, like git. Do not append edit frames by hand.

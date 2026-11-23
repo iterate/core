@@ -102,7 +102,7 @@ const MIND_FORM_KEY = "cloud-deliveries:mind-form";
 const TRY_AGAIN_MS = 60 * 60_000;
 
 /** THE MIND TELLS THE CLOUD THAT IT READS THE MIND FORM. Call it only from the file that reads
- *  that form (`worker.ts`: its init step, `mindFormEvent` when a secret is set, and
+ *  that form (`init.ts`, `every-event.ts` and `deliveries.ts`: the init step, `mindFormEvent` when a secret is set, and
  *  `cloudDeliveryEvent` at each delivery): a
  *  `worker.ts` without `processMindEvent` must never say it, or its deliveries would be taken
  *  and read by nothing. The Cloud sends the mind form to no mind that has not said so.
@@ -160,7 +160,7 @@ export async function sayMindForm(itx: MindFormItx): Promise<void> {
  *  and does nothing once the word is said). A publish says the word for the accounts that exist
  *  then. A mind trusts no key of the Cloud's, so the key form does not land on it, and the Cloud
  *  sends the mind form only after the word: without this, an account that a member connects
- *  after the last publish gets no delivery until the next one. `worker.ts` hands every event
+ *  after the last publish gets no delivery until the next one. `every-event.ts` hands every event
  *  here. A word that could not be said is logged, and never fails the secret's event. */
 export async function mindFormEvent(
   itx: MindFormItx,

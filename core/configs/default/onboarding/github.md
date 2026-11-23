@@ -36,7 +36,7 @@ approves once. Every request uses a placeholder, never a token.
 5. **Push.** `await itx.repos.get("/repos/config").push()` answers `updated`. Not fast-forward: the
    repository was not empty; ask for an empty one. 403 or 404: the App has no access to it; they
    give it at `https://github.com/settings/installations`.
-6. **Prove a commit comes back.** `worker.ts` keeps the two in step from now on: a push to `main`
+6. **Prove a commit comes back.** `deliveries.ts` keeps the two in step from now on: a push to `main`
    there is pulled here and published; a commit here is pushed there. Make one commit on GitHub:
    `PUT https://api.github.com/repos/<account>/<name>/contents/README.md` with the installation's
    placeholder (`getSecret("/secrets/github-installation-<id>", { field: "accessToken" })`) and
@@ -52,8 +52,8 @@ approves once. Every request uses a placeholder, never a token.
    return await itx.repos.get("/repos/config").readFile("README.md");
    ```
    Name the commit: an older fact proves nothing. If it did not arrive, say what you saw.
-7. **Send the link**, `https://github.com/<account>/<name>`: `worker.ts` is the whole mind in one
-   file, `onboarding.md` what you were told. A push to `main` is live seconds later.
+7. **Send the link**, `https://github.com/<account>/<name>`: `worker.ts` is where the mind starts, and
+   its header names the files beside it; `onboarding.md` is what you were told. A push to `main` is live seconds later.
 
 When the owner declines, do not press twice. Send them to `https://docs.<zone>`: the same code
 in a browser, with each file's history, `AGENTS.md` first. They can ask you for GitHub later.

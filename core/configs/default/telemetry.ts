@@ -208,7 +208,7 @@ export async function telemetryTurnOn(itx: TelemetryItx) {
 
 /** The row that the turn-on wrote until 22 Nov 2026: `itx.telemetry.query` pointed at
  *  `telemetryQuery`. It made a second name for the platform's query, which an approval rule on one
- *  name missed. The publish hook removes it at each publish (worker.ts, the `mind/worker-updated`
+ *  name missed. The publish hook removes it at each publish (init.ts, from the `mind/worker-updated`
  *  case); a row that a member pointed elsewhere stays. Answers whether it removed one. */
 export async function removeOwnTelemetryQueryRule(itx: Pick<TelemetryItx, "cd">) {
   const root = itx.cd("/");

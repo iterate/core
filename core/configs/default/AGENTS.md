@@ -77,19 +77,22 @@ request) and `email` (every mail). Inside, `processEvent` adds every event; outs
 append to the mind's contexts through its API at `/api`, which is why much of a mind's logic
 lives in `processEvent`.
 
-`worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, which holds the hosts (a
-processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/stream/processor`):
+`worker.ts`'s class extends `ConfigApi` (`api.ts`), which extends `IterateConfigEntrypoint` from
+`iterate/sdk`, which holds the hosts (a processor imports `StreamProcessor` and
+`defineProcessorContract` from `iterate/stream/processor`). `worker.ts` holds the three methods
+and calls the files beside it:
 
 - `processEvent({ event, itx })` sees every durable event of every context of the mind, one at
   a time, in no particular order and at least once, so each case must be idempotent. `itx` is the
   mind's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
   read it from the mind. The comments of each case, and the header of the file it calls, say
-  what the case does.
+  what the case does. After the cases, `every-event.ts` runs the hooks that look at every event.
 - `fetch` serves every hostname of the mind's zones but its control-plane hostname, where the platform
   answers (sign-in, the API, MCP). It routes on `new URL(request.url).hostname`. An app's hostname
   is `<label>.<zone>` (`blog.example.com`), so `fetch` is a `switch` on the hostname's first
-  label, one case for each app, and any other hostname is the homepage's (GET and HEAD of `/`;
-  anything else that no case takes is a 404). The guard beside a
+  label, one case for each app, and any other hostname is the public website's (`website.ts`,
+  then the homepage, `homepage.ts`: GET and HEAD of `/`; anything else that no case takes is a
+  404). To make the site yours, change `homepage.ts`. The guard beside a
   case says who may come: none for a public site, `this.auth.require` for members,
   `this.auth.requirePerson` for anyone signed in. A fetch route can take a hostname's requests
   first ([apps.md](apps.md)).
@@ -102,10 +105,14 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   (15 s of its own: the wait for Cloudflare's answer to a forward does not count), loses no
   mail: it is an `email/hook-failed` fact on `/integrations/email`. Await each forward: the
   capability ends when `email` returns, and a forward that is still running then ends EXPIRED.
-- `integrations` lists the integration packages this mind hosts (`Integration` from
-  `iterate/sdk`), one element each ([apps.md](apps.md)).
+- `itx.config.<name>(…)` reaches every public method of the class: the mind's own API, for its
+  agents and its pages. The template's methods are in `api.ts`; add one there or to
+  `worker.ts`'s class.
+- `integrations` in `integrations.ts` lists the integration packages this mind hosts
+  (`Integration` from `iterate/sdk`), one element each ([apps.md](apps.md)). The kinds of agent
+  are `agentKinds` in `agent-kinds/index.ts` ([agent-kinds.md](agent-kinds.md)).
 
-`worker.ts` reaches the mind through the `itx` that `processEvent` is handed, or through
+`worker.ts` and the files it calls reach the mind through the `itx` that `processEvent` is handed, or through
 `using itx = this.getItx()`: when the block ends, the scope, every call made through it and every
 handle it awaited are released. Put it in the smallest block that holds its calls, await every
 call inside it, and hand data, not handles, out of it; an object that needs reach takes an

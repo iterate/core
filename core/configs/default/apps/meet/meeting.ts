@@ -1,7 +1,7 @@
 // meeting.ts — A MEETING is an agent with a call: `/agents/meet/<YYYY-MM-DD>-<HHMM>-<slug>`. This
 // file makes the name from a time and a title (pure), and `startMeeting`, the one function that
 // starts a meeting. Meet's page calls it as `itx.config.startMeeting(…)` over its own socket, and
-// an agent calls it the same way (worker.ts).
+// an agent calls it the same way (api.ts).
 import type { IterateContextApiWith } from "iterate/api";
 import { CALL_FACET } from "../../call.ts";
 

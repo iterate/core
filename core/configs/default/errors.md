@@ -98,7 +98,7 @@ the crash job picks up. Jonas, 21 Nov 2026: "a minute for crashes is fine".
   the logs once a minute. Set it to `false`, and the next publish cancels the tick and no sweep
   runs. `itx.config.exceptions` reads on either way.
 - **When.** A schedule on `/exceptions/sweeps` (key `crash-sweep`, set at each publish) appends
-  `events.iterate.com/exception/sweep-requested` every 60 s; `worker.ts` then calls `crashSweep`,
+  `events.iterate.com/exception/sweep-requested` every 60 s; `worker.ts` then calls `crashSweepEvent`, which runs `crashSweep`
   for that tick alone (`sweepTick`): the platform stamps a fired schedule's event with
   `source.schedule`, and drops any `source` a writer sends. The same type on another context,
   signed or not, starts no log query.

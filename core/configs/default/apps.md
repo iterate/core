@@ -3,7 +3,7 @@
 How an app of this mind is laid out and mounted, the UI components a page loads, the integration
 packages, the call on an agent, Meet and voice devices: `apps/`, `apps/theme.css`,
 `apps/live-reload/live-reload.js`, `apps/open-files.ts`, `apps/dash/public/app.js`,
-`apps/onboarding/`, `call.ts`, `apps/meet/` and `integrations` in `worker.ts`.
+`apps/onboarding/`, `call.ts`, `apps/meet/` and `integrations` in `integrations.ts`.
 
 An app is a folder under `apps/`, and a convention, not a framework: copy one to start one of your
 own.
@@ -16,10 +16,11 @@ apps/<name>/
   app.ts       exports a function that makes an object with `fetch`
 ```
 
-- **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`:
+- **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`
+  (the `switch` of `#route`):
   `case "notes": return this.auth.require(request) || notes.fetch(request, this);`. A changed
-  `worker.ts` keeps `installAgents(itx)`, `publishAgentKinds(itx, agentKinds)` and the onboarding
-  agent's `itx.agents.create` in the init case.
+  `worker.ts` keeps `await init(itx)` in the init case: `init.ts` runs `installAgents(itx)` and
+  `publishAgentKinds(itx, agentKinds)`.
 - **No build.** A module imports a file that is not code and gets its text, or its bytes when it is
   not text (`import index from "./index.html"`). An import that ends in `/` is every file under
   that folder, by path (`import files from "./public/"`). `serveFiles(request, { index, files })`
@@ -174,12 +175,13 @@ pins.
 
 ## Integration packages
 
-`integrations` in `worker.ts` lists the integration packages this mind hosts (`Integration` from
+`integrations` in `integrations.ts` lists the integration packages this mind hosts (`Integration` from
 `iterate/sdk`: a Telegram bot, your own GitHub App, and more, one folder each in
 https://github.com/jonastemplestein/iterategrations, whose recipes add one). Each is one element,
 from its package (`telegram()`, `github()`). A package that serves pages gets a case of its own
-in `fetch`, on its hostname's first label (`case "telegram": return telegram.fetch(request,
-this)`), and `processEvent` hands every package every event after the mind's own cases:
+in `worker.ts`'s `fetch`, on its hostname's first label (`case "telegram": return
+telegram.fetch(request, this)`), and `processEvent` hands every package every event after the
+mind's own cases (`every-event.ts`):
 a package's install hook is its `mind/worker-updated` case, where it registers its card on
 `/integrations` for the Dash's Integrations page (`iterate/integrations`; writing a package of
 your own: https://github.com/jonastemplestein/iterategrations/blob/main/adding-an-integration.md). A hook returns for an
@@ -221,8 +223,12 @@ It is off in a new mind. To turn it on, make this commit:
 ```text
 package.json   "dependencies": { "@iterate-com/voice": "<a build of npm's main tag, pinned>" }
 voice.ts       export { default, VoiceAgentDurableObject } from "@iterate-com/voice";
-worker.ts      take the "// " off the import of installVoice, and off installVoice(itx) in the init case
+worker.ts      add the import beside the others, and the step after `await init(itx)` in the init case:
+                 import { installVoice } from "@iterate-com/voice/install";
+                 await step("voice", () => installVoice(itx));
 ```
+
+The step makes the service at `itx.voice`.
 
 To upgrade, change that pin. A commit that changes what `voice.ts` bundles ends the device calls
 in progress.

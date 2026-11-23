@@ -2,7 +2,7 @@
 // and one line. The mind's catalog shows both (`await itx.cd("/").contexts.list()`, `description`
 // and `metadata.title`). A context says it with the event
 // `events.iterate.com/itx/described` on its own log: the newest one stands, null clears it, and
-// anyone who can append there can write it. worker.ts calls `contextDescriptionsEvent` for every
+// anyone who can append there can write it. every-event.ts calls `contextDescriptionsEvent` for every
 // event, and this file writes the line from the table below for each context that the platform and
 // this repo make. An agent writes its own line (iterate/agents, the catalog on /agents), and has its
 // title in the agents' own catalog (`itx.agents.list()`).

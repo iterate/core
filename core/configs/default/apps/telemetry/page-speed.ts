@@ -5,7 +5,7 @@
 //   /pages   events.iterate.com/page/left   the first view's `load`: firstByte, fcp, largestPaint
 //                                           (LCP), inp, cls; and each view's `marks`
 //
-// `itx.config.pageSpeed({ days, app, limit })` (worker.ts) reads the newest events of /pages (at
+// `itx.config.pageSpeed({ days, app, limit })` (api.ts) reads the newest events of /pages (at
 // most 40,000, newest first), keeps the first views' `page/left` of the last `days`, MEMBERS
 // FIRST: the newest 4,000 of members, and apart from them the newest 4,000 of the outside, so a
 // flood from outside never pushes a member's view out of the window. Then it groups them by app and path: the views, and the 75th percentile of each vital and each `iterate:` mark, with Google's

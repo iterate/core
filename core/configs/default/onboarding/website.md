@@ -5,12 +5,13 @@ The owner should come away with: the mind made them something real at their own 
 ## Ready today
 
 - `await itx.url()` is `https://<zone>/`. A new mind serves "Homepage of mind <slug>" there,
-  from the `default` case of `fetch` in `worker.ts`. The site: one public page, a file `site.ts`
-  at the top of `/repos/config` that the `default` case calls. It goes live by itself: no question
-  first.
+  from `homepage.ts` at the top of `/repos/config`, which `worker.ts`'s `fetch` calls. The site:
+  one public page, that file and nothing else. It goes live by itself: no question first. On a
+  mind whose `worker.ts` already calls a `site.ts`, the site is `site.ts`: change that file.
 - `await itx.browser.quickAction("screenshot", { url })` answers the page's image as bytes.
-- A `worker.ts` the mind changed is the owner's: a later platform deploy no longer updates it
-  (`template-updates.md`). The exact file from before the site makes it the platform's again.
+- A file the mind changed is the owner's: a later platform deploy no longer updates it
+  (`template-updates.md`). The site changes `homepage.ts` alone, so `worker.ts` keeps following
+  the template. The exact `homepage.ts` from before the site makes it the platform's again.
 
 ## Not ready
 
@@ -23,16 +24,16 @@ The mind's code starts the subagent `/agents/onboarding/website` on every mind, 
 at the handover from iterate Cloud, or when the owner first opens the onboarding chat
 (`cloud-handover.ts`). You are that subagent. Do not wait for a name or a purpose: use the
 sign-up record when there is one, the owner's words on `/agents/onboarding`, and `mind.md` (the
-research may add to it while you work). When the `default` case no longer serves "Homepage of
-mind", the site is made already: report that, and stop. The job:
+research may add to it while you work). When the address no longer serves "Homepage of mind",
+the site is made already: report that, and stop. The job:
 
 - the address, the mind's name (`(await itx.config.profile()).name`, empty when the owner has
   not named it) and what it is for, in the owner's words;
-- "Make ONE page, the homepage. Add `site.ts` at the top of `/repos/config`; it exports a function
-  that answers a `Request` with the page: HTML with its CSS inline, no package, no script or image
-  from another site. In `worker.ts` change ONLY what the `default` case answers for the page: call your
-  function there. Its `/me` answer and the profile's answers (`serveProfile`) stay, and so does
-  every other case. Read the guide `apps.md` first.
+- "Make ONE page, the homepage. Change ONLY `homepage.ts` at the top of `/repos/config`: keep its
+  export `homepage(request, host)`, which answers GET and HEAD of `/` with the page and null for
+  anything else. The page: HTML with its CSS inline, no package, no script or image from another
+  site. Change no other file: `worker.ts`, its `/me` answer, the profile's answers (`website.ts`)
+  and every case stay. Read the guide `apps.md` first.
   Start every commit message with `Website:`.";
 - "The page is PUBLIC: no `this.auth.require`, no `requirePerson`. It shows the mind's name and
   what it is for. It may use what is ALREADY PUBLIC about the owner, and nothing else: of the web
@@ -58,9 +59,8 @@ return (await itx.files.get(path).url()).url; // url() answers { url, expiresAt 
 ```
 
 Each change on the owner's word comes to you, the same subagent. Taking it down: one commit, now. In `await repo.log({ limit: 100 })` find the commit before the first
-`Website:` commit; read `worker.ts` at it (`repo.readFile("worker.ts", { commitOid })`); commit
-that text as `worker.ts`, with `{ path: "site.ts", delete: true }`. When `worker.ts` changed since
-for another reason, put back only its `default` case. Wait for the outcome, then fetch the address.
+`Website:` commit; read `homepage.ts` at it (`repo.readFile("homepage.ts", { commitOid })`);
+commit that text as `homepage.ts`. Wait for the outcome, then fetch the address.
 
 ## Say
 
