@@ -8,8 +8,10 @@
 //   - a secret by proxy: `itx.secrets.set(path, null, { urls, proxy })`, and `describe(path).proxy`;
 //   - its own key listed in `/keys/stack.json` (`listed: true`), or the proxy answers 502.
 // A stack without them answers `canSign() === false`, or a set that throws, and the card says so.
+// iterate Cloud's AI lending (`itx.ai` through iterate Cloud) is cloud-ai.ts, reached from here too.
 import { z } from "zod";
 import { ITERATE_CLOUD, ITERATE_MIND } from "../../cloud-deliveries.ts";
+import { type CloudAiAnswer, cloudAiLent, endCloudAi, lendCloudAi } from "./cloud-ai.ts";
 import type { OnboardingItx } from "./steps.ts";
 
 /** iterate's secret proxy: what a secret by proxy names, and where the grant is asked for. */
@@ -81,6 +83,12 @@ export type CloudCredit = {
   setByProxy(path: string, urls: readonly string[]): Promise<SetAnswer>;
   /** Deletes the secret at `path` when it is iterate's proxy, and nothing else. */
   deleteProxy(path: string): Promise<boolean>;
+  /** Turns iterate Cloud's AI lending on (cloud-ai.ts `lendCloudAi`): never throws. */
+  lendAi(): Promise<CloudAiAnswer>;
+  /** Whether `itx.ai` runs through iterate Cloud now. */
+  aiLent(): Promise<boolean>;
+  /** Turns iterate Cloud's AI lending off (cloud-ai.ts `endCloudAi`). */
+  endAi(): Promise<void>;
 };
 
 /** The secrets Worker's refusal of `null` material: a stack without the secret by proxy. */
@@ -234,5 +242,9 @@ export function cloudCredit(itx: OnboardingItx): CloudCredit {
         return true;
       }
     },
+    // async, so a throw of `cd` is a rejection like any other
+    lendAi: async () => lendCloudAi(itx.cd("/")),
+    aiLent: async () => cloudAiLent(itx.cd("/")),
+    endAi: async () => endCloudAi(itx.cd("/")),
   };
 }

@@ -5,8 +5,9 @@
 // clean, human-readable message — never raw upstream JSON or HTTP error bodies.
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { z } from "zod";
-import { cloudCredit, type SecretKind } from "./cloud-credit.ts";
-import type { OnboardingItx } from "./steps.ts";
+import { type CloudCredit, cloudCredit, type SecretKind } from "./cloud-credit.ts";
+import { connectDeclined, type OnboardingItx } from "./steps.ts";
+import { meldOf } from "./steps/connect-iterate-cloud.ts";
 
 /** The agents' default model (`llm.model` in core/lib/src/agents/contract.ts): the check proves
  *  the model the agents will ask for. */
@@ -440,14 +441,35 @@ async function testAiGateway(itx: VerifyAiItx, timeoutMs: number): Promise<Verif
   return checkStreamBody("ai-gateway", bodyText);
 }
 
+/** WHETHER `itx.ai` RUNS THROUGH iterate Cloud before the AI Gateway test. A mind that iterate let
+ *  in after the Connect step saw the lending refused gets it here: the lending is turned on once,
+ *  while the owner's rule for iterate is on and they did not decline. A mind with no rule, or
+ *  whose owner declined, is not touched. Best effort: a failed read is "not lent". */
+async function cloudAiOn(itx: VerifyAiItx, credit: CloudCredit): Promise<boolean> {
+  try {
+    if (await credit.aiLent()) return true;
+    const [meld, declined] = await Promise.all([meldOf({ itx }), connectDeclined(itx)]);
+    if (!meld.on || declined) return false;
+    const lent = await credit.lendAi();
+    // the Worker's log says why the verify ran on the mind's own account
+    if (!lent.on) console.warn({ event: "onboarding.verify-ai-lending-off", reason: lent.reason });
+    return lent.on;
+  } catch (error) {
+    console.warn({ event: "onboarding.verify-ai-lending-read-failed", error: String(error) });
+    return false;
+  }
+}
+
 /** Runs a real test LLM inference request across the mind's configured AI credentials in the same
- *  priority order as agents.ts (ChatGPT plan -> /secrets/openai -> Cloudflare AI Gateway). */
+ *  priority order as agents.ts (ChatGPT plan -> /secrets/openai -> Cloudflare AI Gateway). The
+ *  last test runs through iterate Cloud when its AI lending is on (`cloudAiOn`), and says so as
+ *  the provider `iterate-cloud`. `options.credit` replaces the calls outside the log, for tests. */
 export async function verifyAi(
   itx: VerifyAiItx,
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; credit?: CloudCredit } = {},
 ): Promise<VerifyAiResult> {
   const timeoutMs = options.timeoutMs ?? 25_000;
-  const credit = cloudCredit(itx);
+  const credit = options.credit || cloudCredit(itx);
   const [chatgpt, openaiKind] = await Promise.all([
     itx.secrets.describe("/secrets/chatgpt"),
     credit.secret("/secrets/openai"),
@@ -478,7 +500,9 @@ export async function verifyAi(
     configuredError ||= result.error;
   }
 
+  const lent = await cloudAiOn(itx, credit);
   const gatewayResult = await testAiGateway(itx, timeoutMs);
-  if (gatewayResult.ok) return gatewayResult;
+  if (gatewayResult.ok)
+    return lent ? { ...gatewayResult, provider: "iterate-cloud" } : gatewayResult;
   return { ok: false, error: configuredError || gatewayResult.error };
 }

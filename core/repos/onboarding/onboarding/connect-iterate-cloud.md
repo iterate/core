@@ -28,6 +28,16 @@ key of the owner's is set. The owner's own key is never replaced. A person at it
 each mind before its credit comes: until then the connect answers `not-approved`, nothing is set,
 the owner's rule stays, and a later `connect` gets the credit.
 
+The connect also turns on iterate Cloud's AI lending (`apps/onboarding/cloud-ai.ts`). The mind
+makes `/secrets/iterate-cloud` a secret by iterate's proxy and adds the rule `itx.iterateCloud`
+(iterate Cloud over Cap'n Web). Only when `itx.iterateCloud.whoami()` answers does a second rule
+make `itx.ai` mean `itx.iterateCloud.ai`: then the mind's agents, its scripts and the AI test run
+their models on iterate's AI Gateway, with the same calls. When iterate Cloud does not recognise
+the mind, `itx.ai` stays the mind's own, and the connect still succeeds. The connected card says
+in one sentence where the mind's AI runs. A disconnect, the end of the rule and iterate's end of
+the credit remove both rules and the secret. Any agent can read what the lending spent with
+`await itx.iterateCloud.usage()`.
+
 Who pays: before the connect, the mind's agents already work, paid by the owner's own Cloudflare
 account (its AI Gateway credit, the last of the agents' keys in `agents.ts`). After it, each agent
 request goes to iterate's credit first, and voice calls and web research work. When the credit is

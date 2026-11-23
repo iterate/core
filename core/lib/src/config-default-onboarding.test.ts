@@ -15,6 +15,13 @@ import {
   ITERATE_PROXY,
   type SecretKind,
 } from "../../configs/default/apps/onboarding/cloud-credit.ts";
+import {
+  CLOUD_AI_SECRET,
+  type CloudAiRoot,
+  cloudAiLent,
+  endCloudAi,
+  lendCloudAi,
+} from "../../configs/default/apps/onboarding/cloud-ai.ts";
 import { CREDIT_OPEN } from "../../configs/default/apps/onboarding/steps/connect-iterate-cloud.ts";
 import {
   initialState,
@@ -49,6 +56,7 @@ import {
 } from "../../configs/default/apps/onboarding/verify-ai.ts";
 import { defaultConfigInstance } from "./test-support/config-default-instance.ts";
 import { APP_DESCRIPTION_PATH, AppDescription } from "./app-description.ts";
+import { type ItxExpressionInput, normalizedItxExpression, print } from "./expression.ts";
 import { auth } from "./sdk/auth.ts";
 
 const STEP = "connect-iterate-cloud";
@@ -217,7 +225,7 @@ test("a press opens a tab only where a page can come: Connect before the rule, D
 
 test("Connect: one link to sign the rule, and nothing at iterate or in the secrets before a member's signed rule lands; then the grant, both secrets and a note that starts the agent's turn", async () => {
   const mind = fakeMind();
-  const { credit, calls, secrets } = fakeCredit();
+  const { credit, calls, secrets, lending } = fakeCredit();
   const context = contextOf(mind, credit);
   const answer = await runStep(context, STEP, "connect");
   expect(answer).toEqual({
@@ -251,11 +259,13 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
   await hook(mind, credit, mind.sign([`/minds/${ITERATE_ID}/`]));
   expect(calls).toEqual(["connect", "set /secrets/openai", "set /secrets/exa", "balance"]);
   expect(secrets).toEqual({ "/secrets/openai": "iterate-proxy", "/secrets/exa": "iterate-proxy" });
+  // connected: iterate Cloud's AI lending is turned on too, and the card says so
+  expect(lending).toEqual(["lend"]);
   const [card] = await onboardingCards(context);
   expect(card).toMatchObject({
     status: "connected",
     title: "Connected to iterate Cloud",
-    text: ["$9.58 of $10 left."],
+    text: ["$9.58 of $10 left.", "Your mind's AI models now run through iterate Cloud."],
     buttons: [
       {
         label: "Try a voice call",
@@ -922,10 +932,14 @@ test("a passkey page that expired unsigned settles as not-signed", async () => {
 
 test("Disconnect deletes only iterate's secrets by proxy at once, then one link ends the rule; the end of the rule ends the credit by itself too", async () => {
   const mind = fakeMind({ meld: "member" });
-  const { credit, calls, secrets } = fakeCredit({ secrets: { "/secrets/openai": "own" } });
+  const { credit, calls, secrets, lending } = fakeCredit({
+    secrets: { "/secrets/openai": "own" },
+  });
   const context = contextOf(mind, credit);
   await runStep(context, STEP, "connect");
   const answer = await runStep(context, STEP, "disconnect");
+  // the Disconnect turns iterate Cloud's AI lending off with the secrets
+  expect(lending).toEqual(["lend", "end"]);
   expect(calls).toContain("delete /secrets/exa");
   expect(calls).not.toContain("delete /secrets/openai");
   expect(secrets).toEqual({ "/secrets/openai": "own", "/secrets/exa": "unset" });
@@ -946,6 +960,8 @@ test("Disconnect deletes only iterate's secrets by proxy at once, then one link 
   await hook(again, other.credit, again.sign([]));
   expect(other).toMatchObject({
     secrets: { "/secrets/openai": "unset", "/secrets/exa": "unset" },
+    lending: ["lend", "end"],
+    state: { ai: false },
   });
 });
 
@@ -1013,6 +1029,8 @@ test("the credit used: iterate's proxy is switched off once, the card says what 
     "delete /secrets/openai",
     "delete /secrets/exa",
   ]);
+  // the AI lending goes with them: itx.ai sends no request to iterate once the grant is spent
+  expect(fake).toMatchObject({ lending: ["lend", "end"], state: { ai: false } });
   expect(mind).toMatchObject({ proposed: [] });
   expect(answer).toMatchObject({ status: "spent" });
   const spentText = [
@@ -1094,6 +1112,9 @@ test("a balance read answered ended: the ended card with no press, the secret by
   expect(fake).toMatchObject({
     calls: ["balance", "delete /secrets/exa"],
     secrets: { "/secrets/openai": "own", "/secrets/exa": "unset" },
+    // iterate's end of the credit ends the AI lending too, once
+    lending: ["lend", "end"],
+    state: { ai: false },
   });
   // the end is for good: a later outage, pause or old answer keeps the ended card, asks iterate
   // nothing, and sets and deletes nothing
@@ -1105,8 +1126,24 @@ test("a balance read answered ended: the ended card with no press, the secret by
     expect(fake).toMatchObject({
       calls: [],
       secrets: { "/secrets/openai": "own", "/secrets/exa": "unset" },
+      lending: ["lend", "end"],
     });
   }
+});
+
+test("a connect whose AI lending iterate Cloud refuses is still connected: the card says the mind's AI runs on its own Cloudflare account", async () => {
+  const mind = fakeMind({ meld: "member" });
+  const fake = fakeCredit({
+    lend: { on: false, reason: "statement is addressed to another mind" },
+  });
+  const context = contextOf(mind, fake.credit);
+  expect(await runStep(context, STEP, "connect")).toMatchObject({ status: "connected" });
+  expect(fake).toMatchObject({ lending: ["lend"], state: { ai: false } });
+  const [card] = await onboardingCards(context);
+  expect(card).toMatchObject({
+    status: "connected",
+    text: ["$9.58 of $10 left.", "Your mind's AI models still run on your own Cloudflare account."],
+  });
 });
 
 test("a balance read answered ended while the vault keeps a path (a form is open): the card says which path still goes to iterate, and the next check deletes it", async () => {
@@ -1655,6 +1692,144 @@ test("the real grant answers the balance; a call that throws is cloud-unreachabl
   expect(await realCredit({ stackKey: { mind: "mind.example.com" } }).credit.canSign()).toBe(false);
 });
 
+// ── iterate Cloud's AI lending (cloud-ai.ts), against what the root answers ──
+
+const CLOUD_RULE_TARGET = [
+  "itx",
+  ["cd", "/"],
+  [
+    "connectToCapnweb",
+    "wss://cloud.iterate.com/api/cloud-ai",
+    { headers: { authorization: 'Bearer getSecret("/secrets/iterate-cloud")' } },
+  ],
+];
+
+test("the AI lending's turn-on, when iterate Cloud's whoami answers: the secret by proxy, then the rule itx.iterateCloud, then the rule itx.ai; a second turn-on appends nothing", async () => {
+  const root = fakeRoot({ whoami: async () => ({ mindId: MIND_ID }) });
+  expect(await lendCloudAi(root.root)).toEqual({ on: true });
+  expect(root).toMatchObject({
+    sets: [
+      [
+        CLOUD_AI_SECRET,
+        null,
+        {
+          urls: ["https://cloud.iterate.com"],
+          placement: "header",
+          proxy: { mind: "iterate.iterate.com", url: "https://cloud.iterate.com/capnweb" },
+        },
+      ],
+    ],
+    whoamis: 1,
+  });
+  expect(root.appended.map((event) => event.payload)).toEqual([
+    {
+      match: "itx.iterateCloud",
+      target: CLOUD_RULE_TARGET,
+      description: expect.any(String),
+    },
+    { match: "itx.ai", target: "itx.iterateCloud.ai", description: expect.any(String) },
+  ]);
+  expect(
+    root.appended.every((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured"),
+  ).toBe(true);
+  expect(await cloudAiLent(root.root)).toBe(true);
+  // idempotent: the secret and both rules are in place, so nothing is set or appended
+  expect(await lendCloudAi(root.root)).toEqual({ on: true });
+  expect(root.sets).toHaveLength(1);
+  expect(root.appended).toHaveLength(2);
+});
+
+test("the AI lending's turn-on, when iterate Cloud's whoami refuses or does not answer: the secret and the rule itx.iterateCloud, no rule for itx.ai, and the reason cut short", async () => {
+  const refused = fakeRoot({
+    whoami: async () => {
+      throw new Error(`mind this-mind-id is not enrolled in Iterate Cloud ${"x".repeat(500)}`);
+    },
+  });
+  // one ask alone: the guard's time is 0
+  const answer = await lendCloudAi(refused.root, 0);
+  expect(answer).toMatchObject({
+    on: false,
+    reason: expect.stringMatching(/^mind this-mind-id is not enrolled/),
+  });
+  expect(answer.on === false && answer.reason.length).toBe(200);
+  expect(refused.sets).toHaveLength(1);
+  expect(refused.appended.map((event) => event.payload.match)).toEqual(["itx.iterateCloud"]);
+  expect(await cloudAiLent(refused.root)).toBe(false);
+  // a second try appends no second rule for itx.iterateCloud
+  await lendCloudAi(refused.root, 0);
+  expect(refused.appended).toHaveLength(1);
+
+  vi.useFakeTimers();
+  try {
+    // The rule was appended a moment before, and the first asks do not answer yet: the guard asks
+    // again, and the third ask's answer turns the lending on.
+    let asks = 0;
+    const late = fakeRoot({
+      whoami: async () => {
+        asks++;
+        if (asks < 3) throw new Error("NO_ITX_EXPRESSION_MATCH: itx.iterateCloud");
+        return { mindId: MIND_ID };
+      },
+    });
+    const turnedOn = lendCloudAi(late.root);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await turnedOn).toEqual({ on: true });
+    expect(late).toMatchObject({ whoamis: 3 });
+    expect(late.appended.map((event) => event.payload.match)).toEqual([
+      "itx.iterateCloud",
+      "itx.ai",
+    ]);
+
+    const silent = fakeRoot({ whoami: () => new Promise(() => {}) });
+    const pending = lendCloudAi(silent.root);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await pending).toEqual({ on: false, reason: "no answer in 5000 ms" });
+    expect(silent.appended.map((event) => event.payload.match)).toEqual(["itx.iterateCloud"]);
+  } finally {
+    vi.useRealTimers();
+  }
+
+  // a stack without the secret by proxy: the set throws, and the turn-on answers why, appending nothing
+  const old = fakeRoot({
+    whoami: async () => ({}),
+    setThrows: "material is a string or a JSON object",
+  });
+  expect(await lendCloudAi(old.root)).toEqual({
+    on: false,
+    reason: "material is a string or a JSON object",
+  });
+  expect(old).toMatchObject({ appended: [] });
+});
+
+test("the AI lending's turn-off removes both rules by compare-and-set and the secret by proxy, and itx.ai is the platform's own again; a second turn-off appends nothing", async () => {
+  const root = fakeRoot({ whoami: async () => ({}) });
+  await lendCloudAi(root.root);
+  root.appended.length = 0;
+  await endCloudAi(root.root);
+  expect(root.appended.map((event) => event.payload)).toEqual([
+    { match: "itx.ai", target: null, ifTarget: "itx.iterateCloud.ai" },
+    { match: "itx.iterateCloud", target: null, ifTarget: CLOUD_RULE_TARGET },
+  ]);
+  expect(await root.root.rewriteRules.get("itx.ai")).toBeNull();
+  expect(await root.root.rewriteRules.get("itx.iterateCloud")).toBeNull();
+  expect(root).toMatchObject({ deleted: [CLOUD_AI_SECRET] });
+  expect(await cloudAiLent(root.root)).toBe(false);
+  await endCloudAi(root.root);
+  expect(root.appended).toHaveLength(2);
+  expect(root.deleted).toHaveLength(1);
+
+  // a rule that a member pointed elsewhere, and a secret of the owner's own, stay
+  const theirs = fakeRoot({ whoami: async () => ({}) });
+  theirs.rules["itx.ai"] = "itx.config.myAi";
+  theirs.described[CLOUD_AI_SECRET] = { set: true };
+  await endCloudAi(theirs.root);
+  expect(theirs).toMatchObject({
+    appended: [],
+    deleted: [],
+    rules: { "itx.ai": "itx.config.myAi" },
+  });
+});
+
 // ── the app ──
 
 test("the app is for members: its description names no other way in, and its two paths answer the cards and a press", async () => {
@@ -1803,6 +1978,54 @@ test("verifyAi tests providers in agent priority order (ChatGPT -> /secrets/open
     reply: "ok",
     usage: { inputTokens: 18, outputTokens: 3 },
   });
+});
+
+test("verifyAi turns iterate Cloud's AI lending on before the AI Gateway test while the owner's rule is on, and names the provider iterate-cloud; a mind with no rule, or a declined one, is not touched", async () => {
+  const sseOk =
+    'data: {"type":"response.output_text.delta","delta":"ok"}\n\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n';
+  /** The fake mind with the gateway test's answer and no ChatGPT plan. */
+  const verifyItx = (mind: ReturnType<typeof fakeMind>) =>
+    ({
+      ...mind.itx,
+      ai: { run: async () => new Response(sseOk, { status: 200 }) },
+    }) as unknown as VerifyAiItx; // the fake mind has what verifyAi reads; its type names the whole root
+
+  // the rule is on, the lending is off (iterate let the mind in after the Connect): Verify lends
+  const melded = fakeMind({ meld: "member" });
+  const lends = fakeCredit();
+  expect(await verifyAi(verifyItx(melded), { credit: lends.credit })).toMatchObject({
+    ok: true,
+    provider: "iterate-cloud",
+  });
+  expect(lends).toMatchObject({ lending: ["lend"], state: { ai: true } });
+  // lent already: no second turn-on, the same provider
+  expect(await verifyAi(verifyItx(melded), { credit: lends.credit })).toMatchObject({
+    provider: "iterate-cloud",
+  });
+  expect(lends).toMatchObject({ lending: ["lend"] });
+
+  // the Cloud refuses the lending: the test runs on the mind's own AI Gateway
+  const refused = fakeCredit({ lend: { on: false, reason: "not enrolled" } });
+  expect(await verifyAi(verifyItx(melded), { credit: refused.credit })).toMatchObject({
+    provider: "ai-gateway",
+  });
+  expect(refused).toMatchObject({ lending: ["lend"] });
+
+  // no rule for iterate: no turn-on
+  const none = fakeCredit();
+  expect(await verifyAi(verifyItx(fakeMind()), { credit: none.credit })).toMatchObject({
+    provider: "ai-gateway",
+  });
+  expect(none).toMatchObject({ lending: [] });
+
+  // the owner declined, with the rule still on: no turn-on
+  const declinedMind = fakeMind({ meld: "member" });
+  const declined = fakeCredit();
+  await runStep(contextOf(declinedMind, declined.credit), STEP, "decline");
+  expect(await verifyAi(verifyItx(declinedMind), { credit: declined.credit })).toMatchObject({
+    provider: "ai-gateway",
+  });
+  expect(declined).toMatchObject({ lending: [] });
 });
 
 test("verifyAi rejects truncated SSE streams without completion and bounds stalled response body reads", async () => {
@@ -2558,6 +2781,79 @@ function fakeMind(
   };
 }
 
+/** The root context as the AI lending uses it: its secrets, its own rewrite rules (as
+ *  `rewriteRules.get` prints a target, and as the kernel reduces a compare-and-set delete), its
+ *  appends, and `itx.iterateCloud.whoami()` once that rule is in place. */
+function fakeRoot(options: { whoami: () => Promise<unknown>; setThrows?: string }) {
+  const printed = (target: ItxExpressionInput) =>
+    print(normalizedItxExpression(target, { holes: true }), { holes: true });
+  const rules: Record<string, string> = {};
+  const appended: { type: string; payload: Record<string, unknown> }[] = [];
+  const sets: unknown[][] = [];
+  const deleted: string[] = [];
+  const described: Record<string, { set: boolean; proxy?: { mind: string; url: string } }> = {};
+  let whoamis = 0;
+  const root = {
+    secrets: {
+      describe: async (path: string) => ({ path, ...(described[path] || { set: false }) }),
+      set: async (path: string, material: null, use: { proxy: { mind: string; url: string } }) => {
+        if (options.setThrows) throw new Error(options.setThrows);
+        sets.push([path, material, use]);
+        described[path] = { set: true, proxy: use.proxy };
+        return { path };
+      },
+      deleteIfProxy: async (path: string) => {
+        const byProxy = Boolean(described[path]?.proxy);
+        if (byProxy) {
+          deleted.push(path);
+          delete described[path];
+        }
+        return { path, deleted: byProxy };
+      },
+    },
+    rewriteRules: {
+      get: async (match: string) =>
+        rules[match] ? { match, target: rules[match], context: "/" } : null,
+    },
+    append: async (...events: { type: string; payload: Record<string, unknown> }[]) => {
+      for (const event of events) {
+        appended.push(event);
+        // the lending appends rewrite rules alone, so each payload is a rule's
+        const { match, target, ifTarget } = event.payload as {
+          match: string;
+          target: ItxExpressionInput | null;
+          ifTarget?: ItxExpressionInput;
+        };
+        // as the kernel reduces it: a payload with `ifTarget` is a compare-and-set delete
+        if ("ifTarget" in event.payload) {
+          if (ifTarget && rules[match] === printed(ifTarget)) delete rules[match];
+        } else if (target) rules[match] = printed(target);
+      }
+    },
+    get iterateCloud() {
+      if (!rules["itx.iterateCloud"]) throw new Error("itx.iterateCloud is no name here");
+      return {
+        whoami: () => {
+          whoamis++;
+          return options.whoami();
+        },
+      };
+    },
+  };
+  return {
+    // the fake has what the lending calls, and its type names the whole root context
+    root: root as unknown as CloudAiRoot,
+    rules,
+    appended,
+    sets,
+    deleted,
+    described,
+    get whoamis() {
+      return whoamis;
+    },
+  };
+}
+
 function fakeVerifyItx(options: {
   secrets?: Record<string, { set: boolean; proxy?: { mind: string; url: string } }>;
   fetch?: (request: Request) => Promise<Response>;
@@ -2596,6 +2892,8 @@ function fakeCredit(
     proxyLayer?: boolean;
     /** A set that throws this, for each path, until the test deletes it. */
     setThrows?: Record<string, string>;
+    /** What the AI lending's turn-on answers (default: on). */
+    lend?: Awaited<ReturnType<CloudCredit["lendAi"]>>;
   } = {},
 ) {
   const calls: string[] = [];
@@ -2613,7 +2911,13 @@ function fakeCredit(
     deleteThrows: new Set<string>(),
     /** The vault keeps each path named here (a key form or a sign-in on it is open). */
     deleteKept: new Set<string>(),
+    /** What the AI lending's turn-on answers. */
+    lend: init.lend || { on: true },
+    /** `itx.ai` runs through iterate Cloud. */
+    ai: false,
   };
+  /** Each turn-on and turn-off of the AI lending, apart from `calls`. */
+  const lending: string[] = [];
   const credit: CloudCredit = {
     canSign: async () => init.canSign ?? true,
     connect: async () => {
@@ -2640,8 +2944,18 @@ function fakeCredit(
       secrets[path] = "unset";
       return true;
     },
+    lendAi: async () => {
+      lending.push("lend");
+      if (state.lend.on) state.ai = true;
+      return state.lend;
+    },
+    aiLent: async () => state.ai,
+    endAi: async () => {
+      lending.push("end");
+      state.ai = false;
+    },
   };
-  return { credit, calls, secrets, state, setThrows };
+  return { credit, calls, secrets, state, setThrows, lending };
 }
 
 /** The steps of the cards, in the page's order. */

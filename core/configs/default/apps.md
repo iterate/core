@@ -202,6 +202,8 @@ app does not answer goes to the worker of that repo at its newest commit (`pageF
 
 1. **Connect to iterate Cloud (optional):** the owner signs the meld rule with a passkey and takes
    iterate's credit for OpenAI and Exa by iterate's proxy, or skips (`steps/connect-iterate-cloud.ts`).
+   Connected, `itx.ai` also runs through iterate Cloud once the Cloud recognises the mind
+   (`cloud-ai.ts`); `await itx.iterateCloud.usage()` reads that spend.
 2. **Configure AI:** ready to continue if iterate Cloud credit is connected; otherwise the owner
    adds an OpenAI API key (`itx.secrets.collectFromUser`), connects a ChatGPT Plus/Pro plan
    (`npx iterate@latest chatgpt connect <mind>`), or uses Cloudflare AI Gateway credit.

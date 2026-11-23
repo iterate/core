@@ -13,10 +13,15 @@
 // iterate's proxy), own keys (a stack that signs, and both secrets are the owner's: no offer),
 // declined, unavailable (the stack cannot sign as the mind yet), failed (the last ask, with its
 // reason; not "spent"), not asked (the offer, with what is left of a grant this mind has).
+//
+// AT THE CONNECT the step also turns on iterate Cloud's AI lending (cloud-ai.ts): `itx.ai` runs
+// through iterate Cloud once the Cloud has recognised the mind. A Disconnect, the rule's end and
+// iterate's end of the credit turn it off. Neither ever fails the step.
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 import { dashLinks } from "../../dash/links.ts";
 import { ITERATE_HOSTNAME, ITERATE_MIND } from "../../../cloud-deliveries.ts";
+import type { CloudAiAnswer } from "../cloud-ai.ts";
 import { Balance, CREDIT_SECRETS } from "../cloud-credit.ts";
 import type { StepState } from "../contract.ts";
 import type { Card, MindEvent, Step, StepContext, StepLog } from "../steps.ts";
@@ -60,6 +65,8 @@ const Facts = z.object({
   ended: z.boolean().optional(),
   /** A person at iterate ended this mind's credit, for good (403 `iterate_credit_ended`). */
   iterateEnded: z.boolean().optional(),
+  /** iterate Cloud lends this mind its AI: `itx.ai` is `itx.iterateCloud.ai` (cloud-ai.ts). */
+  ai: z.boolean().optional(),
 });
 type Facts = z.infer<typeof Facts>;
 
@@ -80,8 +87,8 @@ const MELD_CONTEXTS = [MELD_CONTEXT, `/minds/${ITERATE_HOSTNAME}`];
  *  is read only when it exists: a read would make it. `ended` only when a context was READ and the
  *  latest rule is an end: a context missing from the catalog's page (more than 1,000 more active
  *  below it, or a row not yet written) is off but not ended, so nothing is deleted on it. */
-async function meldOf(
-  context: StepContext,
+export async function meldOf(
+  context: Pick<StepContext, "itx">,
 ): Promise<{ on: boolean; ended: boolean; signer?: string }> {
   let meld: { on: boolean; ended: boolean; signer?: string } = { on: false, ended: false };
   let latest = "";
@@ -311,6 +318,9 @@ function words(state: StepState, context: StepContext): Card {
       text: [
         `${dollars(remainingUsd)} of ${dollars(grantedUsd)} left.`,
         ...own,
+        facts.ai
+          ? "Your mind's AI models now run through iterate Cloud."
+          : "Your mind's AI models still run on your own Cloudflare account.",
         ...(half ? [half] : []),
       ],
       buttons: [
@@ -447,14 +457,28 @@ function words(state: StepState, context: StepContext): Card {
 
 async function check(context: StepContext, state: StepState): Promise<Facts> {
   const { credit } = context;
-  const [canSign, meld, openai, exa] = await Promise.all([
+  const [canSign, meld, openai, exa, lent] = await Promise.all([
     credit.canSign(),
     meldOf(context),
     credit.secret("/secrets/openai"),
     credit.secret("/secrets/exa"),
+    credit.aiLent().catch((error: unknown) => {
+      console.warn({ event: "onboarding.ai-lent-read-failed", error: String(error) });
+      return false;
+    }),
   ]);
   const last = factsOf(state);
-  const facts: Facts = { canSign, meld: meld.on, openai, exa };
+  // the rule's end ends the AI lending too: a turn-off that failed at the end is tried again here
+  const ai = lent && meld.ended ? await aiStays(context) : lent;
+  const facts: Facts = { canSign, meld: meld.on, openai, exa, ...(ai && { ai: true }) };
+  /** The facts with the AI lending turned off: iterate ended the credit, or it is spent. */
+  const lendingOff = async (): Promise<Facts> => ({
+    canSign,
+    meld: meld.on,
+    openai,
+    exa,
+    ...(ai && (await aiStays(context)) && { ai: true }),
+  });
   // THE RULE ENDED, AND A PATH STAYED: a path that a Disconnect or the rule's end could not delete
   // (the vault keeps it while a key form or a sign-in on it is open) is tried again at each check.
   // Only on an end that was read: a rule missing from the catalog's page deletes nothing, and a
@@ -472,24 +496,30 @@ async function check(context: StepContext, state: StepState): Promise<Facts> {
   const stays = openai === "iterate-proxy" || exa === "iterate-proxy";
   if (last?.iterateEnded)
     return {
-      ...facts,
+      ...(await lendingOff()),
       iterateEnded: true,
       ...(stays && (await switchOff(context, openai, exa))),
     };
   const answer = await credit.balance();
   if (!answer.ok && answer.reason === "ended")
-    return { ...facts, iterateEnded: true, ...(await switchOff(context, openai, exa)) };
+    return {
+      ...(await lendingOff()),
+      iterateEnded: true,
+      ...(await switchOff(context, openai, exa)),
+    };
   if (!answer.ok) return { ...facts, ...lastBalance(answer.reason, last) };
   // under zero is not enough: only a balance that is certainly spent switches anything off
   if (spentOf(answer.balance) !== "spent") return { ...facts, balance: answer.balance };
-  // SPENT: iterate's proxy is switched off for this mind, so no request goes to iterate first and
+  // SPENT: iterate's proxy is switched off for this mind, and the AI lending with it, so no request
+  // goes to iterate first and
   // is refused there. deleteProxy deletes iterate's proxy and nothing else; the rule stays. Every
   // check of a spent balance does it, so a retry, two checks at once, or a mind spent before this
   // code all end with no secret by iterate's proxy. Not on "paused" or "none-today": they end
   // tomorrow and answer no balance, above.
+  const spent = await lendingOff();
   if (openai !== "iterate-proxy" && exa !== "iterate-proxy")
-    return { ...facts, balance: answer.balance };
-  return { ...facts, ...(await switchOff(context, openai, exa)), balance: answer.balance };
+    return { ...spent, balance: answer.balance };
+  return { ...spent, ...(await switchOff(context, openai, exa)), balance: answer.balance };
 }
 
 /** Deletes both secrets by iterate's proxy, and answers what each path holds after it. A delete
@@ -509,6 +539,18 @@ async function switchOff(
     ),
   );
   return { openai: openaiOff ? "unset" : openai, exa: exaOff ? "unset" : exa };
+}
+
+/** Turns iterate Cloud's AI lending off, and answers whether it stays on: a turn-off that throws is
+ *  a log line, and a later turn-off tries again. */
+async function aiStays(context: StepContext): Promise<boolean> {
+  try {
+    await context.credit.endAi();
+    return false;
+  } catch (error) {
+    console.warn({ event: "onboarding.ai-lending-end-failed", error: String(error) });
+    return true;
+  }
 }
 
 /** The facts' balance when iterate gave no new one: the last numbers stay, except with no grant. */
@@ -583,6 +625,14 @@ async function creditOutcome(context: StepContext): Promise<Outcome> {
       if (set === "approval-rule" || set === "being-set") return stopped(set);
       if (set === "set" || set === "iterate-proxy") pays.push(name);
     }
+    // connected: iterate Cloud's AI lending too, best effort. A refusal leaves `itx.ai` as it was,
+    // and the card says where the mind's AI runs
+    if (pays.length > 0) {
+      const lent = await context.credit
+        .lendAi()
+        .catch((error: unknown): CloudAiAnswer => ({ on: false, reason: String(error) }));
+      if (!lent.on) console.warn({ event: "onboarding.ai-lending-off", reason: lent.reason });
+    }
     return { remainingUsd: answer.balance.remainingUsd, pays };
   } catch (error) {
     console.warn({ event: "onboarding.connect-stopped", error: String(error) });
@@ -655,6 +705,7 @@ async function act(
   if (action === "disconnect") {
     // a path that stays is said on the card, and does not hold up the rule's end
     await switchOff(context, facts?.openai || "unset", facts?.exa || "unset");
+    await aiStays(context);
     if (!facts?.meld) return log.settle(await log.request(action));
     const { signAt, expires } = await propose(context, []);
     await log.request(action, { link: signAt, expires });
@@ -715,8 +766,9 @@ async function onEvent(context: StepContext, event: MindEvent, state: StepState,
     await finishConnect(context, requestOffset, log, { tell: "signed" });
     return;
   }
-  // the rule and the credit are one offer: the end of the rule ends the credit
+  // the rule and the credit are one offer: the end of the rule ends the credit, and the AI lending
   await switchOff(context, "unset", "unset");
+  await aiStays(context);
   if (state.action?.name === "disconnect") await log.settle(state.action.requestOffset);
 }
 

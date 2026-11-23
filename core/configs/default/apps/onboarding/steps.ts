@@ -183,6 +183,12 @@ export async function connectWaitsForRule(itx: Pick<OnboardingItx, "cd">): Promi
   return (await readState(itx)).steps["connect-iterate-cloud"]?.action?.name === "connect";
 }
 
+/** Whether the owner said "not now" to the step "Connect to iterate Cloud", and has not pressed
+ *  Connect since. */
+export async function connectDeclined(itx: Pick<OnboardingItx, "cd">): Promise<boolean> {
+  return (await readState(itx)).steps["connect-iterate-cloud"]?.declined === true;
+}
+
 /** One keyed append: a key already taken is the same write landed before. */
 async function append(
   itx: OnboardingItx,
