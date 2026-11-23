@@ -160,7 +160,7 @@ and the page is a reduction of that log.
 It is off in a new mind. To turn it on:
 
 1. In `worker.ts`, add three lines: the import beside the other apps' imports, the app beside
-   the other apps' constants, and its case in `#route`'s `switch`, after `case "tasks"`. The
+   the other apps' constants, and its case in the `switch` of `fetch`, after `case "tasks"`. The
    guestbook has no guard in `fetch`: its routes ask for who they need.
 
    ```ts

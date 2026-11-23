@@ -17,7 +17,7 @@ apps/<name>/
 ```
 
 - **Mount it** in `worker.ts`: import the function, call it once, and give it a case in `fetch`
-  (the `switch` of `#route`):
+  (its `switch`):
   `case "notes": return this.auth.require(request) || notes.fetch(request, this);`. A changed
   `worker.ts` keeps `await init(itx)` in the init case: `init.ts` runs `installAgents(itx)` and
   `publishAgentKinds(itx, agentKinds)`.

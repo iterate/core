@@ -1,6 +1,6 @@
-// The default config's worker as a test builds it: its constructor runs, so its private
-// `#route` (the routing that `fetch` wraps with the page tag, core/configs/default/worker.ts) is
-// there, which `Object.create(Config.prototype)` leaves out. The runtime sets `ctx`; here it is
+// The default config's worker as a test builds it: its constructor runs, so the fields that its
+// `fetch` reads (`auth`, `getItx`, core/configs/default/worker.ts) are there, which
+// `Object.create(Config.prototype)` leaves out. The runtime sets `ctx`; here it is
 // one whose `waitUntil` keeps nothing. `properties` go over the instance, as
 // `Object.create`'s second argument would.
 import { vi } from "vitest";

@@ -47,39 +47,41 @@ export default class extends ConfigApi {
   // (sign-in, the API, MCP).
   async fetch(request: Request) {
     // Every page reports its views, its speed and its errors (page-events.md): the reports are
-    // taken here, and each HTML page among the answers gets the tag that sends them.
+    // taken here, and at the end each HTML page among the answers gets the tag that sends them.
     const reported = await pageEvents(request, this);
     if (reported) return reported;
-    const answer = await this.#route(documentRequest(request, this));
-    return addPageTag(request, answer, this, (work) => this.ctx.waitUntil(work));
-  }
 
-  // An app is on `<name>.<zone>`. Each call below is a partial fetcher: it answers, or it says
-  // null and the next one gets the request. `this.auth.require` is one too: null for a member,
-  // the sign-in for anyone else. An app's name and icon are for anyone (`open`).
-  async #route(request: Request): Promise<Response> {
-    switch (new URL(request.url).hostname.split(".")[0]) {
-      case "dash": // the Dash, for members: the mind seen from above, and a chat with every agent
-        return dash.open(request) || this.auth.require(request) || dash.fetch(request, this);
-      case "docs": // Docs, for members: the files of the mind's repos, written together
-        return docs.open(request) || this.auth.require(request) || docs.fetch(request, this);
-      case "meet": // Meet, for members and their guests: its own routes ask for who they need
-        return meet.fetch(request, this);
-      case "onboarding": // the first steps of a new mind, for members
-        return (
-          onboarding.open(request) || this.auth.require(request) || onboarding.fetch(request, this)
-        );
-      case "tasks": // Tasks, for members: the board of markdown files under tasks/
-        return tasks.open(request) || this.auth.require(request) || tasks.fetch(request, this);
-    }
-    // THE PUBLIC WEBSITE, for anyone, on every other hostname
-    return (
-      me(request, this) || // who the visitor is
-      (await cloudflareClient(request, this)) || // the mind's client at Cloudflare's MCP server
-      publicProfile(request) || // the mind's name, description and icon (profile/)
-      (await homepage(request, this)) || // homepage.ts: change that file to make the site yours
-      new Response("Not found\n", { status: 404 })
-    );
+    // An app is on `<name>.<zone>`. Each call below is a partial fetcher: it answers, or it says
+    // null and the next one gets the request. `this.auth.require` is one too: null for a member,
+    // the sign-in for anyone else. An app's name and icon are for anyone (`open`).
+    const route = async (request: Request): Promise<Response> => {
+      switch (new URL(request.url).hostname.split(".")[0]) {
+        case "dash": // the Dash, for members: the mind seen from above, and a chat with every agent
+          return dash.open(request) || this.auth.require(request) || dash.fetch(request, this);
+        case "docs": // Docs, for members: the files of the mind's repos, written together
+          return docs.open(request) || this.auth.require(request) || docs.fetch(request, this);
+        case "meet": // Meet, for members and their guests: its own routes ask for who they need
+          return meet.fetch(request, this);
+        case "onboarding": // the first steps of a new mind, for members
+          return (
+            onboarding.open(request) ||
+            this.auth.require(request) ||
+            onboarding.fetch(request, this)
+          );
+        case "tasks": // Tasks, for members: the board of markdown files under tasks/
+          return tasks.open(request) || this.auth.require(request) || tasks.fetch(request, this);
+      }
+      // THE PUBLIC WEBSITE, for anyone, on every other hostname
+      return (
+        me(request, this) || // who the visitor is
+        (await cloudflareClient(request, this)) || // the mind's client at Cloudflare's MCP server
+        publicProfile(request) || // the mind's name, description and icon (profile/)
+        (await homepage(request, this)) || // homepage.ts: change that file to make the site yours
+        new Response("Not found\n", { status: 404 })
+      );
+    };
+    const answer = await route(documentRequest(request, this));
+    return addPageTag(request, answer, this, (work) => this.ctx.waitUntil(work));
   }
 
   // EVERY MAIL. The platform has stored it on the context /integrations/email already, and the
