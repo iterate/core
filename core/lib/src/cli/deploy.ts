@@ -152,6 +152,7 @@ export function deployConfigOf(answers: {
   accountId: string;
   domain: string;
   owner?: string;
+  extraOwners?: readonly string[];
   controlPlaneHostname?: string;
   egressGateway?: string;
   mailForwardTo?: string;
@@ -172,7 +173,12 @@ export function deployConfigOf(answers: {
     throw new Error(
       `The control plane cannot answer at ${controlPlaneHostname}: its hostname is ${zones.join(" or ")}, or one label under it. Cloudflare's certificate for a zone covers no deeper name.`,
     );
-  const ownerEmails = answers.owner ? [answers.owner.toLowerCase()] : deployed?.ownerEmails || [];
+  const ownerEmails = [
+    ...new Set([
+      ...(answers.owner ? [answers.owner.toLowerCase()] : deployed?.ownerEmails || []),
+      ...(answers.extraOwners || []).map((email) => email.trim().toLowerCase()).filter(Boolean),
+    ]),
+  ];
   const atTheMind = ownerEmails.find((email) => zoneOfMailAddress({ zones }, email));
   if (atTheMind)
     throw new Error(
@@ -1795,7 +1801,7 @@ export function identityKeyLineOf(
 ) {
   if (!existsSync(keyFile)) return undefined;
   if (!run.gaveTheId && !run.posted?.taken && !run.posted?.emptyBefore) return undefined;
-  return `Its identity key: ${keyFile.replace(homedir(), "~")}  (keep a copy: it proves that the mind is yours)`;
+  return `Its identity key: ${keyFile.replace(homedir(), "~")}  (not used right now — don't worry about it or if you lose it)`;
 }
 
 /** THE IDENTITY OF A MIND THAT HAS NONE (./identity.ts): the one that an earlier run on this
@@ -1858,6 +1864,19 @@ export function assertSupportedNodeVersion(version = process.versions.node): voi
   throw new Error(
     `iterate deploy requires Node ${minMajor}.${minMinor} or newer (you are running Node v${version}). Older Node versions can fail Cloudflare sign-in (HTTP 403 / fetch failed) and lack ML-DSA-65 key support. Upgrade Node (e.g. brew install node, nvm install 24, fnm install 24, or https://nodejs.org) and run again.`,
   );
+}
+
+/** Parses optional comma- or space-separated additional owner email addresses into a clean,
+ *  deduplicated lowercase list. */
+export function parseExtraOwnerEmails(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((part) => part.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
 }
 
 export async function deployMind(input: DeployInput) {
@@ -1947,7 +1966,7 @@ export async function deployMind(input: DeployInput) {
     }
     p.log.info(`Signed in to Cloudflare${login ? ` as ${login}` : ""}.`);
     // THE OWNER OF A NEW MIND: `--owner`, else the Cloudflare login, else a question. Asked for
-    // only where it is needed: a mind that is there already has its owners.
+    // only where it is needed: a mind that is there already keeps its owners.
     let asked: string | undefined;
     const newOwner = async () =>
       input.owner?.toLowerCase() ||
@@ -2062,10 +2081,32 @@ export async function deployMind(input: DeployInput) {
         );
     const unfinished = earlier?.mind;
     const mind = deployed || unfinished;
+    const primaryOwner = mind ? input.owner : await newOwner();
+    const extraOwners =
+      !mind && !input.owner && interactive() && primaryOwner
+        ? parseExtraOwnerEmails(
+            await ask<string>("", () =>
+              p.text({
+                message: `Add additional owner email addresses beside ${primaryOwner}? (comma-separated, or press Enter to skip)`,
+                placeholder: "e.g. you@personal.com",
+                defaultValue: "",
+                validate: (value) => {
+                  const trimmed = (value || "").trim();
+                  if (!trimmed) return undefined;
+                  const bad = parseExtraOwnerEmails(trimmed).find(
+                    (email) => !/^\S+@\S+\.\S+$/.test(email),
+                  );
+                  return bad ? `${bad} is not a valid email address` : undefined;
+                },
+              }),
+            ),
+          )
+        : [];
     const config = deployConfigOf({
       accountId: account.id,
       domain,
-      owner: mind ? input.owner : await newOwner(),
+      owner: primaryOwner,
+      extraOwners,
       controlPlaneHostname: input.controlPlaneHostname,
       egressGateway: input.egressGateway,
       mailForwardTo: input.mailForwardTo,

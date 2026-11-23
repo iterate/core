@@ -30,6 +30,7 @@ import {
   isInteractiveEnv,
   mindConfigIn,
   onboardingUrlOf,
+  parseExtraOwnerEmails,
   planArgsOf,
   setupDestinationOf,
   PNPM_COMPAT_ENV,
@@ -269,7 +270,7 @@ test("the key's line names the key file only when it is here, and only when this
     { gaveTheId: false, posted: { ...quiet, emptyBefore: true } },
   ])
     expect(identityKeyLineOf(keyFile, run)).toBe(
-      `Its identity key: ${keyFile}  (keep a copy: it proves that the mind is yours)`,
+      `Its identity key: ${keyFile}  (not used right now — don't worry about it or if you lose it)`,
     );
   // a later deploy of a mind whose log has its records, or whose post failed, prints none
   expect(identityKeyLineOf(keyFile, { gaveTheId: false, posted: quiet })).toBeUndefined();
@@ -1353,6 +1354,21 @@ test("the deploy opens no page until the pages a browser asks first work: iterat
   expect(
     await never({ [ACCESS]: { status: 302, location: "https://iterate.ada-labs.com/sign-in" } }),
   ).toMatchObject({ outcome: { fault: `${ACCESS} answered 302 to https://iterate.ada-labs.com` } });
+});
+
+test("parseExtraOwnerEmails and deployConfigOf support adding additional owner sign-in emails", () => {
+  expect(parseExtraOwnerEmails("")).toEqual([]);
+  expect(parseExtraOwnerEmails("  ")).toEqual([]);
+  expect(parseExtraOwnerEmails("Personal@Gmail.com, other@example.org personal@gmail.com")).toEqual(
+    ["personal@gmail.com", "other@example.org"],
+  );
+  const config = deployConfigOf({
+    accountId: "a".repeat(32),
+    domain: "ada-labs.com",
+    owner: "cf@work.com",
+    extraOwners: ["Personal@Gmail.com", "cf@work.com"],
+  });
+  expect(config).toMatchObject({ ownerEmails: ["cf@work.com", "personal@gmail.com"] });
 });
 
 test("assertSupportedNodeVersion rejects Node < 24.7 before sign-in and accepts Node 24.7+", () => {
