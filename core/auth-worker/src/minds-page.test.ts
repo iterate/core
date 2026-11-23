@@ -1,5 +1,6 @@
 // /minds and /minds/published: a member's page of the minds this mind lets in. The two presses,
 // "End" and "Let it in", are a browser's passkey and are proven on a deployed mind, not here.
+import { runInNewContext } from "node:vm";
 import { identityHashOf } from "iterate/mind-identity";
 import { expect, test, vi } from "vitest";
 import { newIdentityLog, newRootKey } from "../../lib/src/test-support/identity-log.ts";
@@ -112,6 +113,158 @@ test("/minds/published answers a member the id and the working keys that a mind'
   ).toMatchObject({ status: 403 });
   expect(fetched).toHaveLength(1);
 });
+
+test("the deep link survives sign-in and prefills only a member's form", async () => {
+  const { env } = stackOf([]);
+  const domain = "peer-three.net";
+  const mind = "a".repeat(64);
+  const path = `/minds?domain=${domain}&mind=${mind}`;
+  const signedOut = (await mindsPageResponse(env, new Request(ISSUER + path)))!;
+  expect(signedOut).toMatchObject({ status: 303 });
+  const location = new URL(signedOut.headers.get("location")!, ISSUER);
+  expect(location.searchParams.get("next")).toBe(path);
+
+  const ada = (await mindsPageResponse(env, get(path, await signedIn(env, ADA))))!;
+  expect(ada).toMatchObject({ status: 403 });
+  expect(await ada.text()).not.toContain("let-in");
+
+  const owner = await signedIn(env, OWNER);
+  const page = (await mindsPageResponse(env, get(path, owner)))!;
+  const body = await page.text();
+  expect(body).toContain(`value="${domain}"`);
+  expect(body).toContain(`data-expected-mind="${mind}"`);
+  expect(body).toContain('<div id="found" hidden>');
+
+  const invalid = (await mindsPageResponse(
+    env,
+    get("/minds?domain=peer-three.net&mind=*", owner),
+  ))!;
+  expect(await invalid.text()).not.toContain(`value="${domain}"`);
+  const badHost = (await mindsPageResponse(env, get("/minds?domain=peer-three.net%2Ffoo", owner)))!;
+  expect(await badHost.text()).not.toContain('value="peer-three.net');
+  expect(
+    await mindsPageResponse(env, new Request(ISSUER + path, { method: "POST" })),
+  ).toMatchObject({
+    status: 405,
+  });
+});
+
+test("the prefilled form looks up the mind and signs only the reviewed rule on a press", async () => {
+  const mind = "a".repeat(64);
+  const page = await openPrefill(mind, mind);
+  expect(page).toMatchObject({ fetches: ["/keys.json", "/minds/published?domain=peer-three.net"] });
+  expect(page.passkey).not.toHaveBeenCalled();
+  const scope = `/minds/${mind}/`;
+  expect(page).toMatchObject({
+    found: { hidden: false },
+    fields: {
+      "[data-domain]": { textContent: "peer-three.net" },
+      "[data-mind]": { textContent: mind },
+      "[data-path]": { textContent: scope },
+    },
+  });
+
+  await page.click();
+  expect(page.passkey).toHaveBeenCalledOnce();
+  expect(page.fetches.at(-1)).toBe("POST /statements");
+  expect(page.statement()).toMatchObject({
+    mind: MIND,
+    path: `/minds/${mind}`,
+    type: "events.iterate.com/mind-meld/configured",
+    payload: { append: [scope], name: "peer-three.net" },
+  });
+});
+
+test("a link whose expected identity differs from the published one cannot be approved", async () => {
+  const page = await openPrefill("a".repeat(64), "b".repeat(64));
+  expect(page.found).toMatchObject({ hidden: true });
+  expect(page.status.textContent).toContain("publishes a different mind ID");
+  await page.click();
+  expect(page.passkey).not.toHaveBeenCalled();
+  expect(page).toMatchObject({ fetches: ["/keys.json", "/minds/published?domain=peer-three.net"] });
+});
+
+async function openPrefill(expectedMind: string, publishedMind: string) {
+  const { env } = stackOf([]);
+  const domain = "peer-three.net";
+  const path = `/minds?domain=${domain}&mind=${expectedMind}`;
+  const page = (await mindsPageResponse(env, get(path, await signedIn(env, OWNER))))!;
+  const script = (await page.text()).match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/)![1]!;
+  const fields: Record<string, { textContent: string }> = {};
+  const handlers: Record<string, () => Promise<void>> = {};
+  let initialLookup: Promise<void> | undefined;
+  const button = {
+    addEventListener: (event: string, callback: () => Promise<void>) => {
+      handlers[event] = callback;
+    },
+  };
+  const found = {
+    hidden: true,
+    querySelector: (selector: string) =>
+      selector === "button" ? button : (fields[selector] ??= { textContent: "" }),
+  };
+  const form = {
+    domain: { value: domain, defaultValue: domain },
+    dataset: { expectedMind },
+    requestSubmit() {
+      initialLookup = handlers.submit!();
+    },
+    addEventListener(
+      event: string,
+      callback: (event: { preventDefault(): void }) => Promise<void>,
+    ) {
+      handlers[event] = () => callback({ preventDefault() {} });
+    },
+  };
+  const status = {
+    textContent: "",
+    classList: { add() {}, remove() {} },
+    setAttribute() {},
+    scrollIntoView() {},
+  };
+  const passkey = vi.fn(async () => {
+    const bytes = new Uint8Array([1]);
+    return {
+      id: "AQ",
+      response: { signature: bytes, authenticatorData: bytes, clientDataJSON: bytes },
+    };
+  });
+  const fetches: string[] = [];
+  let posted: string | undefined;
+  runInNewContext(script, {
+    TextEncoder,
+    URLSearchParams,
+    atob,
+    btoa,
+    crypto,
+    document: {
+      getElementById: (id: string) => ({ status, found, "let-in": form })[id],
+      querySelectorAll: () => [],
+    },
+    navigator: { credentials: { get: passkey } },
+    location: { hostname: MIND, replace() {} },
+    fetch: async (path: string, init?: RequestInit) => {
+      fetches.push(init?.method ? `${init.method} ${path}` : path);
+      if (path === "/keys.json")
+        return Response.json({ keys: [{ credentialId: "AQ", key: "key-1" }] });
+      if (path === "/statements") {
+        posted = JSON.parse(String(init?.body)).statement;
+        return Response.json({});
+      }
+      return Response.json({ mind: publishedMind, keys: [] });
+    },
+  });
+  await initialLookup;
+  return {
+    found,
+    fields,
+    status,
+    fetches,
+    passkey,
+    click: handlers.click!,
+    statement: () => JSON.parse(posted!),
+  };
+}
 
 const get = (path: string, cookie: string) =>
   new Request(`${ISSUER}${path}`, { headers: { cookie } });

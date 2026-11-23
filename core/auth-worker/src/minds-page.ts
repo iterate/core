@@ -7,7 +7,7 @@
 // default rule, `{ append: ["/minds/<id>/"], name }`: a wider rule is an agent's proposal.
 import { identityKeyIdOf } from "iterate/mind-identity";
 import { publishedMindOf } from "iterate/mind-identity-log";
-import { isMindControlPlaneHostname, STATEMENTS_PATH } from "iterate/signed";
+import { isMindControlPlaneHostname, isMindId, STATEMENTS_PATH } from "iterate/signed";
 import { z } from "zod";
 import { sessionOf } from "./cookies.ts";
 import { configOf, type Env } from "./env.ts";
@@ -43,14 +43,27 @@ export async function mindsPageResponse(env: Env, request: Request): Promise<Res
     if (!member) return Response.json({ why: "a member's session" }, { status: 403 });
     return publishedResponse(env, url.searchParams.get("domain") || "");
   }
-  if (!session)
+  const domain = url.searchParams.get("domain") || "";
+  const expectedMind = url.searchParams.get("mind") ?? "";
+  const prefill =
+    isMindControlPlaneHostname(domain) && (!url.searchParams.has("mind") || isMindId(expectedMind))
+      ? { domain, expectedMind }
+      : { domain: "", expectedMind: "" };
+  if (!session) {
+    const query = new URLSearchParams();
+    if (prefill.domain) query.set("domain", prefill.domain);
+    if (prefill.expectedMind) query.set("mind", prefill.expectedMind);
     return new Response(null, {
       status: 303,
-      headers: { location: signInHref(MINDS_PATH), "cache-control": "no-store" },
+      headers: {
+        location: signInHref(query.size ? `${MINDS_PATH}?${query}` : MINDS_PATH),
+        "cache-control": "no-store",
+      },
     });
+  }
   const mind = configOf(env).controlPlaneHostname;
   if (!member) return notMemberPage({ mind, email: session.email });
-  return mindsPage(env, mind);
+  return mindsPage(env, mind, prefill);
 }
 
 /** What the identity log of the mind at `domain` lists, for the page to show before the press:
@@ -72,7 +85,11 @@ async function publishedResponse(env: Env, domain: string): Promise<Response> {
   });
 }
 
-async function mindsPage(env: Env, mind: string): Promise<Response> {
+async function mindsPage(
+  env: Env,
+  mind: string,
+  prefill: { domain: string; expectedMind: string },
+): Promise<Response> {
   const { results } = await env.DB.prepare(
     `select m.domain, m.mind, m.append, m.key, m.configured_at, m.pinned_at, m.refused, u.email
        from mind_melds m left join users u on u.id = m.configured_by order by m.domain`,
@@ -89,10 +106,22 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
         <button type="button" class="link" data-end="${text(row.domain)}" data-mind="${text(row.mind || "")}">End</button>
       </li>`;
   };
+  const letIn = `<h2>Let a mind in</h2>
+      <form id="let-in" class="stack" data-expected-mind="${text(prefill.expectedMind)}">
+        <label>The other mind's domain <input name="domain" autocomplete="off" required placeholder="example.com" value="${text(prefill.domain)}"></label>
+        <button type="submit">Look it up</button>
+      </form>
+      <div id="found" hidden>
+        <p>Allow <strong data-domain></strong> to append events under <code data-path></code> in this mind?</p>
+        <p>Mind ID <code data-mind></code>. Its keys: <span data-keys></span>.</p>
+        <button type="button">Allow with passkey</button>
+      </div>
+      <p id="status" class="muted" role="status">Each change asks for your passkey.</p>`;
   return page({
     title: `Minds that ${mind} lets in`,
     wide: true,
     body: `<h1>Minds that ${text(mind)} lets in</h1>
+      ${prefill.domain ? letIn : ""}
       ${
         melds.length
           ? `<ul>${melds.map(meldItem).join("")}</ul>`
@@ -104,17 +133,7 @@ async function mindsPage(env: Env, mind: string): Promise<Response> {
       <ul>${ended.map((row) => `<li>${text(row.domain)} <span class="muted">ended ${minute(row.configured_at)}.</span></li>`).join("")}</ul>`
           : ""
       }
-      <h2>Let a mind in</h2>
-      <form id="let-in" class="stack">
-        <label>The other mind's domain <input name="domain" autocomplete="off" required placeholder="example.com"></label>
-        <button type="submit">Look it up</button>
-      </form>
-      <div id="found" hidden>
-        <p><strong data-domain></strong> is the mind <code data-mind></code>. Its keys: <span data-keys></span>.</p>
-        <p data-rule></p>
-        <button type="button">Let it in</button>
-      </div>
-      <p id="status" class="muted" role="status">Each change asks for your passkey.</p>`,
+      ${prefill.domain ? "" : letIn}`,
     script: `${signScript(mind)}${MINDS_SCRIPT}`,
   });
 }
@@ -147,7 +166,7 @@ async function signedRule(mind, name, append) {
   const signed = await signedStatement({ path: "/minds/" + mind, type: "events.iterate.com/mind-meld/configured", payload: { append, name } });
   const answer = await fetch("${STATEMENTS_PATH}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(signed) });
   if (!answer.ok) throw new Error((await answer.json().catch(() => ({}))).refused || "The rule was not taken.");
-  location.reload();
+  location.replace("${MINDS_PATH}");
 }
 // a row by hostname with no id yet: the id that its hostname serves now is the one it ends
 for (const end of document.querySelectorAll("button[data-end]"))
@@ -156,27 +175,41 @@ for (const end of document.querySelectorAll("button[data-end]"))
       .catch((error) => said(error, "The meld did not end.")));
 const form = document.getElementById("let-in");
 const found = document.getElementById("found");
-let domain;
-let mind;
+const requestedDomain = form.domain.defaultValue;
+const expectedMind = form.dataset.expectedMind;
+let lookup = 0;
+let review;
+function clearReview() {
+  review = undefined;
+  found.hidden = true;
+  return ++lookup;
+}
+form.addEventListener("input", clearReview);
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
-  found.hidden = true;
-  const typed = form.domain.value.trim().toLowerCase();
-  domain = typed;
+  const current = clearReview();
+  const domain = form.domain.value.trim().toLowerCase();
   statusSay(status, "Reading the keys that " + domain + " publishes…");
   try {
     const answer = await published(domain);
-    // a later submit asked for another mind: this answer is not for what the page now shows
-    if (domain !== typed) return;
-    mind = answer.mind;
+    if (current !== lookup) return;
+    const mind = answer.mind;
+    if (domain === requestedDomain && expectedMind && mind !== expectedMind)
+      throw new Error("This domain publishes a different mind ID from the one in the link.");
+    const path = "/minds/" + mind + "/";
     found.querySelector("[data-domain]").textContent = domain;
     found.querySelector("[data-mind]").textContent = mind;
     found.querySelector("[data-keys]").textContent = answer.keys.length ? answer.keys.map((key) => key.key.slice(0, 8)).join(", ") : "none that sign statements yet";
-    found.querySelector("[data-rule]").textContent = "It may add events under /minds/" + mind + "/ of this mind, and nothing else.";
+    found.querySelector("[data-path]").textContent = path;
+    review = { domain, mind, path };
     found.hidden = false;
     statusSay(status, "Letting it in asks for your passkey.");
   } catch (error) {
-    if (domain === typed) said(error, "The keys could not be read.");
+    if (current === lookup) said(error, "The keys could not be read.");
   }
 });
-found.querySelector("button").addEventListener("click", () => signedRule(mind, domain, ["/minds/" + mind + "/"]).catch((error) => said(error, "The mind was not let in.")));`;
+found.querySelector("button").addEventListener("click", () => {
+  if (!review) return;
+  return signedRule(review.mind, review.domain, [review.path]).catch((error) => said(error, "The mind was not let in."));
+});
+if (requestedDomain) form.requestSubmit();`;
