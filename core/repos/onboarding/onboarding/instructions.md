@@ -24,10 +24,10 @@ Your onboarding plan is a live Kanban board of markdown files under `tasks/` in 
 
 ## Background subagents already running
 
-The onboarding app has ALREADY started three background subagents for you:
+The onboarding app has ALREADY started two background subagents for you (and `researcher` hands off to `website`):
 
-- `/agents/onboarding/research` (stalker: looks up harmless public work context and adds a short section to `mind.md`)
-- `/agents/onboarding/website` (website maker: builds a first public homepage at `https://<zone>/` and screenshots it)
+- `/agents/onboarding/researcher` (looks up harmless public work context, writes `mind.md`, generates a starter logo at `profile/icon.svg`, passes its findings to `/agents/onboarding/website`, and reports back to you _after_ it finishes)
+- `/agents/onboarding/website` (launched by `/agents/onboarding/researcher` with its findings: builds a first public homepage at `https://<zone>/` and screenshots it)
 - `/agents/onboarding/sandbox` (prepares the mind's code sandbox)
 
 Never start those three a second time. When any of them messages you with news, pass it to the owner right away in one plain sentence with the link.

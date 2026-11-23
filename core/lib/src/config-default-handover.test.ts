@@ -74,8 +74,7 @@ test("the handover writes the first message and starts the first subagents, once
     payload: { message: greeting },
   });
   expect(rows.slice(3).map(({ path, key, payload }) => [path, key, payload.role])).toEqual([
-    ["/agents/onboarding/research", "onboarding:helper:research", "user"],
-    ["/agents/onboarding/website", "onboarding:helper:website", "user"],
+    ["/agents/onboarding/researcher", "onboarding:helper:researcher", "user"],
     ["/agents/onboarding/sandbox", "onboarding:helper:sandbox", "user"],
     ["/agents/onboarding", "onboarding:helpers-started", "developer"],
   ]);
@@ -84,21 +83,19 @@ test("the handover writes the first message and starts the first subagents, once
   expect(rows[3]!.payload).not.toHaveProperty("llmRequestPolicy");
   expect(rows[3]!.payload).toMatchObject({
     content: expect.stringMatching(
-      /Read onboarding\/research\.md of \/repos\/onboarding \(await itx\.repos\.get\("\/repos\/onboarding"\)\.readFile\("onboarding\/research\.md"\)\)[\s\S]*tasks\/onboarding-research\.md of \/repos\/onboarding[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
+      /Read onboarding\/research\.md of \/repos\/onboarding \(await itx\.repos\.get\("\/repos\/onboarding"\)\.readFile\("onboarding\/research\.md"\)\)[\s\S]*tasks\/onboarding-research\.md of \/repos\/onboarding[\s\S]*profile\/icon\.svg[\s\S]*\/agents\/onboarding\/website[\s\S]*itx\.agents\.get\("\/agents\/onboarding"\)\.message\(/,
     ),
   });
-  expect(rows[6]!.payload).toMatchObject({
+  expect(rows[5]!.payload).toMatchObject({
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
   expect(root).toMatchObject({
     created: [
       "/agents/onboarding",
-      "/agents/onboarding/research",
-      "/agents/onboarding/website",
+      "/agents/onboarding/researcher",
       "/agents/onboarding/sandbox",
       "/agents/onboarding",
-      "/agents/onboarding/research",
-      "/agents/onboarding/website",
+      "/agents/onboarding/researcher",
       "/agents/onboarding/sandbox",
     ],
   });
@@ -113,8 +110,7 @@ test("an owner who reached the chat before the handover is greeted once: the ope
   expect(keys).toEqual([
     "opener:/agents/onboarding",
     "",
-    "onboarding:helper:research",
-    "onboarding:helper:website",
+    "onboarding:helper:researcher",
     "onboarding:helper:sandbox",
     "onboarding:helpers-started",
   ]);
@@ -122,7 +118,7 @@ test("an owner who reached the chat before the handover is greeted once: the ope
     event: {
       payload: {
         content:
-          "The mind's code has started the subagents research, website and sandbox under your path. Do not start them again.",
+          "The mind's code has started the subagents researcher and sandbox under your path (researcher will look the owner up, generate a starter logo, pass its findings to /agents/onboarding/website, and report back after). Do not start them again.",
       },
     },
   });

@@ -9,7 +9,7 @@ The owner should come away with: you never go quiet; slow work happens beside th
   check (the website, a change to it, a section of `mind.md`), an app at an address of its own,
   an integration, the research.
 - One subagent for each job, and the SAME subagent for every later change of that job:
-  `/agents/onboarding/website`, `/agents/onboarding/mind-md`, `/agents/onboarding/research`.
+  `/agents/onboarding/website`, `/agents/onboarding/mind-md`, `/agents/onboarding/researcher`.
 - What needs no wait you do yourself: an answer, a read, a mail, a mark, and the scripts that
   `onboarding.md` gives you to copy. NEVER start a subagent for the logo, the colour, the corners
   or the name: each is one script of yours, and a subagent makes the owner wait many times longer for a

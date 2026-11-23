@@ -156,6 +156,18 @@ test("itx.config.shareAgent makes the pages' link: the call turned on, the hash 
   expect(mind.appended.at(-1)).toMatchObject({ type: "share/link-ended" });
 });
 
+test("Dash sidebar keeps Contexts, Integrations, Config repo, and Analytics visible (not hidden under Settings)", () => {
+  const dashAppJs = readFileSync(
+    new URL("../../configs/default/apps/dash/public/app.js", import.meta.url),
+    "utf8",
+  );
+  for (const id of ["integrations", "repos", "contexts", "analytics"]) {
+    const block = new RegExp(`id:\\s*"${id}"[\\s\\S]*?component:`).exec(dashAppJs)?.[0];
+    expect(block, `Dash page "${id}" entry`).toBeTruthy();
+    expect(block).not.toMatch(/\brow\s*:\s*false\b/);
+  }
+});
+
 test("no file of the template names a path of the Dash that acts: the Integrations page's buttons call the mind's config", () => {
   const template = fileURLToPath(new URL("../../configs/default/", import.meta.url));
   const naming = readdirSync(template, { recursive: true, encoding: "utf8" })

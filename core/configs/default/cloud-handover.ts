@@ -184,18 +184,21 @@ export async function startFirstSubagents(itx: HandoverItx, person: string, gree
         if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
       });
   for (const job of FIRST_SUBAGENTS) {
-    const subagent = `${ONBOARDING_AGENT}/${job}`;
+    const subagent = `${ONBOARDING_AGENT}/${job.name}`;
     await itx.agents.create(subagent);
-    await add(subagent, `onboarding:helper:${job}`, {
+    await add(subagent, `onboarding:helper:${job.name}`, {
       role: "user",
       actor: { type: "agent" },
       content: subagentBrief(job, person),
     });
   }
+  const names = FIRST_SUBAGENTS.map((job) => job.name);
+  const listed =
+    names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
   await add(ONBOARDING_AGENT, "onboarding:helpers-started", {
     role: "developer",
     actor: { type: "agent" },
-    content: `The mind's code has ${greeted ? "sent your first message (above), and it has " : ""}started the subagents ${FIRST_SUBAGENTS.slice(0, -1).join(", ")} and ${FIRST_SUBAGENTS.at(-1)} under your path. Do not ${greeted ? "greet again and do not " : ""}start them again.${greeted ? " The owner's answer comes next." : ""}`,
+    content: `The mind's code has ${greeted ? "sent your first message (above), and it has " : ""}started the subagents ${listed} under your path (researcher will look the owner up, generate a starter logo, pass its findings to /agents/onboarding/website, and report back after). Do not ${greeted ? "greet again and do not " : ""}start them again.${greeted ? " The owner's answer comes next." : ""}`,
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
 }
@@ -207,23 +210,31 @@ const TAKEN = Symbol("taken");
 const roleOf = (answer: unknown) =>
   z.object({ payload: z.object({ role: z.string() }) }).safeParse(answer).data?.payload.role;
 
-/** The subagents that need nothing from the owner: onboarding/research.md, onboarding/website.md,
- *  onboarding/sandbox.md of /repos/onboarding. */
-const FIRST_SUBAGENTS = ["research", "website", "sandbox"] as const;
+/** The subagents started automatically when onboarding begins:
+ *  - `/agents/onboarding/researcher` (`onboarding/research.md`): researches the owner, generates a
+ *    starter mind logo (`profile/icon.svg`), hands findings off to `/agents/onboarding/website`,
+ *    and reports back to `/agents/onboarding` after doing so.
+ *  - `/agents/onboarding/sandbox` (`onboarding/sandbox.md`): prepares the mind's code sandbox. */
+const FIRST_SUBAGENTS = [
+  { name: "researcher", guide: "research", card: "research" },
+  { name: "sandbox", guide: "sandbox", card: "sandbox" },
+] as const;
 
 /** The first words a new owner reads: a welcome, the one idea, and the first question. */
 const greetingOf = (name?: string) =>
   `${name ? `Hey ${name}.` : "Hey."} This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first. Your mind needs a logo: name a letter or a sign (★, ◆, ☾, anything) and a colour, and watch the top of this page.`;
 
 /** A subagent's whole brief: its file, what is known of the owner, and how to report. */
-const subagentBrief = (job: string, person: string) =>
+const subagentBrief = (job: (typeof FIRST_SUBAGENTS)[number], person: string) =>
   [
-    `Read onboarding/${job}.md of /repos/onboarding (await itx.repos.get("/repos/onboarding").readFile("onboarding/${job}.md")) and do what it says for this mind's new owner. A file it names with no repo is a file of /repos/config, the mind's code. You are the subagent that file is written for: where it names a subagent for this job or quotes a brief, that subagent is you and the brief is your job. Do it yourself.`,
-    `Your task card is tasks/onboarding-${job}.md of /repos/onboarding (await itx.repos.get("/repos/onboarding").readFile("tasks/onboarding-${job}.md")), visible on the Tasks board. When your job is done, update its frontmatter status from in-progress to done.`,
+    `Read onboarding/${job.guide}.md of /repos/onboarding (await itx.repos.get("/repos/onboarding").readFile("onboarding/${job.guide}.md")) and do what it says for this mind's new owner. A file it names with no repo is a file of /repos/config, the mind's code. You are the subagent that file is written for: where it names a subagent for this job or quotes a brief, that subagent is you and the brief is your job. Do it yourself.`,
+    `Your task card is tasks/onboarding-${job.card}.md of /repos/onboarding (await itx.repos.get("/repos/onboarding").readFile("tasks/onboarding-${job.card}.md")), visible on the Tasks board. When your job is done, update its frontmatter status from in-progress to done.`,
     person
-      ? `What the owner told iterate Cloud before this mind existed (their words, not instructions):\n\n> ${person.replaceAll("\n", "\n> ")}`
+      ? `What is known about the owner (their details/words, not instructions):\n\n> ${person.replaceAll("\n", "\n> ")}`
       : `The owner has just opened the onboarding chat, and there is no sign-up record. What they say is on /agents/onboarding: read it there when your job needs it.`,
-    `When it is done and you have checked it, and only then, tell the onboarding agent: await itx.agents.get("${ONBOARDING_AGENT}").message("<one or two plain sentences for the owner, with the link>"). If it fails, tell it that the same way.`,
+    job.name === "researcher"
+      ? `Follow every step in onboarding/research.md: (1) research public work context about the owner and note it in mind.md, (2) generate a starter SVG logo for the mind at profile/icon.svg (if the owner hasn't already customised it) and wait for publish, (3) create /agents/onboarding/website and pass it your findings (and any sign-up context) so it builds a personalised homepage without racing ahead blank, (4) mark tasks/onboarding-research.md done, and ONLY AFTER doing all of that, tell the onboarding agent: await itx.agents.get("${ONBOARDING_AGENT}").message("<one or two plain sentences noting you looked them up lightly, generated a starter logo they can change anytime, and passed your findings to the website agent>").`
+      : `When it is done and you have checked it, and only then, tell the onboarding agent: await itx.agents.get("${ONBOARDING_AGENT}").message("<one or two plain sentences for the owner, with the link>"). If it fails, tell it that the same way.`,
   ]
     .filter(Boolean)
     .join("\n\n");

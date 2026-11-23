@@ -3,6 +3,7 @@ status: in-progress
 tags: [onboarding, first-sitting]
 priority: high
 agent: /agents/onboarding/website
+depends-on: [tasks/onboarding-research.md]
 ---
 
 # Build a first public homepage at your domain
@@ -11,7 +12,7 @@ The owner should come away with: the mind made them something real at their own 
 
 ## Started automatically
 
-The mind's own code starts `/agents/onboarding/website` in the background the moment onboarding begins (at iterate Cloud handover or when the owner first opens `/agents/onboarding`).
+`/agents/onboarding/researcher` kicks off `/agents/onboarding/website` automatically as soon as it finishes looking up the owner and generating the mind's starter logo, passing its findings so the first page is personal rather than blank.
 
 ## How
 

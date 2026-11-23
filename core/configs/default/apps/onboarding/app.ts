@@ -63,8 +63,16 @@ export function onboardingApp({ repo = ONBOARDING_REPO }: { repo?: string } = {}
         return await answer(async () => {
           const result = await verifyAi(itx);
           // The moment AI is proven working, create /agents/onboarding with its bespoke
-          // instructions, generated tasks & dependencies overview, opener, and background subagents.
-          if (result.ok) await launchOnboardingAgent(itx);
+          // instructions, generated tasks & dependencies overview, owner email, opener, and
+          // background subagents.
+          if (result.ok) {
+            const principal =
+              typeof host.auth.principal === "function" ? host.auth.principal(request) : null;
+            await launchOnboardingAgent(itx, {
+              email: principal?.email,
+              name: principal?.name,
+            });
+          }
           return result;
         });
       }

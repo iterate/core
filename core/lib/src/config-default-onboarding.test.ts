@@ -2209,19 +2209,22 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
       },
     },
   };
-  const first = await launchOnboardingAgent(launchItx);
+  const first = await launchOnboardingAgent(launchItx, {
+    email: "ada@example.com",
+    name: "Ada Lovelace",
+  });
   expect(first).toMatchObject({ launched: true });
   expect(first.tasksCount).toBeGreaterThanOrEqual(10);
   expect(created).toEqual([
     ONBOARDING_AGENT,
-    "/agents/onboarding/research",
-    "/agents/onboarding/website",
+    "/agents/onboarding/researcher",
     "/agents/onboarding/sandbox",
   ]);
   const onboardingEvents = mind.chat();
   expect(onboardingEvents.map((event) => event.idempotencyKey)).toEqual([
     "onboarding:init:instructions",
     "onboarding:init:tasks-overview",
+    "onboarding:init:owner",
     `opener:${ONBOARDING_AGENT}`,
     "onboarding:helpers-started",
   ]);
@@ -2236,18 +2239,26 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
   expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
     "Depends on: tasks/onboarding-website.md (in-progress)",
   );
-  expect(onboardingEvents[2]?.payload).toMatchObject({ role: "developer" });
-  expect(onboardingEvents[2]?.payload).not.toHaveProperty("llmRequestPolicy");
-  // Background stalker (`research`), website maker (`website`), and `sandbox` subagents started immediately
-  expect(mind.logs.get("/agents/onboarding/research")).toHaveLength(1);
-  expect(mind.logs.get("/agents/onboarding/website")).toHaveLength(1);
+  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain("ada@example.com");
+  expect(onboardingEvents[2]?.payload).toMatchObject({
+    role: "developer",
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  });
+  expect(onboardingEvents[3]?.payload).toMatchObject({ role: "developer" });
+  expect(onboardingEvents[3]?.payload).not.toHaveProperty("llmRequestPolicy");
+  // Background `researcher` (which hands off to `website` after research + logo) and `sandbox` subagents started immediately,
+  // and `researcher` receives the owner's email right in its initial prompt.
+  expect(mind.logs.get("/agents/onboarding/researcher")).toHaveLength(1);
+  expect(JSON.stringify(mind.logs.get("/agents/onboarding/researcher")?.[0]?.payload)).toContain(
+    "ada@example.com",
+  );
   expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
 
   // Re-running launch is idempotent and appends nothing twice
-  await launchOnboardingAgent(launchItx);
-  expect(mind.chat()).toHaveLength(4);
-  expect(mind.logs.get("/agents/onboarding/research")).toHaveLength(1);
-  expect(mind.logs.get("/agents/onboarding/website")).toHaveLength(1);
+  await launchOnboardingAgent(launchItx, { email: "ada@example.com", name: "Ada Lovelace" });
+  expect(mind.chat()).toHaveLength(5);
+  expect(mind.logs.get("/agents/onboarding/researcher")).toHaveLength(1);
+  expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
 });
 
 test("launchOnboardingAgent reads the instructions and the cards of /repos/onboarding at its tip, and makes no repo", async () => {
@@ -2356,8 +2367,7 @@ test("POST /verify-ai launches /agents/onboarding on success and does not create
   expect(await okRes.json()).toMatchObject({ ok: true, provider: "ai-gateway" });
   expect(createdOk).toEqual([
     ONBOARDING_AGENT,
-    "/agents/onboarding/research",
-    "/agents/onboarding/website",
+    "/agents/onboarding/researcher",
     "/agents/onboarding/sandbox",
   ]);
   expect(mindOk.chat().map((event) => event.idempotencyKey)).toEqual([

@@ -111,7 +111,6 @@ const pages = [
     name: "Integrations",
     about: "The accounts and services the mind is connected to.",
     icon: BlocksIcon,
-    row: false,
     component: DashIntegrations,
   },
   {
@@ -127,7 +126,6 @@ const pages = [
     name: "Config repo",
     about: "The mind's code. A commit to main publishes it.",
     icon: FolderGit2Icon,
-    row: false,
     component: DashRepo,
   },
   {
@@ -135,7 +133,6 @@ const pages = [
     name: "Contexts",
     about: "Every context of the mind, raw and live.",
     icon: WaypointsIcon,
-    row: false,
     component: DashContexts,
   },
   // not every stack has telemetry: without it, the row says "Off"
@@ -145,7 +142,6 @@ const pages = [
     about: "The mind's telemetry.",
     icon: ChartLineIcon,
     serves: "telemetry",
-    row: false,
     component: DashAnalytics,
   },
   { id: "settings", name: "Settings", icon: SettingsIcon, component: DashSettings },

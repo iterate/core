@@ -6,8 +6,9 @@
 //      their `depends-on` dependencies, with live statuses and filtered Tasks app deep-links
 //      (dont-trigger-request)
 //   3. The idempotent opener (`opener:/agents/onboarding`) that wakes the agent for its greeting
-// And immediately starts the background subagents (`research` stalker, `website` maker, `sandbox`)
-// via `startFirstSubagents` (idempotent across Cloud handover and direct `npx iterate deploy`).
+// And immediately starts the background subagents (`researcher`, which hands off to `website`
+// after researching the owner and generating a starter logo, plus `sandbox`) via
+// `startFirstSubagents` (idempotent across Cloud handover and direct `npx iterate deploy`).
 // A mind with no `/repos/onboarding` has no guide to give the agent, so nothing is launched there.
 import { errorCode } from "iterate/lib";
 import { type HandoverItx, startFirstSubagents } from "../../cloud-handover.ts";
@@ -16,8 +17,11 @@ import { ONBOARDING_REPO } from "./app.ts";
 export const ONBOARDING_AGENT = "/agents/onboarding";
 const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
 
-/** The mind, as the launch uses it: the handover's calls, and reads of `/repos/onboarding`. */
+/** The mind, as the launch uses it: the handover's calls, optional whoami, and reads of `/repos/onboarding`. */
 export type LaunchOnboardingItx = HandoverItx & {
+  whoami?():
+    | { principal?: { email?: string; name?: string } }
+    | Promise<{ principal?: { email?: string; name?: string } }>;
   repos?: {
     get(path: string): {
       tip(): Promise<string | null>;
@@ -232,13 +236,23 @@ async function appendIdempotent(
     });
 }
 
+function ownerSummaryOf(owner: { email?: string; name?: string } | undefined): string {
+  const lines = [
+    owner?.name?.trim() ? `- Name: ${owner.name.trim()}` : "",
+    owner?.email?.trim() ? `- Email: ${owner.email.trim()}` : "",
+  ].filter(Boolean);
+  return lines.length > 0 ? `About the owner:\n${lines.join("\n")}` : "";
+}
+
 /** CREATES `/agents/onboarding` AND APPENDS ITS FAT EVENT STACK once AI is proven working:
  *  bespoke instructions from `onboarding/instructions.md` of `/repos/onboarding`, the generated
- *  tasks & dependencies overview from that repo's `tasks/*.md`, and the idempotent opener — then
- *  kicks off the background `research` (stalker), `website` (website maker), and `sandbox`
+ *  tasks & dependencies overview from that repo's `tasks/*.md`, the signed-in owner's email/name
+ *  when known, and the idempotent opener — then kicks off the background `researcher` (which
+ *  researches the owner, generates a starter logo, and hands off to `website`) and `sandbox`
  *  subagents immediately. On a mind with no `/repos/onboarding` it does nothing. */
 export async function launchOnboardingAgent(
   itx: LaunchOnboardingItx,
+  owner?: { email?: string; name?: string },
 ): Promise<LaunchOnboardingResult> {
   const onboarding = await readOnboardingRepo(itx);
   if (!onboarding) return { launched: false, tasksCount: 0 };
@@ -252,10 +266,20 @@ export async function launchOnboardingAgent(
 
   const zone = new URL(await itx.url()).hostname;
   const { text: tasksOverview, tasks } = renderOnboardingTasksOverview(onboarding.files, zone);
+  const who =
+    !owner?.email && typeof itx.whoami === "function"
+      ? (await Promise.resolve(itx.whoami()).catch(() => null))?.principal
+      : undefined;
+  const resolvedOwner = {
+    email: owner?.email || who?.email,
+    name: owner?.name || who?.name,
+  };
+  const ownerSummary = ownerSummaryOf(resolvedOwner);
 
-  // Append the fat context stack (instructions + generated tasks/dependencies overview), then the
-  // opener that triggers the agent's first reply. Each event carries a stable idempotency key so
-  // retries or a prior iterate Cloud handover never duplicate context or greetings.
+  // Append the fat context stack (instructions + generated tasks/dependencies overview + owner
+  // identity when known), then the opener that triggers the agent's first reply. Each event
+  // carries a stable idempotency key so retries or a prior iterate Cloud handover never duplicate
+  // context or greetings.
   await appendIdempotent(itx, {
     type: CONTEXT_ADDED,
     idempotencyKey: "onboarding:init:instructions",
@@ -276,6 +300,18 @@ export async function launchOnboardingAgent(
       llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
   });
+  if (ownerSummary) {
+    await appendIdempotent(itx, {
+      type: CONTEXT_ADDED,
+      idempotencyKey: "onboarding:init:owner",
+      payload: {
+        role: "developer",
+        actor: { type: "agent" },
+        content: `${ownerSummary}\n\nThis is the verified member who just finished setting up the mind (never publish private email addresses on public pages).`,
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+  }
   await appendIdempotent(itx, {
     type: CONTEXT_ADDED,
     idempotencyKey: `opener:${ONBOARDING_AGENT}`,
@@ -287,9 +323,10 @@ export async function launchOnboardingAgent(
     },
   });
 
-  // Immediately kick off the background stalker (`research`), website maker (`website`), and
-  // `sandbox` subagents (idempotent via `onboarding:helper:<job>` keys).
-  await startFirstSubagents(itx, "", false);
+  // Immediately kick off the background `researcher` (which researches the owner, generates a
+  // starter logo, and hands off to `website`) and `sandbox` subagents (idempotent via
+  // `onboarding:helper:<job>` keys), passing the owner's email/name so researcher has it on turn 1.
+  await startFirstSubagents(itx, ownerSummary, false);
 
   return { launched: true, tasksCount: tasks.length };
 }
