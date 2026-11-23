@@ -8,6 +8,7 @@
 // them settled.
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { agentKinds } from "./agent-kinds/index.ts";
+import { agentPrompt } from "./agent-prompt.ts";
 import { onboardingEvent } from "./apps/onboarding/steps.ts";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
 import { mindFormEvent } from "./cloud-deliveries.ts";
@@ -46,6 +47,8 @@ export async function everyEvent(
     // The onboarding app's steps (apps/onboarding/steps.ts): the events that change a step's
     // card, such as the owner's signed rule for iterate Cloud. Any other event returns at once.
     onboardingEvent(itx, event),
+    // The system prompt of a new agent of the kind `agent`, once (agent-prompt.ts).
+    agentPrompt(itx, event),
   ]);
   const failed = hooks.find((hook) => hook.status === "rejected");
   if (failed) throw failed.reason;

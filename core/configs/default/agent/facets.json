@@ -1,0 +1,72 @@
+[
+  {
+    "name": "agent",
+    "className": "AgentFacet",
+    "consumes": [
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/agent/context-added",
+      "events.iterate.com/agent/context-copied",
+      "events.iterate.com/agent/llm-request-triggered",
+      "events.iterate.com/llm-request/requested",
+      "events.iterate.com/llm-request/attempt-started",
+      "events.iterate.com/llm-request/cancelled",
+      "events.iterate.com/llm-request/settled",
+      "events.iterate.com/llm-request/deadline-passed",
+      "events.iterate.com/llm-request/wait-ended",
+      "events.iterate.com/agent/paused",
+      "events.iterate.com/agent/resumed",
+      "events.iterate.com/agent/timer-set",
+      "events.iterate.com/agent/timer-fired",
+      "events.iterate.com/itx/run-requested",
+      "events.iterate.com/itx/run-settled"
+    ]
+  },
+  {
+    "name": "llm-api-openai-responses",
+    "className": "OpenaiResponsesFacet",
+    "consumes": [
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/llm-request/requested",
+      "events.iterate.com/llm-request/attempt-started",
+      "events.iterate.com/llm-request/cancelled",
+      "events.iterate.com/llm-request/settled",
+      "events.iterate.com/llm-request/deadline-passed"
+    ]
+  },
+  {
+    "name": "llm-api-anthropic-messages",
+    "className": "AnthropicMessagesFacet",
+    "consumes": [
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/llm-request/requested",
+      "events.iterate.com/llm-request/attempt-started",
+      "events.iterate.com/llm-request/cancelled",
+      "events.iterate.com/llm-request/settled",
+      "events.iterate.com/llm-request/deadline-passed"
+    ]
+  },
+  {
+    "name": "llm-api-chat-completions",
+    "className": "ChatCompletionsFacet",
+    "consumes": [
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/llm-request/requested",
+      "events.iterate.com/llm-request/attempt-started",
+      "events.iterate.com/llm-request/cancelled",
+      "events.iterate.com/llm-request/settled",
+      "events.iterate.com/llm-request/deadline-passed"
+    ]
+  },
+  {
+    "name": "llm-api-google-generate-content",
+    "className": "GoogleGenerateContentFacet",
+    "consumes": [
+      "events.iterate.com/agent/configured",
+      "events.iterate.com/llm-request/requested",
+      "events.iterate.com/llm-request/attempt-started",
+      "events.iterate.com/llm-request/cancelled",
+      "events.iterate.com/llm-request/settled",
+      "events.iterate.com/llm-request/deadline-passed"
+    ]
+  }
+]

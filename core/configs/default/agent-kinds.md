@@ -65,3 +65,26 @@ The list shows a person their own agents first, and another person's with that f
 before the title. The folder is a label, not proof of who started an agent, and two members with
 the same local part at two domains share one folder. `people` is a name that no long-lived agent
 (`/agents/<name>`) may take.
+
+## The kind `agent`
+
+`agent` is the mind's own agent: its code is in this repo, not in the platform. A person's new chat
+in the Dash is one, because the kind's file says `newAgent: { default: true, … }`. The Dash's New
+agent appends two facts to the new path, `/agents/people/<person>/agent/<moment>`, as the member
+who typed: the kind's start fact, `agent-ui/agent-requested`, then the person's first words,
+`agent-ui/message-received`. The kind answers the first with the agent's start facts. No method and
+no rewrite rule stands between: `itx.agents.create` is iterate's own, so the onboarding agent, its
+subagents and the agents of mail, X, Meet and Slack stay iterate's own. The kind acts only under
+`/agents/people/`.
+
+- `agent/`: the agent itself, its facets (`facets.ts`, `facets.json`), which run on the agent's
+  context. `agent-start.ts` starts it with one append of keyed facts.
+- `agent-kinds/agent.ts`: the kind. Its `processEvent` turns a person's words
+  (`agent-ui/message-received`, `agent/message-received`) into the agent's one input,
+  `agent/context-added`, and starts a subagent on `agent/subagent-requested`. Its view is
+  iterate's chat.
+- `agent-ui.ts`: the Dash's chat as a channel. `agent-prompt.ts`: what the agent is told.
+- A model: `config.llm.model`, `<provider>/<model>` as the AI Gateway names it.
+
+To make new chats iterate's own agent again, take `default: true` out of `agent-kinds/agent.ts`.
+The chats that the kind started stay what they are.

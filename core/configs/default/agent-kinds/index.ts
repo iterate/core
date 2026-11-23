@@ -7,4 +7,7 @@ import { makeAgentKind } from "iterate/agents/kinds";
 // The kinds of agent this mind runs (agent-kinds.md): one file each, named by its
 // import, written exactly `() => import("./path/to/kind.ts")` (`makeAgentKind` reads the path from
 // it, and resolves it against this file's `import.meta`).
-export const agentKinds = [makeAgentKind(import.meta, () => import("./iterate.ts"))];
+export const agentKinds = [
+  makeAgentKind(import.meta, () => import("./iterate.ts")),
+  makeAgentKind(import.meta, () => import("./agent.ts")),
+];
