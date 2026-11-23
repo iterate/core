@@ -167,16 +167,106 @@ export function parsed<T>(schema: z.ZodType<T>, text: string): T | undefined {
   }
 }
 
+const CauseDetail = z.object({
+  code: z.string().optional(),
+  message: z.string().optional(),
+});
+
+/** Unwraps Node `fetch` errors (`TypeError: fetch failed`) to surface the underlying OS/TLS cause
+ *  and an actionable hint when a VPN, corporate TLS proxy, or broken IPv6 is likely at fault. */
+export function describeNetworkError(error: unknown, url?: string): string {
+  const base = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error ? error.cause : undefined;
+  const parsedCause = CauseDetail.safeParse(cause).data;
+  const causeCode = parsedCause?.code || "";
+  const causeMessage = cause instanceof Error ? cause.message : parsedCause?.message || "";
+  const detail = [causeCode, causeMessage && causeMessage !== base ? causeMessage : ""]
+    .filter(Boolean)
+    .join(": ");
+  const host = url ? ` (${new URL(url).host})` : "";
+  let hint = "";
+  if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/i.test(detail)) {
+    hint = " Try running with NODE_USE_SYSTEM_CA=1 or turning off a corporate TLS proxy/VPN.";
+  } else if (
+    /ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|ECONNRESET|UND_ERR_CONNECT_TIMEOUT/i.test(detail)
+  ) {
+    hint =
+      " Try turning off VPN/iCloud Private Relay or running with NODE_OPTIONS=--dns-result-order=ipv4first.";
+  }
+  return `${base}${host}${detail ? ` — ${detail}` : ""}${hint}`;
+}
+
+/** Retries transient network errors (e.g. Node `fetch failed` on Wi-Fi/IPv6 blips) on idempotent
+ *  calls, and enriches the final error with `describeNetworkError`. */
+export async function resilientFetch(
+  url: string,
+  init: RequestInit,
+  options: {
+    attempts?: number;
+    backoffMs?: number;
+    fetcher?: typeof fetch;
+    wait?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<Response> {
+  const attempts = Math.max(1, options.attempts ?? 3);
+  const backoffMs = options.backoffMs ?? 400;
+  const fetcher = options.fetcher || fetch;
+  const wait = options.wait || ((ms: number) => sleep(ms));
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const response = await fetcher(url, init);
+      if (
+        attempt < attempts &&
+        (response.status === 502 || response.status === 503 || response.status === 504)
+      ) {
+        await response.body?.cancel().catch(() => {});
+        await wait(backoffMs * attempt);
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts) {
+        await wait(backoffMs * attempt);
+        continue;
+      }
+    }
+  }
+  throw new Error(describeNetworkError(lastError, url), { cause: lastError });
+}
+
 /** POST a form to Cloudflare's OAuth server: its JSON, or `{ error }` for an answer that is none. */
-async function form(url: string, fields: Record<string, string>): Promise<OAuthAnswer> {
-  const answer = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(fields),
-  });
+async function form(
+  url: string,
+  fields: Record<string, string>,
+  options: { attempts?: number; fetcher?: typeof fetch; wait?: (ms: number) => Promise<void> } = {},
+): Promise<OAuthAnswer> {
+  const answer = await resilientFetch(
+    url,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+        "user-agent": "iterate-cli",
+      },
+      body: new URLSearchParams(fields),
+    },
+    options,
+  );
   const said = parsed(OAuthAnswer, await answer.text());
   if (said) return said;
   if (answer.ok) return {};
+  if (answer.status === 403) {
+    const mitigated = answer.headers.get("cf-mitigated");
+    return {
+      error: "HTTP 403",
+      error_description: mitigated
+        ? `HTTP 403 (Cloudflare ${mitigated} — often caused by a VPN, iCloud Private Relay, or corporate proxy). Try disabling VPN / switching networks, or set CLOUDFLARE_API_TOKEN.`
+        : "HTTP 403 (Cloudflare blocked the request — often caused by a VPN, iCloud Private Relay, or corporate proxy). Try disabling VPN / switching networks, or set CLOUDFLARE_API_TOKEN.",
+    };
+  }
   return { error: answer.status >= 500 ? "temporarily_unavailable" : `HTTP ${answer.status}` };
 }
 
@@ -224,11 +314,16 @@ async function deviceSignIn(
   let interval = Math.max(asked.interval || 5, 1);
   while (Date.now() < end) {
     await sleep(interval * 1000);
-    const answer = await form(`${OAUTH}/token`, {
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      device_code: asked.device_code,
-      client_id: CLIENT_ID,
-    });
+    // A transient network blip during the 5-minute approval window should not abort sign-in.
+    const answer = await form(
+      `${OAUTH}/token`,
+      {
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        device_code: asked.device_code,
+        client_id: CLIENT_ID,
+      },
+      { attempts: 1 },
+    ).catch((): OAuthAnswer => ({ error: "temporarily_unavailable" }));
     if (answer.access_token) return { ...answer, access_token: answer.access_token };
     if (answer.error === "slow_down") interval += 5;
     else if (answer.error !== "authorization_pending" && answer.error !== "temporarily_unavailable")
@@ -562,19 +657,27 @@ export const resultOf = <T>(schema: z.ZodType<T>, answer: Answer): T | undefined
   schema.safeParse(answer.result).data;
 
 /** One request to Cloudflare's API with `token`: the status, `result`, the list's total count, and
- *  Cloudflare's errors as one line. It never throws for a status: the caller reads it. */
+ *  Cloudflare's errors as one line. It never throws for a status: the caller reads it. Read
+ *  requests (`GET`/`HEAD`) automatically retry transient network errors and 502/503/504 responses. */
 export const cloudflare =
   (token: string): Cloudflare =>
   async (method, path, body) => {
-    const answer = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { "content-type": "application/json" }),
+    const isRead = method === "GET" || method === "HEAD";
+    const answer = await resilientFetch(
+      `https://api.cloudflare.com/client/v4${path}`,
+      {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: "application/json",
+          "user-agent": "iterate-cli",
+          ...(body === undefined ? {} : { "content-type": "application/json" }),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        redirect: "manual",
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      redirect: "manual",
-    });
+      { attempts: isRead ? 3 : 1 },
+    );
     const text = await answer.text();
     const said = parsed(Envelope, text);
     const errors = (said?.errors || [])

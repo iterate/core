@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   DEPLOY_SCOPES,
+  describeNetworkError,
   KeptSignIn,
   keptSignInStep,
   lockHeld,
@@ -11,6 +12,7 @@ import {
   madeByTheDeploy,
   parsed,
   renewedSignIn,
+  resilientFetch,
 } from "./cloudflare-access.ts";
 
 const now = Date.parse("2026-11-19T10:00:00Z");
@@ -99,4 +101,59 @@ test("a command refuses a kept sign-in whose lock a live process holds", () => {
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }
+});
+
+test("describeNetworkError unwraps Node fetch cause and gives actionable hints for TLS and IPv6/timeout failures", () => {
+  const certErr = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("unable to verify the first certificate"), {
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    }),
+  });
+  const certText = describeNetworkError(certErr, "https://dash.cloudflare.com/oauth2/device/auth");
+  expect(certText).toContain("dash.cloudflare.com");
+  expect(certText).toContain("UNABLE_TO_VERIFY_LEAF_SIGNATURE");
+  expect(certText).toContain("NODE_USE_SYSTEM_CA=1");
+
+  const timeoutErr = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("connect ETIMEDOUT"), { code: "ETIMEDOUT" }),
+  });
+  const timeoutText = describeNetworkError(timeoutErr, "https://api.cloudflare.com/client/v4/user");
+  expect(timeoutText).toContain("ETIMEDOUT");
+  expect(timeoutText).toContain("ipv4first");
+});
+
+test("resilientFetch retries transient network errors and 503 responses, then surfaces cause on exhaustion", async () => {
+  let calls = 0;
+  const ok = await resilientFetch(
+    "https://api.cloudflare.com/client/v4/user",
+    { method: "GET" },
+    {
+      attempts: 3,
+      backoffMs: 1,
+      wait: async () => {},
+      fetcher: (async () => {
+        calls++;
+        if (calls === 1) throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+        if (calls === 2) return new Response("busy", { status: 503 });
+        return Response.json({ success: true });
+      }) as unknown as typeof fetch,
+    },
+  );
+  expect(ok).toMatchObject({ status: 200 });
+  expect(calls).toBe(3);
+
+  await expect(
+    resilientFetch(
+      "https://dash.cloudflare.com/oauth2/device/auth",
+      { method: "POST" },
+      {
+        attempts: 2,
+        backoffMs: 1,
+        wait: async () => {},
+        fetcher: (async () => {
+          throw new TypeError("fetch failed", { cause: { code: "ENETUNREACH" } });
+        }) as unknown as typeof fetch,
+      },
+    ),
+  ).rejects.toThrow(/dash\.cloudflare\.com.*ENETUNREACH.*ipv4first/);
 });
