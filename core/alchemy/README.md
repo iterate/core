@@ -20,7 +20,8 @@ with no passkey left a way back in. What follows is the deploy by hand.
   `src/stack-bindings.test.ts` fails until it does. If the change is meant, rewrite the file with
   `UPDATE_STACK_BINDINGS=1 pnpm --filter core-alchemy test`.
 - Every resource of the account is named `iterate-<alchemy.stageName>-…` (`namesOf` in
-  `src/config.ts`).
+  `src/config.ts`), but the Access application: it is named by the control plane's hostname,
+  because Cloudflare's code page shows its name to the owner ("Log in to iterate.example.com").
 - The stack's state, with the generated keys, the telemetry API token's value and the secrets of
   the SFU app and the TURN key, is in the Worker `iterate-<alchemy.stageName>-state` of the same account.
 - No OAuth client. A member connects the mind to its own account through Cloudflare's MCP

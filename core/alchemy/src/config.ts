@@ -119,7 +119,6 @@ export const namesOf = ({ alchemy }: { alchemy: { stageName: string } }) => {
     auth: `${prefix}-auth`,
     authDb: `${prefix}-auth-db`,
     authKv: `${prefix}-auth-kv`,
-    ownerEmailProof: `${prefix}-owner-email-proof`,
     secrets: `${prefix}-secrets`,
     realtimeSfu: `${prefix}-realtime-sfu`,
     turnKey: `${prefix}-turn`,
