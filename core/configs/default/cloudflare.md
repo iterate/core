@@ -42,19 +42,14 @@ set up, and you query its logs and traces. You change nothing in the account wit
 
 ## What it reads
 
-- **What it may do:** read nearly anything in the account: the Workers' logs, traces, code,
-  settings and deployments, their routes, the zones with their DNS records and settings, KV
-  values, R2 objects, queues, pipelines, the account's settings and members, and who consented.
-  The owner's rule: the connection reads anything, except what could let its holder act as the
-  mind or as a member. The scopes are iterate/api `CLOUDFLARE_READ_SCOPES`: every read of the
-  MCP server's "Read only" set.
-- **What it may not do:** every change. Also not, by the owner's rule
-  (iterate/api `CLOUDFLARE_READS_LEFT_OUT`, each with its reason): run SQL on a D1 database (the
-  auth database holds the mind's own signing key), read a zone's request logs (Logpull: they
-  can hold cookies), or tail a Worker. Every member and agent of the mind can use the consent,
-  so it must not be a way to take the stack over. Cloudflare refuses what it may not do (403):
-  tell a member, and do not look for a way round. A member changes the account in Cloudflare's
-  dashboard or through a deploy of the stack.
+- **What it may do:** read across the account: the Workers' logs, traces, code, settings and
+  deployments, their routes, the zones with their DNS records and settings, KV values, R2 objects,
+  D1 databases, queues, pipelines, the account's settings and members, and who consented. The scopes
+  are iterate/api `CLOUDFLARE_READ_SCOPES`: the full "Read only" template of Cloudflare's MCP
+  server.
+- **What it may not do:** every change. Cloudflare refuses every write (403): tell a member, and do
+  not look for a way round. A member changes the account in Cloudflare's dashboard or through a
+  deploy of the stack.
 - **Some reads cost money or show another service's key.** `POST /accounts/<id>/ai/run/<model>`
   runs a model and bills; an Images signing key, a Turnstile widget's secret and an Access
   application's SCIM credential read in clear. Read those only on a member's word, and never

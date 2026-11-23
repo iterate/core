@@ -30,6 +30,7 @@ import {
   mindConfigIn,
   onboardingUrlOf,
   planArgsOf,
+  setupDestinationOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
   pnpmEnvFor,
@@ -630,6 +631,28 @@ test("createDeployProgress names what Alchemy is still making, for a line in a q
 
 test("deploy has no OAuth-client token prompt or Account API Token Provisioning, isolates token env vars, prints MindConfig, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
   expect(onboardingUrlOf("ada-labs.com")).toBe("https://onboarding.ada-labs.com/");
+  expect(
+    setupDestinationOf({
+      controlPlaneHostname: "iterate.ada-labs.com",
+      zone: "ada-labs.com",
+      ownerEmails: ["ada@example.org"],
+      firstDeploy: true,
+    }),
+  ).toEqual({
+    url: "https://iterate.ada-labs.com/sign-in/access",
+    prompt: "Continue setup in your browser (sign in with ada@example.org):",
+  });
+  expect(
+    setupDestinationOf({
+      controlPlaneHostname: "iterate.ada-labs.com",
+      zone: "ada-labs.com",
+      ownerEmails: ["ada@example.org"],
+      firstDeploy: false,
+    }),
+  ).toEqual({
+    url: "https://onboarding.ada-labs.com/",
+    prompt: "Continue setup in your browser (sign in with ada@example.org):",
+  });
   expect(isInteractiveEnv({}, true)).toBe(true);
   expect(isInteractiveEnv({ CI: "1" }, true)).toBe(false);
   expect(isInteractiveEnv({ CI: "true" }, true)).toBe(false);

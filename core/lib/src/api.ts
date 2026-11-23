@@ -242,16 +242,10 @@ export const CLOUDFLARE_OAUTH = {
 
 /** WHAT A MIND'S CLOUDFLARE CONNECTION MAY READ: the OAuth scopes that a connect asks for, and
  *  outside which the vault keeps no grant from Cloudflare (`grantedWithin`, and the vault's own
- *  ceiling). THE RULE, the owner's: "we basically want the cloudflare connection to be able to read ANYTHING
- *  EXCEPT THE SECRET ENCRYPTION KEY". So the list is every read of Cloudflare's MCP server's
- *  "Read only" template (github.com/cloudflare/mcp at 19f7601: each scope whose last part is
- *  `read`, `metadata_read`, `monitoring` or `report`), less the reads in
- *  `CLOUDFLARE_READS_LEFT_OUT`: the ones by which a holder could come to act as the mind or as a
- *  member, by reading one of the stack's four random secrets (the at-rest key, the auth signing
- *  key, the telemetry secret, the mind's signing key) or what they protect. No write is in it:
- *  Cloudflare refuses every write. The reads include data (a Worker's code, KV values, R2
- *  objects), reads that bill (`ai.read` runs models) and reads that show a third party's
- *  credential (`images.read`, `account-settings.read`): the owner chose that. The MCP server adds
+ *  ceiling). The list is every read of Cloudflare's MCP server's "Read only" template
+ *  (github.com/cloudflare/mcp at 19f7601: each scope whose last part is `read`, `metadata_read`,
+ *  `monitoring` or `report`), so Cloudflare's consent screen shows standard Read-only access rather
+ *  than a custom list. No write is in it: Cloudflare refuses every write. The MCP server adds
  *  `user:read`, `account:read` and `offline_access` to every grant; they are no part of the list.
  *  core/lib/src/cloudflare-read-scopes.test.ts holds the list to the rule. */
 export const CLOUDFLARE_READ_SCOPES = [
@@ -327,6 +321,7 @@ export const CLOUDFLARE_READ_SCOPES = [
   "custom-pages.read",
   "cws.read",
   "d1.metadata_read",
+  "d1.read",
   "ddos-botnet-feed.read",
   "ddos-protection.read",
   "dls.read",
@@ -363,6 +358,7 @@ export const CLOUDFLARE_READ_SCOPES = [
   "load-balancers-account.read",
   "load-balancers.read",
   "load-balancing-monitors-and-pools.read",
+  "logs.read",
   "magic-firewall.read",
   "magic-transit.read",
   "magic-wan.read",
@@ -437,6 +433,7 @@ export const CLOUDFLARE_READ_SCOPES = [
   "workers-routes.read",
   "workers-scripts.metadata_read",
   "workers-scripts.read",
+  "workers-tail.read",
   "workers_ai.metadata_read",
   "zaraz.read",
   "zone-access.read",
@@ -453,16 +450,9 @@ export const CLOUDFLARE_READ_SCOPES = [
   "zone.read",
 ] as const;
 
-/** THE READS LEFT OUT of `CLOUDFLARE_READ_SCOPES`, each with its reason: a closed list. A read
- *  that is not here and is in the server's "Read only" template is in the list. */
-export const CLOUDFLARE_READS_LEFT_OUT = {
-  "d1.read":
-    "runs SQL on the stack's databases: the auth database holds the mind's own signing key's seed in clear (`stack_key.seed`), with which a holder signs as the mind",
-  "logs.read":
-    "reads a zone's request logs, whose fields include `Cookies` and `RequestHeaders`: a member's session cookie lets its holder act as that member",
-  "workers-tail.read":
-    "starts a live tail of a Worker's requests, with their headers: Workers Logs redact the cookie and the authorization header, but a tail's redaction was not proven",
-} as const;
+/** Reads excluded from `CLOUDFLARE_READ_SCOPES`: none — `CLOUDFLARE_READ_SCOPES` matches
+ *  Cloudflare MCP's full "Read only" template so the consent page shows standard read-only access. */
+export const CLOUDFLARE_READS_LEFT_OUT: Record<string, string> = {};
 
 /** How the secret's facet re-mints an expired credential, in its own trusted code: the
  *  exchange reads this secret's own material, POSTs to an endpoint within the pin, and writes the

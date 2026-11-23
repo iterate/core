@@ -595,6 +595,30 @@ export const formatMindConfigForStdout = (config: Record<string, unknown>) =>
 /** Where setup continues in the browser once the mind is deployed and answering. */
 export const onboardingUrlOf = (zone: string) => `https://onboarding.${zone}/`;
 
+/** THE PAGE THE COMMAND OPENS AT THE END OF A DEPLOY, and the line printed right before
+ *  "Press Enter to open in browser...".
+ *  - On a first deploy, deep-links straight to `https://<controlPlaneHostname>/sign-in/access`
+ *    (Cloudflare Access verifies the owner's email, sends them to add their first passkey, and
+ *    `auth-worker` redirects to `onboarding.<zone>/` automatically — saving a click through `/sign-in`).
+ *  - On a redeploy, opens `https://onboarding.<zone>/` directly (the owner already has a passkey,
+ *    and `/sign-in/access` refuses owners who already have one).
+ *  Always prints the owner email address to sign in with before the Enter prompt. */
+export function setupDestinationOf(mind: {
+  controlPlaneHostname: string;
+  zone: string;
+  ownerEmails: string[];
+  firstDeploy: boolean;
+}) {
+  const url = mind.firstDeploy
+    ? `https://${mind.controlPlaneHostname}/sign-in/access`
+    : onboardingUrlOf(mind.zone);
+  const emails = mind.ownerEmails.join(" or ");
+  const prompt = emails
+    ? `Continue setup in your browser (sign in with ${emails}):`
+    : "Continue setup in your browser:";
+  return { url, prompt };
+}
+
 /** WHAT THE COMMAND DOES NEXT FOR THE ACCOUNT'S ZERO TRUST ORGANIZATION, by Cloudflare's answer to
  *  `GET /accounts/<id>/access/organizations`, or, once `tried`, to the set-up after it. An owner
  *  proves their address through Cloudflare Access, which needs the organization
@@ -2355,12 +2379,18 @@ export async function deployMind(input: DeployInput) {
     // NO PAGE IS OPENED UNTIL THE PAGES THAT THE BROWSER ASKS FIRST WORK FROM THIS COMPUTER
     // (`firstPagesOf`). A person may wait again as often as they like; with nobody there, or
     // after their no, the command still ends every later step, opens nothing and then fails.
+    const isFirstDeploy = !deployed || Boolean(resuming?.firstDeploy);
     const primaryZone = config.cloudflare.zones[0] || domain;
-    const onboardingUrl = onboardingUrlOf(primaryZone);
+    const setup = setupDestinationOf({
+      controlPlaneHostname,
+      zone: primaryZone,
+      ownerEmails: config.ownerEmails,
+      firstDeploy: isFirstDeploy,
+    });
     const firstPages = firstPagesOf({
       controlPlaneHostname,
       zone: primaryZone,
-      firstDeploy: !deployed || Boolean(resuming?.firstDeploy),
+      firstDeploy: isFirstDeploy,
     });
     const answersBegan = Date.now();
     let unanswered: string | undefined;
@@ -2372,7 +2402,7 @@ export async function deployMind(input: DeployInput) {
         unanswered = undefined;
         break;
       }
-      unanswered = `The deploy finished, but after ${seconds(answersBegan)} ${answer.fault}. A new domain's DNS records, certificate and routes can reach a computer late. Setup was not opened: open ${onboardingUrl} once it loads in your browser, or run the command again, which deploys over the mind and checks again.`;
+      unanswered = `The deploy finished, but after ${seconds(answersBegan)} ${answer.fault}. A new domain's DNS records, certificate and routes can reach a computer late. Setup was not opened: open ${setup.url} once it loads in your browser, or run the command again, which deploys over the mind and checks again.`;
       answering.fail(`After ${seconds(answersBegan)}: ${answer.fault}.`);
       if (!interactive()) break;
       const again = await ask<boolean>("", () =>
@@ -2396,8 +2426,8 @@ export async function deployMind(input: DeployInput) {
     if (keyLine) p.log.info(keyLine);
     // the pages that did not answer end the command non-zero, with setup's address and no open
     if (unanswered) throw new Error(unanswered);
-    if (input.setup !== false) await page("Continue setup in your browser:", onboardingUrl);
-    else p.log.step(`Continue setup in your browser:\n${c.url(onboardingUrl)}`);
+    if (input.setup !== false) await page(setup.prompt, setup.url);
+    else p.log.step(`${setup.prompt}\n${c.url(setup.url)}`);
     // the check's miss, said above, ends the command non-zero once every step is done
     if (missed) throw new Error(missed);
     p.outro(`Done in ${seconds(began)}.`);
