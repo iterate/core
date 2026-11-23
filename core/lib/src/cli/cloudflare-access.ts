@@ -260,11 +260,12 @@ async function form(
   if (answer.ok) return {};
   if (answer.status === 403) {
     const mitigated = answer.headers.get("cf-mitigated");
+    const why = mitigated
+      ? `HTTP 403 (Cloudflare ${mitigated})`
+      : "HTTP 403 (Cloudflare blocked the request)";
     return {
       error: "HTTP 403",
-      error_description: mitigated
-        ? `HTTP 403 (Cloudflare ${mitigated} — often caused by a VPN, iCloud Private Relay, or corporate proxy). Try disabling VPN / switching networks, or set CLOUDFLARE_API_TOKEN.`
-        : "HTTP 403 (Cloudflare blocked the request — often caused by a VPN, iCloud Private Relay, or corporate proxy). Try disabling VPN / switching networks, or set CLOUDFLARE_API_TOKEN.",
+      error_description: `${why} from Node v${process.versions.node} — often caused by an older Node version (upgrade to Node 24.7+), a VPN/iCloud Private Relay, or a corporate proxy. Upgrade Node or disable VPN and run again, or set CLOUDFLARE_API_TOKEN.`,
     };
   }
   return { error: answer.status >= 500 ? "temporarily_unavailable" : `HTTP ${answer.status}` };

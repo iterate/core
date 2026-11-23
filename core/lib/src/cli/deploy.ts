@@ -1843,6 +1843,23 @@ async function identityPublished(mind: { mindId: string; controlPlaneHostname: s
 // ---------------------------------------------------------------------------------------------
 // The command.
 
+/** Minimum Node version for `iterate deploy`: Node 24.7+ (ML-DSA-65 identity keys + modern TLS/fetch
+ *  so Cloudflare OAuth does not reject older runtimes with HTTP 403 / fetch failed). */
+export const MIN_DEPLOY_NODE = [24, 7] as const;
+
+/** Throws a clear upgrade error before opening a browser or calling Cloudflare when running on an
+ *  unsupported Node version (< 24.7). */
+export function assertSupportedNodeVersion(version = process.versions.node): void {
+  const match = /^v?(\d+)\.(\d+)/.exec(version.trim());
+  const major = match ? Number(match[1]) : 0;
+  const minor = match ? Number(match[2]) : 0;
+  const [minMajor, minMinor] = MIN_DEPLOY_NODE;
+  if (major > minMajor || (major === minMajor && minor >= minMinor)) return;
+  throw new Error(
+    `iterate deploy requires Node ${minMajor}.${minMinor} or newer (you are running Node v${version}). Older Node versions can fail Cloudflare sign-in (HTTP 403 / fetch failed) and lack ML-DSA-65 key support. Upgrade Node (e.g. brew install node, nvm install 24, fnm install 24, or https://nodejs.org) and run again.`,
+  );
+}
+
 export async function deployMind(input: DeployInput) {
   const began = Date.now();
   const children = new Set<ChildProcess>();
@@ -1854,6 +1871,7 @@ export async function deployMind(input: DeployInput) {
   try {
     if (process.platform === "win32")
       throw new Error("iterate deploy runs on macOS and Linux (on Windows: in WSL).");
+    assertSupportedNodeVersion();
     // the source comes while the person signs in and chooses
     const sourceBegan = Date.now();
     const source = sourceOf(input);

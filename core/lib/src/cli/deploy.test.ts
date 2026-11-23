@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import { MindConfig as ScriptConfig } from "../../../alchemy/src/config.ts";
 import { DEPLOY_SCOPES, RECOVER_SCOPES, scopesLacking, STACK_SCOPES } from "./cloudflare-access.ts";
 import {
+  assertSupportedNodeVersion,
   boundaryCheck,
   boundaryRead,
   BOUNDARY_WAIT_MS,
@@ -1352,6 +1353,15 @@ test("the deploy opens no page until the pages a browser asks first work: iterat
   expect(
     await never({ [ACCESS]: { status: 302, location: "https://iterate.ada-labs.com/sign-in" } }),
   ).toMatchObject({ outcome: { fault: `${ACCESS} answered 302 to https://iterate.ada-labs.com` } });
+});
+
+test("assertSupportedNodeVersion rejects Node < 24.7 before sign-in and accepts Node 24.7+", () => {
+  for (const old of ["18.20.0", "20.19.0", "22.14.0", "24.0.0", "24.6.9"]) {
+    expect(() => assertSupportedNodeVersion(old)).toThrow(/requires Node 24\.7 or newer.*HTTP 403/);
+  }
+  for (const ok of ["24.7.0", "24.12.1", "25.0.0", "26.13.0"]) {
+    expect(() => assertSupportedNodeVersion(ok)).not.toThrow();
+  }
 });
 
 test("a source that holds core/repos/onboarding tells the mind Worker's build to seed /repos/onboarding from it; an older source names no repo", () => {
