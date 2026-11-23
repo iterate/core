@@ -574,6 +574,9 @@ test.for([
     const { cookie } = opened;
     expect(await formOf(stack.env, cookie)).toMatchObject({
       heading: "Add your passkey to iterate.example.com",
+      html: expect.stringContaining(
+        "A passkey is required to continue — there is no password or email sign-in, and this step cannot be skipped.",
+      ),
     });
     expect(await statusOf(stack.env, "/keys.json", cookie)).toBe(401);
     expect(await locationOf(stack.env, "/keys", cookie)).toBe(`${ISSUER}/sign-in?next=%2Fkeys`);
@@ -1268,6 +1271,7 @@ async function formOf(env: Env, cookie: string, path = "/keys/first") {
       ?.replace(/&#(\d+);/g, (_all, code) => String.fromCharCode(Number(code)));
   return {
     heading: html.match(/<h1>([^<]*)<\/h1>/)?.[1],
+    html,
     challenge: attribute("challenge") ?? null,
     next: attribute("next") ?? "",
   };

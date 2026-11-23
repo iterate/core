@@ -192,12 +192,13 @@ async function formPage(env: Env, session: { userId: string; email: string }, ne
   await env.OAUTH_KV.put(`${CHALLENGE_KEY_PREFIX}${challenge}`, session.userId, {
     expirationTtl: CHALLENGE_SECONDS,
   });
-  // The person came for one thing, so the page is that one thing: why, what the browser asks
-  // next, and the button.
+  // The person came for one thing, so the page is that one thing: that a passkey is required
+  // (no skip), why, what the browser asks next, and the button.
   return page({
     title: `Add your passkey to ${mind}`,
     body: `<h1>Add your passkey to ${text(mind)}</h1>
-      <p>A passkey is how you sign in here and approve what your agents ask for. Your browser asks for your fingerprint, your face, a PIN or a security key.</p>
+      <p>A passkey is required to continue — there is no password or email sign-in, and this step cannot be skipped.</p>
+      <p class="muted">It is how you sign in here and approve what your agents ask for. Your browser asks for your fingerprint, your face, a PIN or a security key.</p>
       <form id="add" class="stack" data-challenge="${text(challenge)}" data-user="${text(session.userId)}" data-email="${text(session.email)}" data-rp="${text(mind)}" data-next="${text(next || "")}">
         <button type="submit">Add a passkey</button>
         <details><summary>Name it (optional)</summary><input name="label" maxlength="100" size="28" aria-label="Name" placeholder="such as YubiKey"></details>
