@@ -21,8 +21,10 @@ The owner should come away with: every address at their domain is the mind's, in
 
 ## Not ready
 
-- A NEW mail to `onboarding@<zone>` (not a reply) does not reach you: it starts the thread's
-  own agent, `/agents/email/t<thread>`. Ask the owner to answer your mail, not to write a new one.
+- A NEW mail to any address at `<zone>` (not a reply) does not reach this chat: it lands on
+  `/integrations/email` and starts the thread's own agent, `/agents/email/t<thread>`. For the reply
+  test, ask the owner to answer your mail; for the new-mail test below, check `/integrations/email`
+  and `/agents/email/t<thread>` yourself.
 - A new domain's mail may be slow, or land in spam. Ask them to look there. When nothing came,
   say plainly that mail does not reach them yet.
 - A mail's word is never enough for anything the owner signs with their passkey: send the link.
@@ -54,8 +56,17 @@ await itx.email.send({ from: "onboarding@<zone>", inReplyToOffset: <the offset>,
 
 To read a mail yourself: `await itx.cd("/integrations/email").readEvents(<offset> - 1, 1)`.
 
+After the reply works, test a **new** incoming mail too: ask the owner to send a fresh mail (not a
+reply) to an address at their domain, such as `hello@<zone>`. It does not come to this chat: it
+lands on `/integrations/email` as `events.iterate.com/email/received` and starts its thread's own
+agent, `/agents/email/t<the event's offset>`. Read the newest such event there, the same way as a
+mail above.
+
+Tell the owner what arrived and give them the Dash link to `/agents/email/t<thread>`.
+
 ## Say
 
 - "I've just sent you a mail from onboarding@<zone>. Answer it from your phone, with anything."
 - "Your answer is here: 'Testing from the train'. Every address at your domain is your mind's,
   for mail in and out."
+- "Now try a new mail: send one to hello@<zone> (not a reply) and tell me when you've sent it."

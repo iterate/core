@@ -14,8 +14,8 @@ The owner should come away with: the mind already knows a little about them, gav
 
 ## Not ready
 
-- With no AI Gateway credit (an owner who pays with a ChatGPT plan alone) the search may fail.
-  On a failure, still generate a starter logo and STILL kick off `/agents/main/website` so the owner gets a logo and homepage either way.
+- With no AI Gateway credit (an owner who pays with a ChatGPT plan alone) `itx.ai.websearch` may fail.
+  Fall back to DuckDuckGo HTML via `itx.browser.quickAction` (step 1). If that also fails, still generate a starter logo and STILL kick off `/agents/main/website` so the owner gets a logo and homepage either way.
 
 ## How
 
@@ -35,6 +35,7 @@ return events
 Take the owner's name (the sign-up record's, else the part of the email before `@`, split at dots) and the email's domain:
 
 - Search at most three times: the full name; the name and the domain; the domain alone. Leave the domain out when it is free mail (`gmail.com`, `googlemail.com`, `outlook.com`, `hotmail.com`, `live.com`, `yahoo.com`, `icloud.com`, `me.com`, `proton.me`, `protonmail.com`, `gmx.net`, `web.de`, `aol.com`, `fastmail.com`). Read at most two pages with `itx.browser.quickAction("markdown", { url })`.
+- When `itx.ai.websearch` fails (no credit or an error), search instead with `await itx.browser.quickAction("markdown", { url: "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query) })` and read the results from that text. Keep the same limits (at most three searches total, at most two result pages read) and the same namesake rules.
 - A result may be about a namesake. Keep only public facts about work: a company, a role, a project, a city at most. Nothing private: no home address, no phone number, no family, no health, nothing sad.
 
 ### 2. Write `mind.md` AND generate a starter logo (`profile/icon.svg`) in one commit

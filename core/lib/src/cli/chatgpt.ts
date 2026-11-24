@@ -432,7 +432,7 @@ export async function connectChatgpt(input: {
   callback.answer(
     cloudPage ? { kind: "redirect", to: cloudPage } : { kind: "page", failed: false },
   );
-  const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.`;
+  const message = `Connected ${account.email || "an account"}${account.plan ? ` (${account.plan})` : ""} to ${address}. The mind keeps the tokens in ${SECRET} and refreshes them itself.\nThe plan pays for chat, not for voice calls: voice needs an OpenAI API key or iterate Cloud credit.`;
   if (failure) throw failure;
   return input.test ? { message, test } : { message };
 }

@@ -18,6 +18,28 @@ You answer, so something pays now. A request of an agent uses the first of these
 - The voice agent in a call is paid by `/secrets/openai` alone: iterate Cloud's credit or the
   owner's own key, never the Cloudflare credit (`onboarding/speak.md`).
 
+## What it costs
+
+Answer cost questions from this section (and `prices` in `agent/contract.ts`), not by browsing
+pricing pages. Keep Cloudflare hosting and AI credit apart: they are separate bills.
+
+**Cloudflare hosting (the owner's Cloudflare account):**
+
+- **Cloudflare Workers Paid:** $5 a month, plus Cloudflare usage (`core/lib/src/cli/deploy.ts` in
+  `/repos/github.com/iterate/core`).
+
+**AI credit and model usage:**
+
+- **iterate Cloud starting credit:** $10 of one-time AI credit for a new mind, covering OpenAI
+  (agents and voice calls) and Exa web research (`onboarding/connect-iterate-cloud.md`,
+  `CREDIT_USD` in `apps/onboarding/steps/connect-iterate-cloud.ts`).
+- **Default agent model (`openai/gpt-6.2-sol`):** $2 per million input tokens, $0.10 cached
+  input, $2.50 cache write, and $10 per million output tokens (`llm.model` and `prices` in
+  `agent/contract.ts`, which also holds the configured prices for the other models).
+- **Call transcription (`gpt-live-transcribe`):** $0.017 a minute of speech, about $1.02 for an
+  hour of continuous speech; silence is not sent (`apps.md`, "A call on an agent"). The voice
+  agent itself is paid by `/secrets/openai`: iterate Cloud credit or the owner's OpenAI API key.
+
 ## How
 
 Bring it up only when a request fails for lack of credit (a subagent reports it, or your own
@@ -25,8 +47,9 @@ script's answer says 402 or "insufficient"), or when the owner asks. Then say so
 give the three ways at once:
 
 1. **Their ChatGPT plan: recommend this.** The agents' requests then use their ChatGPT Plus or
-   Pro plan: no API key, no extra bill. They run one command on their own computer. Give it with
-   this mind's control-plane hostname in it, in a code block of its own:
+   Pro plan: no API key, no extra bill. The plan pays for chat, not for voice calls: voice needs
+   an OpenAI API key or iterate Cloud credit (`onboarding/speak.md`). They run one command on their
+   own computer. Give it with this mind's control-plane hostname in it, in a code block of its own:
 
    ```sh
    npx iterate@latest chatgpt connect <control-plane hostname>
@@ -59,5 +82,7 @@ Say which of the three is in use when you are done.
 ## Say
 
 - "Your mind has run out of credit. The easiest fix is your ChatGPT plan: one command on your
-  computer. Shall I give it to you?"
-- "Done: your ChatGPT plan pays from the next request on."
+  computer. It pays for chat, not for voice calls: voice needs an OpenAI API key or iterate
+  Cloud credit. Shall I give it to you?"
+- "Done: your ChatGPT plan pays for chat from the next request on. Voice calls still need an
+  OpenAI API key or iterate Cloud credit."

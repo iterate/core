@@ -10,9 +10,16 @@ it with their own tools. You connect iterate's GitHub App for the account that h
 repository (an installation), never a grant of their whole account. You do the work; the owner
 approves once. Every request uses a placeholder, never a token.
 
+The iterate GitHub App acts only on repositories where it is installed. An issue or a pull request
+on someone else's repository needs the owner's own personal access token (see Not ready).
+
 ## Not ready
 
 - A force push to `main` publishes the older commit and leaves the mind's later commits behind.
+- Opening an issue or pull request on a repository where the iterate GitHub App is not installed
+  (someone else's repository) has no flow of its own yet. The owner makes a personal access token
+  at GitHub and puts it into the secret form (`onboarding/secrets.md`), pinned to
+  `https://api.github.com`.
 
 ## How
 

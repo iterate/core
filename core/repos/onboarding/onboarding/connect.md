@@ -90,8 +90,18 @@ const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/google", {
 return authorizationUrl;
 ```
 
-Afterwards `(await itx.secrets.describe("/secrets/google")).set` must be true. Then make one
-request with a placeholder, never a token, and tell the owner which account answered.
+Afterwards `(await itx.secrets.describe("/secrets/google")).set` must be true. Make one request with
+a placeholder, never a token (for example `GET https://gmail.googleapis.com/gmail/v1/users/me/profile`
+with `{ authorization: 'Bearer getSecret("/secrets/google", { field: "accessToken" })' }`), and tell
+the owner which account answered.
+
+Then read the `Subject` and `From` headers of the last ~20 messages using the same placeholder
+request style: list message ids with
+`GET https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=20`, then read each with
+`GET https://gmail.googleapis.com/gmail/v1/users/me/messages/<id>?format=metadata&metadataHeaders=From&metadataHeaders=Subject`.
+From what you saw, propose one or two concrete automations that fit their real mail (for example a
+daily digest of a frequent sender, or a reminder for incoming invoices). Ask one question with
+plain options. Do not store mail content or quote more of it than needed to name the options.
 `accounts.md` has the rest: Gmail's and Calendar's events, more scopes, several accounts.
 
 An MCP server that takes a key:
@@ -113,4 +123,5 @@ Then `await mcp.callTool("<name>", { … })`. The last step of every connect: re
 - "Connected as ana@studio.pt. In the last hour your mind answered 212 requests, all of them
   fine."
 - "I can read your Gmail for you. Here is the link: approve it, then come back to this tab."
-- "It answered as ana@studio.pt. Shall I tell you each morning what came in overnight?"
+- "Connected as ana@studio.pt. I see supplier invoices and daily order summaries. Shall I remind
+  you when an invoice arrives, or send a morning digest of orders?"

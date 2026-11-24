@@ -260,7 +260,12 @@ test("the test request runs before the browser moves on, and the Cloud's page sa
     return { connected, browser: await browser };
   };
   expect(await connectWith(41459, () => "ready")).toMatchObject({
-    connected: { test: "ready" },
+    connected: {
+      message: expect.stringContaining(
+        "The plan pays for chat, not for voice calls: voice needs an OpenAI API key or iterate Cloud credit.",
+      ),
+      test: "ready",
+    },
     browser: {
       callsThen: ["host", "finish", "test"],
       location: "https://cloud.example.com/connected?ai=chatgpt&domain=example.com&test=passed",
