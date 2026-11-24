@@ -49,7 +49,7 @@ export class ItxAi extends RpcTarget {
         }
       : given;
     const send = () => this.#ai.run(model, inputs, options);
-    // an agent's turn (the metadata iterate `agents/processor.ts` sends) gets traced
+    // an agent's request that says so in its metadata (`context: "agent-turn"`) gets traced
     const metadata = options?.gateway?.metadata;
     if (!options?.returnRawResponse || metadata?.context !== "agent-turn") return send();
     const slash = model.indexOf("/");

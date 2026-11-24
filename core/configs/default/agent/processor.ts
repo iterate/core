@@ -997,8 +997,8 @@ const SUMMARY_ASK =
   "RULE DOES NOT APPLY TO THIS ANSWER: write no `<codemode>` block and no code. Answer with the " +
   "summary only, in plain words.";
 
-/** HOW TO WRITE A SCRIPT: production's `<codemode>` tag (core/lib/src/agents/codemode-format.ts),
- *  stricter. The block is the whole response: no words around it, no attributes on it. It says
+/** HOW TO WRITE A SCRIPT: one `<codemode>` block. The block is the whole response: no words
+ *  around it, no attributes on it. It says
  *  nothing of how words reach a person: a prompt fragment says that (fragments.ts). */
 const CODEMODE_INSTRUCTIONS = [
   "YOUR RESPONSE IS ONE SCRIPT AND NOTHING ELSE: exactly one `<codemode>` block. Its first line is",

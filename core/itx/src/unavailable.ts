@@ -73,8 +73,8 @@ export function expressionFetchErrorAnswer(error: unknown, itxExpression: string
  *  own navigation (`sec-fetch-dest: document`) says the error in words, and that the mind tries to
  *  record it: a throw of the config's code is the SDK's `mind/code-failed`, the kernel's own is
  *  its issue line. It promises no record: the SDK's bounds drop a fact, and an append can fail.
- *  Every other answer, and every other caller, gets `answer` byte for byte: an agent reads
- *  "expression fetch error: " (iterate/agents results-preamble.ts). */
+ *  Every other answer, and every other caller, gets `answer` byte for byte: an agent's script
+ *  reads "expression fetch error: " in it. */
 export async function failedPageAnswer(
   request: Request,
   answer: Response,

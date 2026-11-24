@@ -28,16 +28,14 @@ export type AgentMessageOptions = { trigger?: boolean; key?: string };
 /** `itx.agents.get(path)`: one agent. Anything else on its context is a plain
  *  `itx.cd(path).append(…)`, stamped with where it came from. */
 export interface AgentHandleApi {
-  /** A person's words: ONE `events.iterate.com/agent/message-received`, the input every kind of
-   *  agent reads, answered so a caller can wait for what follows it. An iterate agent turns it into
-   *  its own `context-added`, the trigger of its next turn (or, with `{ trigger: false }`, context
-   *  it reads on that turn). An agent whose config sets `llmRequestPolicy` to
-   *  `interrupt-current-request` ends the answer it is writing when words sent from the base `/`
-   *  arrive (a person's on the Dash, or a script's from `/`), and answers both next (contract.ts). Sent from another agent, the model reads them as
-   *  `[from <sender's context>]` — the collection's base, which the sender's own `itx.agents` row
-   *  pins (collection.ts); from anywhere else they read as a person's. To an agent that is not
-   *  iterate's own, the same event is appended to its context, for its own subscription to
-   *  deliver. A deleted agent refuses, and so does one never created (NOT_CREATED). */
+  /** Words for the agent: ONE `events.iterate.com/agent/message-received` on its context, the
+   *  input every kind of agent reads, answered so a caller can wait for what follows it. The
+   *  mind's config transcribes it into the input of the mind's own agent, and that input starts
+   *  the agent's next request (or, with `{ trigger: false }`, is context that it reads then). The
+   *  fact names the sender when another agent sent it: the collection's base, which the sender's
+   *  own `itx.agents` row pins (collection.ts). An agent of another kind gets the same fact, for
+   *  its own subscription to deliver. A deleted agent refuses, and so does one never created
+   *  (NOT_CREATED). */
   message(input: AgentMessageInput, options?: AgentMessageOptions): Promise<StreamEvent>;
   /** What the agent did lately, from its own durable log: the last `minutes` (5 by default, at
    *  most 1,440), at most `limit` lines (30 by default, at most 200), oldest first, beside its
@@ -78,13 +76,13 @@ export type AgentListing = {
 };
 
 /** `itx.agents` — installed by rewrite rule on the mind's root and on each agent's context.
- *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable; a
- *  `delete` of an agent never created refuses, NOT_CREATED). `delete` of an agent that is not
- *  iterate's own only records its death on `/agents`. */
+ *  `create` starts the mind's own agent, whose code is in the mind's config repo. A deleted agent
+ *  is not re-creatable, and a `delete` of an agent never created refuses (NOT_CREATED). `delete`
+ *  of an agent of another kind only records its death on `/agents`. */
 export interface AgentsApi {
   /** Every agent, with what a list shows about it. An agent is any context under `/agents`, at any
-   *  depth: an iterate agent `create` made, a coding session a bridge appends to, anything. `parent`
-   *  is the nearest agent above it (null at the top). `kind` is what runs it (`"iterate"`,
+   *  depth: an agent `create` made, a coding session a bridge appends to, anything. `parent`
+   *  is the nearest agent above it (null at the top). `kind` is what runs it (`"agent"`,
    *  `"claude"`, …) and `host` the machine it runs on. `status` is `working`, `idle`, `waiting` (on
    *  someone) or `ended`; `activity` one line on what it is doing now, and `description` a few
    *  sentences on its purpose or conclusions. `title` is the name it gave itself, or else the first

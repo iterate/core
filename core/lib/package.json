@@ -61,9 +61,7 @@
     "./agents/install": "./src/agents/install.ts",
     "./agents/kinds": "./src/agents/kinds.ts",
     "./agents/contract": "./src/agents/contract.ts",
-    "./agents/processor": "./src/agents/processor.ts",
-    "./agents/codemode-format": "./src/agents/codemode-format.ts",
-    "./agents/mind-now": "./src/agents/mind-now.ts",
+    "./agents/at-work": "./src/agents/at-work.ts",
     "./node": "./src/node.ts",
     "./standalone-page": "./src/standalone-page.ts",
     "./theme.css": "./src/theme/theme.css",
@@ -227,17 +225,9 @@
         "types": "./dist/agents/contract.d.mts",
         "import": "./dist/agents/contract.mjs"
       },
-      "./agents/processor": {
-        "types": "./dist/agents/processor.d.mts",
-        "import": "./dist/agents/processor.mjs"
-      },
-      "./agents/codemode-format": {
-        "types": "./dist/agents/codemode-format.d.mts",
-        "import": "./dist/agents/codemode-format.mjs"
-      },
-      "./agents/mind-now": {
-        "types": "./dist/agents/mind-now.d.mts",
-        "import": "./dist/agents/mind-now.mjs"
+      "./agents/at-work": {
+        "types": "./dist/agents/at-work.d.mts",
+        "import": "./dist/agents/at-work.mjs"
       },
       "./node": {
         "types": "./dist/node.d.mts",

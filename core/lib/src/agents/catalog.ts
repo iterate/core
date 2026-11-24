@@ -11,9 +11,9 @@ import type { IterateContextApi } from "../api.ts";
 import { errorCode, reportIssue } from "../lib.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { AgentHandleApi, AgentsRootApi } from "./api.ts";
-import { AgentContract } from "./contract.ts";
+import { AgentEventCatalog } from "./contract.ts";
 import { AgentCollectionRpcTarget, type OwnAgent } from "./collection.ts";
-import { AGENTS_MODULE, AGENTS_PATH } from "./install.ts";
+import { AGENTS_PATH } from "./install.ts";
 
 /** The core's announcement that a context exists below this one
  *  (core/itx/src/iterate-context-durable-object.ts `announceToAncestors`): what makes a row. The
@@ -43,8 +43,9 @@ const AgentCatalogContract = defineProcessorContract({
   stateSchema: z.object({
     /** Every live agent by path: every context under `/agents`, at any depth, from its own
      *  `itx/child-created` (an agent never posts its birth here). Everything but `createdAt` and
-     *  `parent` comes from copies of the agent's own events (collection.ts `CATALOG_ROWS` says how
-     *  for an iterate agent; another kind of agent configures its own). `parent` is the nearest
+     *  `parent` comes from copies of the agent's own events, by rows that each kind of agent
+     *  configures on its own context (core/configs/default/agent-start.ts `CATALOG_ROWS` are those
+     *  of the mind's own agent). `parent` is the nearest
      *  ancestor that is a row too. `title` is the name the agent gave itself or, failing that, the
      *  first line a person sent it, and then `titleFromWords` is true. Copies can land in any order,
      *  so `titleAtOffset` and `fieldAtOffset` record which event on the agent's log each field came
@@ -55,7 +56,7 @@ const AgentCatalogContract = defineProcessorContract({
         z.object({
           createdAt: z.string(),
           parent: z.string().optional(),
-          /** What runs the agent: "iterate", "claude", "codex", "opencode", … */
+          /** What runs the agent: "agent" (the mind's own), "claude", "codex", "opencode", … */
           kind: z.string().optional(),
           /** The machine or sandbox it runs on, for an agent that runs on one. */
           host: z.string().optional(),
@@ -79,8 +80,8 @@ const AgentCatalogContract = defineProcessorContract({
       )
       .default({}),
     /** Every agent that died, by path: its death certificate. Terminal — a deleted agent is not
-     *  re-creatable — so a verb on one answers from this row and never hosts the agent's facet on
-     *  its context again (collection.ts says why that matters). */
+     *  re-creatable — so a verb on one answers from this row and its context is not called
+     *  (collection.ts). */
     deleted: z.record(z.string(), z.object({ deletedAt: z.string() })).default({}),
   }),
   events: {
@@ -98,7 +99,7 @@ const AgentCatalogContract = defineProcessorContract({
       }),
     },
   },
-  processorDeps: [AgentContract, ChildCreatedEventCatalog],
+  processorDeps: [AgentEventCatalog, ChildCreatedEventCatalog],
   consumes: [
     "events.iterate.com/itx/child-created",
     "events.iterate.com/agent/deleted",
@@ -239,7 +240,7 @@ export class AgentCatalogProcessor extends StreamProcessor<
   /** EVERY AGENT SAYS WHAT IT IS FOR in the mind's catalog of contexts (`itx.contexts.list`): when
    *  a copy changes an agent's line (`agentDescription`: its description, or with none its title or
    *  the first words a person sent it), the line goes onto the agent's own log as
-   *  `events.iterate.com/itx/described`. Every kind of agent gets it, iterate's or a bridge's, and
+   *  `events.iterate.com/itx/described`. Every kind of agent gets it, the mind's own or a bridge's, and
    *  an activity or a status alone appends nothing. A copy row cannot do this: no copy is an
    *  `itx/*` event. The key is the copied event's, so a batch delivered again appends nothing. An
    *  agent whose line has not changed since this was deployed gets it at its next change. The
@@ -399,14 +400,10 @@ export class AgentCollectionDurableObject
 {
   /** The processor's reads, and `itx.agents`: the collection's verbs and `at(base)` (collection.ts). */
   static override publicMethods = [...super.publicMethods, "list", "get", "create", "delete", "at"];
-  /** The module of the mind's published config that exports this class and
-   *  `AgentDurableObject`: each agent's facet is started from it. A config that keeps them in
-   *  another module sets it there, beside the export. */
-  static module = AGENTS_MODULE;
   /** THE MIND'S OWN AGENT, whose code is in the mind's config repo: the kind its start writes on
    *  `/agents`, and the facts that make a context run it (collection.ts `OwnAgent`). A config sets
-   *  it beside the export, and then `create` starts that agent and hosts no `AgentDurableObject`.
-   *  None: `create` starts the platform's agent. */
+   *  it beside the export, and `create` appends those facts. None: `create` refuses, because the
+   *  platform has no agent of its own to start. */
   static agent: OwnAgent | undefined;
 
   processor = new AgentCatalogProcessor(() => this.getItx());
@@ -414,15 +411,14 @@ export class AgentCollectionDurableObject
     return new AgentCollectionRpcTarget(
       () => this.getItx(),
       // THROUGH THE LOG'S HEAD, not the last pushed batch (`snapshot()` alone answers from what the
-      // delivery loop has pushed so far): a death is on `/agents` before `delete()` returns — the
-      // saga posts it here before its own certificate — so a verb on the dead agent right after
-      // must see it, or it would host the facet again (collection.ts).
+      // delivery has pushed so far): a death is on `/agents` before `delete()` returns, so a verb
+      // on the dead agent right after must see it, or it would start the agent again
+      // (collection.ts).
       async () => {
         await this.catchUpFromLog();
         return await this.snapshot();
       },
       base,
-      (this.constructor as typeof AgentCollectionDurableObject).module,
       (this.constructor as typeof AgentCollectionDurableObject).agent,
     );
   }

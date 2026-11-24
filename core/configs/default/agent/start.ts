@@ -20,8 +20,8 @@
 // WITH EVERYTHING ELSE IN THAT ROW (`source`, `mainModule`, the class, `consumes`).
 // THE PARENT LINK'S KEY HOLDS THE PATH ALONE, ON PURPOSE: the first link stands, and a start that
 // names another parent is refused whole. With the body in the key, a later start could link the
-// agent to another parent, and the newer rule would win: an agent that a jailed agent started
-// could be linked to the root.
+// agent to another parent, and the newer rule would win. (A parent link is no jail: a child's own
+// table answers for it, core/itx/src/context/parent-rule-and-child.test.ts.)
 // So starting twice writes once, and a processor that writes an input (a Slack integration) can send
 // these facts with every input: no "is it started" check. A new config, a new version of the code or a
 // new row body is a new key for that fact only.

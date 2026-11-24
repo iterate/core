@@ -26,7 +26,7 @@ import {
   type ShareEvent,
   type ShareState,
 } from "../../configs/default/call/share.ts";
-import { AgentContract } from "./agents/contract.ts";
+import { AgentContract } from "../../configs/default/agent/contract.ts";
 import { errorCode } from "./lib.ts";
 
 // an SFU app's and a TURN key's id: an obvious fake

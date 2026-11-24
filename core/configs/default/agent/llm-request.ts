@@ -21,8 +21,8 @@
 import { z } from "zod";
 import { defineProcessorContract } from "iterate/stream/processor";
 
-/** What one request cost. Production's shape (`LlmUsage`), plus `estimated` for a request the provider
- *  gave no count for: a cancelled request still cost its input. */
+/** What one request cost. `estimated` is for a request that the provider gave no count for: a
+ *  cancelled request still cost its input. */
 export const LlmUsage = z.object({
   /** Every input token, the cached ones included. */
   inputTokens: z.number().int().nonnegative(),
@@ -36,9 +36,10 @@ export const LlmUsage = z.object({
 });
 export type LlmUsage = z.infer<typeof LlmUsage>;
 
-/** A FILE IN THE MIND'S FILE STORE, BY REFERENCE: production's `FileAttachment`
- *  (core/lib/src/agents/contract.ts). The Dash draws a file only when it has all four fields. No
- *  fact holds file bytes: a request maker reads them when it sends (llm-api.ts). */
+/** A FILE IN THE MIND'S FILE STORE, BY REFERENCE: the platform's `FileAttachment`
+ *  (core/lib/src/agents/contract.ts), as `itx.agents.get(path).message()` names a file. The Dash
+ *  draws a file only when it has all four fields. No fact holds file bytes: a request maker reads
+ *  them when it sends (llm-api.ts). */
 export const FileAttachment = z.object({
   contentType: z.string().min(1),
   filename: z.string().min(1),

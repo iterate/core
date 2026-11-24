@@ -31,13 +31,9 @@
 // words the model reads of a settled run (`scriptRunOutcome`). processor.ts calls both and knows
 // nothing more of how a script runs. To run scripts another way, change this file.
 //
-// IT IS PRODUCTION'S ENVELOPE WITH ONE COPY OF EVERYTHING (core/lib/src/agents/results-preamble.ts,
-// result-render.ts). Production keeps the newest ten results as rows in the agent's state, copies
-// the small ones into every later script and writes the large ones to files. Here the log is the
-// only copy, so every result of the agent's life can be read, and a script's code carries none.
-// Production also pins code by `setPreamble`; here there is no kept code at all. What is kept from
-// production as it is: the serializer, the markers around the model's own code, and what a
-// failure's kind means for what already ran.
+// THE LOG IS THE ONLY COPY OF A RESULT. No result is kept in the agent's state, copied into a later
+// script or written to a file: every result of the agent's life can be read from the log, and a
+// script's code carries none. There is no kept code either.
 
 import type { RunSettlement } from "iterate/stream/run";
 
@@ -94,7 +90,7 @@ export function scriptRunCode(run: {
     "  try {",
     "    return __json(await (async () => {",
     // the markers around the model's own code, so that `script(n)` and a page read it back out of
-    // the envelope: production's markers, so a page that shows production's scripts shows these
+    // the envelope: a page that shows a script cuts it out by these markers
     "//#region your script",
     script,
     "//#endregion your script",
@@ -176,8 +172,8 @@ export function scriptRunOutcome(run: {
   return resultText(head, resultOffset, settlement.result, historyLimit);
 }
 
-/** What a failure's kind means for what already ran (iterate/stream/run `RunSettled`). Production's
- *  three notes: a script can have acted before it failed. */
+/** What a failure's kind means for what already ran (iterate/stream/run `RunSettled`): a script can
+ *  have acted before it failed. */
 const FAILED: Record<Extract<RunSettlement, { status: "failed" }>["failureKind"], string> = {
   runtime: "It threw: anything before the throw ran. Look at the state before you try again.",
   deadline:

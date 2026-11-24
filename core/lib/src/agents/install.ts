@@ -1,23 +1,14 @@
 // install.ts — what a config repo's init case calls (README.md). Not the runtime, so importing it
 // loads none.
 import type {} from "./api.ts"; // registers `itx.agents` on InstalledAppRoots
-import type { FacetSpec, IterateContextApi } from "../api.ts";
+import type { IterateContextApi } from "../api.ts";
 
 /** Where the catalog lives. Every context under it, at any depth, is an agent (catalog.ts). */
 export const AGENTS_PATH = "/agents";
 
-/** The module of a mind's published config that exports the app's two classes, unless the
- *  config names another: to `installAgents`, and on the collection's class, which starts each
- *  agent from it (catalog.ts `module`). */
-export const AGENTS_MODULE = "agents.ts";
-
-/** One of the app's facets: `className` from `module` of the mind's published config. */
-export function agentsFacetSpec(
-  className: "AgentCollectionDurableObject" | "AgentDurableObject",
-  module = AGENTS_MODULE,
-): FacetSpec {
-  return { className, mainModule: module, source: ["itx", ["cd", "/"], "config"] };
-}
+/** The module of a mind's published config that exports the collection's class, unless the
+ *  config names another to `installAgents`. */
+const AGENTS_MODULE = "agents.ts";
 
 /** The processor verbs installing calls. `list` is read only for each row's name, and answers
  *  through a promise over the wire. */
@@ -36,7 +27,12 @@ export async function installAgents(
   },
   options: { module?: string } = {},
 ) {
-  const spec = agentsFacetSpec("AgentCollectionDurableObject", options.module);
+  // the collection's facet: the class of that name in `module` of the mind's published config
+  const spec = {
+    className: "AgentCollectionDurableObject",
+    mainModule: options.module || AGENTS_MODULE,
+    source: ["itx", ["cd", "/"], "config"],
+  };
   const agents = itx.cd(AGENTS_PATH);
   await agents.processors.enable("agents", {
     ...spec,
@@ -46,9 +42,8 @@ export async function installAgents(
       "events.iterate.com/agent/listing-updated",
     ],
   });
-  // `/agents` has no link to the root. The collection stores the attachments of a message to an
-  // agent of another kind through its own itx (message.ts `appendMessage`), so these two names
-  // reach the root's.
+  // `/agents` has no link to the root. The collection stores the attachments of a message
+  // through its own itx (message.ts `appendMessage`), so these two names reach the root's.
   await agents.append(
     {
       type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -56,7 +51,7 @@ export async function installAgents(
         match: "itx.files",
         target: ["itx", ["cd", "/"], "files"],
         description:
-          "The mind's files: the agents collection stores here the attachments of a message to an agent of another kind",
+          "The mind's files: the agents collection stores here the attachments of a message to an agent",
       },
     },
     {

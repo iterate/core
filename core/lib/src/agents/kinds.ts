@@ -20,7 +20,7 @@ export type AgentKind<View = unknown> = {
   /** The server half: every durable event of the mind, after the mind's own cases. A kind
    *  answers its own: sets up an agent's rows when it starts, hands a `message-received` on one of
    *  its paths to whatever runs it, or does the work itself. Keyed appends: an event can come more
-   *  than once. A kind whose agents run elsewhere (iterate's, in the platform) has none. */
+   *  than once. A kind whose agents need nothing from the mind's worker has none. */
   processEvent?: (args: { event: StreamEvent; itx: IterateContextApi }) => Promise<void>;
   /** The ephemeral event types its view reads besides the agent's whole durable log (which the
    *  Dash always reads: the Events tab shows it), e.g. an answer's streamed frames. A

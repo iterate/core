@@ -57,10 +57,9 @@
 // COUNTS (its script runs) only when the request succeeded and nothing overtook it: no input came to
 // interrupt it, and no other response answered its inputs first.
 //
-// The agent's own facts keep production's names wherever production has the fact
-// (core/lib/src/agents/contract.ts). The request facts do not: they are in their own namespace,
-// `llm-request/`, and a fresh mind gets them so. A type is spelled out in full wherever it is used
-// (docs/coding-style.md): search for one, and you find every producer and every consumer.
+// The request facts are in their own namespace, `llm-request/`. A type is spelled out in full
+// wherever it is used (docs/coding-style.md): search for one, and you find every producer and every
+// consumer.
 
 import { z } from "zod";
 import { parse } from "iterate/expression";
@@ -81,13 +80,14 @@ import {
  *  second time: everything the agent writes has an idempotency key that names its decision point
  *  (request n, the script of request r), and those follow from the log.
  *
- *  THE PREFIX IS NEEDED. The platform's own agent (core/lib/src/agents/contract.ts) has the same
- *  slug, `agent`, and counts its versions "1", "2", …. A facet keeps its checkpoint under the slug,
- *  and the engine takes a checkpoint of its own version as its own state. On a context that ran the
- *  platform's agent first, an equal number here would make that agent's state this one's. */
+ *  THE PREFIX IS NEEDED. A context can hold the checkpoint of an agent that the platform ran there
+ *  first (core/lib/src/agents/collection.ts, a take-over). That agent had the same slug, `agent`,
+ *  and counted its versions "1", "2", …. A facet keeps its checkpoint under the slug, and the engine
+ *  takes a checkpoint of its own version as its own state. An equal number here would make that
+ *  agent's state this one's. */
 const AGENT_VERSION = "config-4";
 
-/** What an input does to the agent's requests. Production's three behaviours. */
+/** What an input does to the agent's requests. */
 export const LlmRequestPolicy = z.object({
   behaviour: z.enum(["dont-trigger-request", "after-current-request", "interrupt-current-request"]),
 });
@@ -265,8 +265,8 @@ export const AgentConfig = z.object({
       keepNewestItems: z.number().int().nonnegative().default(6),
     })
     .prefault({}),
-  /** US dollars for a million tokens, by model. OpenAI's are production's
-   *  (core/lib/src/agents/pricing.ts, OpenAI's price page on 18 November 2026). Anthropic's and
+  /** US dollars for a million tokens, by model. OpenAI's are from OpenAI's price page on
+   *  18 November 2026. Anthropic's and
    *  Google's are this repository's lab values of 20 November 2026, not checked against a price page.
    *  A model with no price here is counted in tokens and not in dollars: a new provider's models get
    *  theirs by `agent/configured`. */
@@ -388,7 +388,7 @@ const events = {
   },
   "events.iterate.com/agent/summary-updated": {
     description:
-      "What the agent says about itself, each field merged: `activity` is what it does now, `title` and `description` what it is. Production's fact: the chat's round headers, the agent list and a call read it. The agent's script appends it, its activity as its first line, with no await.",
+      "What the agent says about itself, each field merged: `activity` is what it does now, `title` and `description` what it is. The platform's fact (core/lib/src/agents/contract.ts): the chat's round headers, the agent list and a call read it. The agent's script appends it, its activity as its first line, with no await.",
     payloadSchema: z.object({
       activity: z.string().min(1).optional(),
       title: z.string().min(1).max(200).optional(),

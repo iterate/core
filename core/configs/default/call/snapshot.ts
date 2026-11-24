@@ -78,8 +78,8 @@ const json = (body: unknown, status = 200) =>
 
 /** Where a call snapshot JPEG is stored in `itx.files`: outside `<agent>/` so `personItx`
  *  (core/itx/src/person-context.ts `files.get`, which enforces `file.startsWith(agent + "/")`)
- *  hard-blocks any guest on a share link of `<agent>` with FORBIDDEN, while members and the agent's
- *  own `AgentDurableObject` read it directly. */
+ *  hard-blocks any guest on a share link of `<agent>` with FORBIDDEN, while members and the agent
+ *  read it directly. */
 export function snapshotFilePath(agent: string, id: string, source: SnapshotSource): string {
   return `/call-snapshots${agent}/${id}-${source}.jpg`;
 }

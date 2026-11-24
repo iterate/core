@@ -15,6 +15,7 @@
 // contexts it makes; on any other context, write it once. To host a variant of the agent, put its
 // class where `Agent` is.
 
+import { type AgentHandleApi, appendMessage } from "iterate/agents";
 import { StreamProcessorDurableObject } from "iterate/sdk";
 import type { AgentState } from "./contract.ts";
 import { LlmApiProcessor, type LlmApi, type LlmApiState } from "./llm-api.ts";
@@ -27,9 +28,37 @@ import { Agent } from "./processor.ts";
 // one wide event for each attempt, in the Worker's own log
 const report = (event: Record<string, unknown>) => console.log(JSON.stringify(event));
 
-/** THE AGENT. It appends facts and needs nothing of its host. */
+/** THE AGENT. Its processor appends facts and needs nothing of its host. */
 export class AgentFacet extends StreamProcessorDurableObject<AgentState> {
+  /** The processor's reads, and `message`: the words of a person whose page reaches this context
+   *  alone. */
+  static override publicMethods = [...super.publicMethods, "message"];
+
   processor = new Agent();
+
+  /** WORDS FROM A PERSON'S VIEW OF THIS ONE CONTEXT (a guest of a shared chat, say). Such a page
+   *  has no `itx.agents`: the platform calls this method for it, as that person
+   *  (core/itx/src/person-context.ts). It appends what `itx.agents.get(path).message()` appends,
+   *  ONE `agent/message-received` with the files stored first, and the mind transcribes it into the
+   *  agent's input as it does every such fact (agent-kinds/agent.ts). The platform's stamp on the
+   *  fact says who called. The second argument is the sending context that the platform's call
+   *  names: a page names none, so it is not read. */
+  async message(
+    input: Parameters<AgentHandleApi["message"]>[0],
+    _from?: string,
+    options?: Parameters<AgentHandleApi["message"]>[1],
+  ) {
+    using itx = this.getItx();
+    const { path } = await itx.whoami();
+    return await appendMessage(
+      () => this.getItx(),
+      path,
+      (own) => own,
+      input,
+      undefined,
+      options,
+    );
+  }
 }
 
 /** A request maker of one API shape, with what it needs of its host: the context's `itx`, on which

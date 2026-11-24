@@ -298,7 +298,7 @@ test("a pause of the agent's own that arrives with nothing left to pause for is 
   assert.equal(owed.idempotencyKey, "agent/resumed:2");
 });
 
-test("one input: no source of the agent names the old message fact", () => {
+test("one input: no processor of the agent names a message fact, and the host's door for a person's view is the one file that does", () => {
   const sources = (directory) =>
     readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
       if (entry.isDirectory()) return sources(new URL(`${entry.name}/`, directory));
@@ -309,9 +309,11 @@ test("one input: no source of the agent names the old message fact", () => {
   // the word is split, so that this file does not hold it either
   const word = ["message", "received"].join("-");
   const holding = files.filter((file) => readFileSync(file, "utf8").includes(word));
+  // facet.ts is the host, and its `message` appends the raw fact that the mind transcribes into
+  // the agent's input. It reads none: the contracts' `consumes` lists are in the other files.
   assert.deepEqual(
-    holding.map((file) => file.pathname),
-    [],
+    holding.map((file) => file.pathname.split("/agent/").at(-1)),
+    ["facet.ts"],
   );
 });
 

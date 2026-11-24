@@ -19,8 +19,6 @@ export const PLATFORM_ENTRIES = [
   "iterate/agents/install",
   "iterate/agents/kinds",
   "iterate/agents/contract",
-  "iterate/agents/processor",
-  "iterate/agents/codemode-format",
   "iterate/standalone-page",
   "zod",
 ] as const;

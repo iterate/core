@@ -322,8 +322,9 @@ export class PersonContextRpcTarget extends RpcTarget {
       const words = wireInput(MessageInput, input, "agents.get(path).message(input, { key? })");
       const { key } =
         wireInput(MessageOptions, options, "agents.get(path).message(input, { key? })") ?? {};
-      // the sender is a person, as on a member's page: `/` (core/lib/src/agents/collection.ts); a
-      // key makes a retry land once
+      // The facet named `agent` of this context takes the words: the mind's own agent offers
+      // `message(input, from, options)` (core/configs/default/agent/facet.ts). The sender is a
+      // person, as on a member's page: `/`. A key makes a retry land once.
       const message: [string, ...unknown[]] = key
         ? ["message", words, "/", { key }]
         : ["message", words, "/"];

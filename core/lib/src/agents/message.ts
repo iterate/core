@@ -1,13 +1,12 @@
 // message.ts — words one context puts in an agent's log: what `itx.agents.get(path).message(text,
-// options)` appends (`appendMessage`: ONE `agent/message-received`, the input every kind of agent
-// reads), the `context-added` iterate's loop turns it into (`messagePayload`), and the gate a
-// mind may put on words another agent sent (`AgentInputGate`, the receiving side).
+// options)` appends (`appendMessage`): ONE `agent/message-received`, the input every kind of agent
+// reads (contract.ts).
 import { z } from "zod";
 import type { IterateContextApi } from "../api.ts";
 import { codedError } from "../lib.ts";
 import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { AgentMessageInput, AgentMessageOptions } from "./api.ts";
-import type { AgentState, FileAttachment, Speaker } from "./contract.ts";
+import type { FileAttachment } from "./contract.ts";
 
 /** A sender's key for one message. */
 const MessageKey = z.string().min(1).max(200);
@@ -28,8 +27,9 @@ async function sha256Hex(data: string | Uint8Array | ArrayBuffer): Promise<strin
 
 /** A message to the agent at `path`: its attachments, each stored first under the agent's path
  *  (`itx.files`, `<path>/<8 of a uuid>-<name>`), then ONE `message-received` naming them, appended to
- *  the context `target` picks from a scope (the agent's own facet appends to its own; the collection
- *  to another kind of agent's, collection.ts). The collection's itx is that of `/agents`, which
+ *  the context `target` picks from a scope: the collection picks the agent's from its own scope
+ *  (collection.ts), and an agent's own facet appends to its own (a person's view of one context
+ *  calls it, core/itx/src/person-context.ts). The collection's itx is that of `/agents`, which
  *  reaches the mind's files by the `itx.files` and `itx.r2` rows `installAgents` writes there
  *  (install.ts). Answers the event, so a caller can wait for what follows it.
  *
@@ -108,101 +108,3 @@ export async function appendMessage(
   // The message is the last event of the append: the facts in `first` stand before it.
   return (appended as unknown as StreamEvent[]).at(-1)!;
 }
-
-/** WHO SAID AN EVENT'S WORDS, by the platform's stamp alone. Nothing of the payload is read.
- *  - The principal that appended it (`source.principal`), or the principal that code appended it
- *    for (`source.onBehalfOf`: their call into the agent's facet, which is `message()`, or their
- *    script's run, marked `script`). `impersonatedBy` is kept: an administrator signed in as them.
- *  - Another mind, when its key signed the event (`source.signer` with `kind: "mind"`).
- *  - Nobody for every other event. One with no stamp was written by code: the mind's config, a
- *    row's delivery, or an agent's own script. One that a schedule fired, that a row copied here,
- *    or that the platform wrote as its own fact names no speaker either, whatever else its
- *    source holds: who set the schedule or wrote the original did not say these words now. A
- *    statement signed by a key that is no mind's names nobody here.
- *
- *  A relay of the config (mail, Slack, a phone line) therefore gets no speaker. It writes who it
- *  believes wrote into the words themselves, which the model reads as unverified. */
-export function speakerOf(source: StreamEvent["source"]): Speaker | undefined {
-  if (source.schedule || source.copiedFrom || source.platform) return undefined;
-  if (source.signer) {
-    const { actor, kind, hostname } = source.signer.principal;
-    return kind === "mind" ? { actor, kind, hostname } : undefined;
-  }
-  const principal = source.principal || source.onBehalfOf?.principal;
-  if (!principal) return undefined;
-  // Only a signer is a mind. A person who is no member is named by `onBehalfOf` alone, with the
-  // name they gave: the model is told it as their claim, and that a guest proved nothing
-  // (render.ts), so an agent can call them by it and still knows what it is worth. A verified
-  // principal never has a name here.
-  const { actor, email, impersonatedBy } = principal;
-  const script = !source.principal && Boolean(source.onBehalfOf?.run);
-  const claimed = source.principal ? undefined : source.onBehalfOf?.principal;
-  return {
-    actor,
-    email,
-    // a person with no address (an empty one too) is named by what they gave
-    name: email ? undefined : claimed?.name || undefined,
-    guest: claimed?.kind === "guest" || undefined,
-    script: script || undefined,
-    impersonatedBy,
-  };
-}
-
-/** The `context-added` iterate's loop appends for a `message-received` (processor.ts): the words,
- *  their files, the sender, the message's own offset, and the policy. With `trigger: false` the words are
- *  context only, whatever the agent is set to. Otherwise words sent from the base `/` (no `from`:
- *  the Dash chat, or any script at `/`) get `llmRequestPolicy`, the agent's own setting for them
- *  (its config's, undefined when it set none). Another agent's words never get it, so a helper's
- *  report cannot cut short the answer a person is reading. `messageOffset` goes with a person's
- *  words alone: the fold finds who sent that message by it (contract.ts). Another agent's words
- *  name their context in `from`. */
-export function messagePayload(input: {
-  message: string;
-  files: FileAttachment[];
-  from?: string;
-  messageOffset?: number;
-  trigger: boolean;
-  llmRequestPolicy: AgentState["config"]["llmRequestPolicy"];
-}) {
-  const { message, files, from, messageOffset, trigger, llmRequestPolicy } = input;
-  return {
-    role: "user" as const,
-    content: message,
-    actor: { type: "user" as const },
-    ...(files.length > 0 && { files }),
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- as in `appendMessage`: the loop appends this under a key, and a repeat must equal the stored event key by key
-    ...(from && { from }),
-    ...(!from && messageOffset && { messageOffset }),
-    ...(!trigger && { llmRequestPolicy: { behaviour: "dont-trigger-request" as const } }),
-    ...(trigger && !from && llmRequestPolicy && { llmRequestPolicy }),
-  };
-}
-
-/** Whether `origin` is ANOTHER context than this agent's own: not the agent (its own scripts run
- *  there), not `/` (the mind's code and its people). */
-export function isOtherContext(path: string, origin: string | undefined): boolean {
-  return Boolean(origin) && origin !== path && origin !== "/";
-}
-
-/** A mind's gate on words another agent sent without `trigger: false`, on the RECEIVING side
- *  (processor.ts): it holds whether they arrived by `message()` or by a raw
- *  `context-added` append. A config repo's `agents.ts` sets it on the facet class. `applies` says,
- *  at once, whether this sender's words to this agent are gated at all; `decide` whether they wake
- *  it now (`wake`), and what to record (`decision`, on `agent/input-gated`). A `decide` that throws
- *  wakes the agent. */
-export type AgentInputGate = {
-  applies(input: { path: string; from: string }): boolean;
-  decide(input: {
-    getItx: () => IterateContextApi & Disposable;
-    /** The receiving agent's path. */
-    path: string;
-    /** The sender: the other agent's context. */
-    from: string;
-    /** The input's offset on the receiving agent's log, and when it arrived. */
-    offset: number;
-    at: string;
-    content: string;
-    /** The receiver's previous inputs, oldest first (at most three). */
-    recent: string[];
-  }): Promise<{ wake: boolean; decision?: Record<string, unknown> }>;
-};
