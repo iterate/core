@@ -116,7 +116,32 @@ The files:
 ## A mind that is older than its own agent
 
 Its earlier agents ran the platform's agent, and the catalog lists them as the kind `iterate`.
-Each is taken over in place: at its next `create` or message the collection appends the own
-agent's start facts to the same context. The conversation starts anew, and the old log stays
-readable in the Dash. Every publish takes over the old agents that worked in the last 30 days, 20
-at a time, the newest first (`init.ts`).
+Each is taken over IN PLACE at its next `create` or message: the collection appends the own
+agent's start facts to the same context. The agent reads nothing that stands before its start
+fact, so its conversation starts anew. The context's rules, its schedules and the rows that other
+code put there (a call, a relay) stay as they are, and the old facts stay on the log. Every
+publish takes over the old agents that worked in the last 30 days, 20 at a time, the newest first
+(`init.ts`).
+
+TO START AN AGENT'S PATH OVER, with nothing of the old agent on it, do these four things as
+yourself (a member's session, or this repo's own code):
+
+```ts
+const agent = itx.cd(path);
+const link = await agent.rewriteRules.get("itx"); // where the agent's `itx` leads: its parent
+await agent.newVersion("the mind's own agent takes over"); // a new version of the path
+await agent.append({
+  type: "events.iterate.com/itx/rewrite-rule-configured",
+  idempotencyKey: `agent-parent:${path}`,
+  payload: { match: "itx", target: link?.target || "itx.cd('/')" },
+});
+await itx.agents.create(path); // the own agent's start facts
+```
+
+A new version ends the path's rules (but its masks), its subscriptions, its schedules and every
+facet with its storage, and a read from the start begins at the new version, so a chat shows the
+new agent's facts alone. The log goes on (`readEvents(…, { allVersions: true })`). The link is a
+rule, so you write it again: `create` writes a link at an agent's birth alone, and never onto a
+path where an agent ran. Set a schedule again if the agent needs it: the `itx/version-ended`
+event names what the version held. `itx.agents` never starts a path over by itself: a caller that
+may only create or message an agent must not be able to end its schedules and its conversation.

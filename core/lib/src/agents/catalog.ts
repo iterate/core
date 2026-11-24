@@ -69,6 +69,12 @@ const AgentCatalogContract = defineProcessorContract({
           titleFromWords: z.boolean().optional(),
           lastActivityAt: z.string().optional(),
           fieldAtOffset: z.record(z.string(), z.number()).optional(),
+          /** The offset, on the agent's log, of the copy at which the row started over: another
+           *  agent runs at the path from there on (`reduce`). */
+          startedOverAtOffset: z.number().optional(),
+          /** The version of the agent's context that the row is of (`itx.newVersion`): a copy
+           *  says it from version 2 on (`source.copiedFrom.version`). None: the first. */
+          version: z.number().optional(),
         }),
       )
       .default({}),
@@ -150,7 +156,35 @@ export class AgentCatalogProcessor extends StreamProcessor<
     const agents = state.agents[from.path]
       ? state.agents
       : withRow(state.agents, from.path, from.createdAt);
-    const row = agents[from.path]!;
+    const listed = agents[from.path]!;
+    // A PATH THAT STARTED OVER IS ANOTHER AGENT AT THE SAME PATH. What the list said of the first
+    // agent goes with it: its title, its lines, its status. Two signs say that a path started over:
+    //   - the copy is of a LATER VERSION of the context than the row (`itx.newVersion`: the
+    //     platform writes the version on every copy from version 2 on);
+    //   - the copy says ANOTHER KIND than the row has (a take-over: the mind's own agent for the
+    //     platform's, collection.ts), for a copy that carries no version.
+    // That copy is the border. A copy from before the border that lands after it is the first
+    // agent's, and changes nothing.
+    if (from.offset < (listed.startedOverAtOffset || 0))
+      return agents === state.agents ? undefined : { ...state, agents };
+    const { kind } = event.payload;
+    const version = from.version || 1;
+    const startsOver =
+      version > (listed.version || 1) ||
+      (!!kind &&
+        !!listed.kind &&
+        kind !== listed.kind &&
+        from.offset > (listed.fieldAtOffset?.kind || 0));
+    const row: AgentCatalogState["agents"][string] = startsOver
+      ? {
+          createdAt: listed.createdAt,
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- a row with no parent has no such key, as `withRow` makes it
+          ...(listed.parent && { parent: listed.parent }),
+          lastActivityAt: listed.lastActivityAt,
+          startedOverAtOffset: from.offset,
+          ...(version > 1 && { version }),
+        }
+      : listed;
     // Copies can land in any order. So each field below is blanked when what the row already has
     // should win, and the row is left alone when all end up blank.
     const { fromWords } = event.payload;
@@ -179,7 +213,13 @@ export class AgentCatalogProcessor extends StreamProcessor<
     // has later activity.
     let lastActivityAt = from.createdAt;
     if (lastActivityAt <= (row.lastActivityAt || "")) lastActivityAt = "";
-    if (!title && !lastActivityAt && Object.keys(fields).length === 0 && agents === state.agents)
+    if (
+      !title &&
+      !lastActivityAt &&
+      Object.keys(fields).length === 0 &&
+      agents === state.agents &&
+      !startsOver
+    )
       return;
     return {
       ...state,
@@ -245,7 +285,16 @@ export class AgentCatalogProcessor extends StreamProcessor<
       blockProcessorWhile(async () => {
         using itx = this.#getItx();
         try {
-          const metadata = { ...(await contextMetadata(itx, from.path)), title };
+          // THE FIRST TITLE AFTER A PATH STARTED OVER is written alone: the mind's catalog of
+          // contexts can still list the earlier version's metadata then (it is one wake behind),
+          // and a merge would carry that into the new version.
+          const startedOver =
+            typeof state.agents[from.path]?.startedOverAtOffset === "number" &&
+            !agentTitle(previousState.agents[from.path]);
+          const metadata = {
+            ...(startedOver ? {} : await contextMetadata(itx, from.path)),
+            title,
+          };
           // The mind's catalog keeps a record only while it prints this short
           // (core/itx/src/context/context-summary.ts): a longer one is dropped whole, so the
           // title is not written over metadata that would be lost with it.

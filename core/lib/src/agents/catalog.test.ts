@@ -503,6 +503,102 @@ test.for<{
   );
 });
 
+test("a copy that says another kind starts the row over: the first agent's title, lines and status go, and the new agent's first words title it", () => {
+  const { processor } = catalog();
+  const state = reduceProcessor(processor, [
+    announced(path),
+    copy({ kind: "iterate" }, 3),
+    words("Say the single word MANGO", 5),
+    copy({ status: "idle", activity: "Answering", description: "Fruit" }, 9),
+    // the path started over, and the mind's own agent runs there now
+    copy({ kind: "agent" }, 40),
+    words("Say KIWI", 44),
+    // a copy of the first agent that lands late changes nothing
+    copy({ activity: "an old line" }, 12),
+    words("An older first line", 2),
+  ]);
+  expect(state.agents[path]).toEqual({
+    ...born,
+    kind: "agent",
+    title: "Say KIWI",
+    titleAtOffset: 44,
+    titleFromWords: true,
+    startedOverAtOffset: 40,
+    fieldAtOffset: { kind: 40 },
+    lastActivityAt: at(44),
+  });
+});
+
+test("a copy of a later version of the context starts the row over, also when the kind stays the same", () => {
+  const { processor } = catalog();
+  const ofVersion = (fact: ReturnType<typeof copy>, version: number) => ({
+    ...fact,
+    source: { ...fact.source, copiedFrom: { ...fact.source.copiedFrom, version } },
+  });
+  const state = reduceProcessor(processor, [
+    announced(path),
+    copy({ kind: "agent" }, 3),
+    words("Say the single word MANGO", 5),
+    title("The fruit agent", 8),
+    // `itx.newVersion`: the platform writes the version on every copy from version 2 on
+    ofVersion(copy({ kind: "agent" }, 40), 2),
+    ofVersion(words("Say KIWI", 44), 2),
+    // the same version again starts nothing over
+    ofVersion(copy({ status: "idle" }, 50), 2),
+  ]);
+  expect(state.agents[path]).toEqual({
+    ...born,
+    kind: "agent",
+    status: "idle",
+    title: "Say KIWI",
+    titleAtOffset: 44,
+    titleFromWords: true,
+    startedOverAtOffset: 40,
+    version: 2,
+    fieldAtOffset: { kind: 40, status: 50 },
+    lastActivityAt: at(50),
+  });
+});
+
+test("the same kind again starts nothing over, and neither does a row's first kind", () => {
+  const { processor } = catalog();
+  const state = reduceProcessor(processor, [
+    announced(path),
+    words("Hello", 5),
+    copy({ kind: "agent" }, 6),
+    copy({ kind: "agent" }, 30),
+  ]);
+  expect(state.agents[path]).toMatchObject({ title: "Hello", kind: "agent" });
+  expect(state.agents[path]).not.toHaveProperty("startedOverAtOffset");
+});
+
+test("the first title after a path started over is written alone: the earlier version's metadata is not merged into it", async () => {
+  // the mind's catalog of contexts still lists what the first agent's context held
+  const { processor, appended, reads } = catalog([
+    { path, metadata: { owner: "ada", title: "Old" } },
+  ]);
+  await processAll(processor, [
+    announced(path),
+    copy({ kind: "iterate" }, 3),
+    copy({ kind: "agent" }, 40),
+    title("The new agent", 50),
+    title("Its second title", 60),
+  ]);
+  expect({
+    titled: appended
+      .filter(({ event }) => event.idempotencyKey.startsWith("agents/titled:"))
+      .map(({ event }) => event.payload),
+    reads,
+  }).toEqual({
+    titled: [
+      { metadata: { title: "The new agent" } },
+      // from the second title on the listed metadata is the new version's, and is merged
+      { metadata: { owner: "ada", title: "Its second title" } },
+    ],
+    reads: ["/"],
+  });
+});
+
 test("the listed row is read once for each change of an agent's own title, and never for the same title, a description or an activity", async () => {
   const { processor, reads } = catalog();
   await processAll(processor, [

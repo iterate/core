@@ -41,7 +41,9 @@ async function takeOverOldAgents(itx: IterateConfigProcessEventArgs<"agents">["i
     .filter((agent) => agent.kind === "iterate" && (agent.lastActivityAt || "") >= since)
     .toSorted((a, b) => (b.lastActivityAt || "").localeCompare(a.lastActivityAt || ""))
     .slice(0, OLD_AGENTS.atATime);
-  for (const agent of old) await itx.agents.create(agent.path);
+  // each agent is a step of its own: one that cannot be taken over does not stop the others
+  for (const agent of old)
+    await step(`old-agent:${agent.path}`, () => itx.agents.create(agent.path));
 }
 
 export async function init(itx: IterateConfigProcessEventArgs<"agents">["itx"]) {
