@@ -1,8 +1,8 @@
 // app.js — THE TASKS APP'S PAGE: the markdown files under tasks/ in one repo of this mind, as a
 // board. The repo is the one worker.ts points the app at (app.ts `tasksApp({ repo })`, which
 // /board.json answers; the tasks repo, tasks-model.js `TASKS_REPO`, when it names none), or the
-// one that `?repo=<name>` names (/repos/<name>): the bar's "Repo" menu lists the mind's repos,
-// and the page loads again for the one chosen.
+// one that `?repo=<name>` names (/repos/<name>): the sidebar header's repo switcher lists the
+// mind's repos, and the page loads again for the one chosen.
 // A column is a status, a card is a file (tasks-model.js says how a file is read). A person
 // makes a task, moves a card to another column (by drag, or from the card's menu), and filters the
 // board by words, by folder and by each dimension that the files hold (tags, priority, size, owner,
@@ -29,7 +29,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "@iterate-com/ui/page";
-import { AppShell, AppShellPageHeader } from "@iterate-com/ui/components/app-shell";
+import { AppShell, AppShellBrand, AppShellPageHeader } from "@iterate-com/ui/components/app-shell";
 import { ReconnectingMark } from "@iterate-com/ui/components/reconnecting-mark";
 import { Badge } from "@iterate-com/ui/components/ui/badge";
 import { Button } from "@iterate-com/ui/components/ui/button";
@@ -67,6 +67,7 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@iterate-com/ui/components/ui/sidebar";
 import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
@@ -125,6 +126,8 @@ const author = principal?.email ? { name: principal.email, email: principal.emai
 
 // The mind is its domain, and this host is one label under it.
 const domain = location.hostname.split(".").slice(1).join(".") || location.hostname;
+// The sidebar's head: the mind's icon (../../open-files.ts serves profile/icon.svg at /icon.svg).
+const MIND_ICON = html`<img src="/icon.svg" alt="" className="size-8 rounded-md" />`;
 /** THE REPO WHOSE TASKS THE BOARD SHOWS, by its name: the one `?repo=` names, else the repo the
  *  board points at (`BOARD_REPO`) when the mind has it, else `config` (so a new mind's
  *  onboarding cards under `tasks/` in `/repos/config` appear before the tasks repo is made).
@@ -669,7 +672,7 @@ function App() {
     <${AppShell}
       app="Tasks"
       mind=${domain}
-      mindHref=${() => "./"}
+      switcher=${html`<${RepoSwitcher} repos=${repos} />`}
       nav=${html`<${Nav} tasks=${state.tasks} dimensions=${dimensions} view=${view} />`}
       account=${principal}
       locationKey=${location.pathname + location.search}
@@ -688,27 +691,6 @@ function App() {
               onKeyDown=${(event) => event.key === "Escape" && event.target.blur()}
             />
           </label>
-          <${DropdownMenu}>
-            <${DropdownMenuTrigger}
-              render=${html`<${Button} variant="ghost" size="sm" className="tasks-group" />`}
-            >
-              <span>Repo<span class="tasks-wide">: ${REPO_NAME}</span></span>
-              <${ChevronDownIcon} data-icon="inline-end" />
-            <//>
-            <${DropdownMenuContent} align="start" className="task-menu-popup">
-              <${DropdownMenuGroup}>
-                <${DropdownMenuLabel}>Tasks of the repo<//>
-                <${DropdownMenuRadioGroup} value=${REPO_NAME} onValueChange=${showRepo}>
-                  ${repos.map(
-                    (name) =>
-                      html`<${DropdownMenuRadioItem} key=${name} value=${name} closeOnClick=${true}
-                        >${name}<//
-                      >`,
-                  )}
-                <//>
-              <//>
-            <//>
-          <//>
           ${
             dimensions.length > 0 &&
             html`
@@ -893,6 +875,68 @@ function Nav({ tasks, dimensions, view }) {
         <//>
       `,
     )}
+  `;
+}
+
+/** The sidebar's head: Tasks + the active repo, with a dropdown to switch repos when the mind has
+ *  more than one, or a plain brand when it has one. */
+function RepoSwitcher({ repos }) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  if (repos.length <= 1) {
+    return html`<${AppShellBrand} app="Tasks" line=${REPO_NAME} logo=${MIND_ICON} href="./" />`;
+  }
+  return html`
+    <${SidebarMenu}>
+      <${SidebarMenuItem}>
+        <${DropdownMenu}>
+          <${DropdownMenuTrigger}
+            render=${html`
+              <${SidebarMenuButton}
+                size="lg"
+                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+                aria-label=${`Repo: ${REPO_NAME}`}
+              >
+                <span
+                  className="flex aspect-square size-8 items-center justify-center rounded-md bg-black"
+                >
+                  ${MIND_ICON}
+                </span>
+                <span className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">Tasks</span>
+                  <span className="truncate text-xs text-muted-foreground">${REPO_NAME}</span>
+                </span>
+                <${ChevronDownIcon} className="ml-auto" />
+              <//>
+            `}
+          />
+          <${DropdownMenuContent}
+            align="start"
+            side=${isMobile ? "bottom" : "right"}
+            sideOffset=${4}
+            className="min-w-56 rounded-lg"
+          >
+            <${DropdownMenuGroup}>
+              <${DropdownMenuLabel}>Tasks of the repo<//>
+              ${repos.map(
+                (name) => html`
+                  <${DropdownMenuItem}
+                    key=${name}
+                    className="gap-2"
+                    onClick=${() => {
+                      if (isMobile) setOpenMobile(false);
+                      showRepo(name);
+                    }}
+                  >
+                    <span className="truncate">${name}</span>
+                    ${name === REPO_NAME ? html`<${CheckIcon} className="ml-auto" />` : null}
+                  <//>
+                `,
+              )}
+            <//>
+          <//>
+        <//>
+      <//>
+    <//>
   `;
 }
 

@@ -27,10 +27,23 @@ import {
   fileKind,
 } from "@iterate-com/ui/components/docs-editor/docs-editor";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/ui/dropdown-menu";
+import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
 } from "@iterate-com/ui/components/ui/sidebar";
+import { CheckIcon, ChevronDownIcon } from "@iterate-com/ui/icons";
 import { newWebSocketRpcSession } from "@iterate-com/ui/live";
 
 // ── the member's itx ──
@@ -186,6 +199,8 @@ function App() {
   const repo = params.get("repo") || "config";
   const path = params.get("doc") || undefined;
   const commentOnly = params.get("mode") === "comment";
+  const repos = useRead("repos", async () => repoNames(await itx.repos.list()));
+  const names = repos?.value || [];
   // one list per repo: the tree and the doc list read the same one
   const list = useMemo(() => new DocList(itx, `/repos/${repo}`), [repo]);
   const open = useCallback((file) => go(hrefOf({ doc: file, mode: undefined })), []);
@@ -193,13 +208,75 @@ function App() {
     <${AppShell}
       app="Docs"
       mind=${mind}
-      mindHref=${() => "./"}
-      switcher=${html`<${AppShellBrand} app="Docs" line=${mind} logo=${MIND_ICON} href="./" />`}
+      switcher=${html`<${RepoSwitcher} repo=${repo} repos=${names} />`}
       nav=${html`<${Files} repo=${repo} list=${list} path=${path} open=${open} />`}
       account=${principal}
       locationKey=${location.pathname + search}
     >
       <${Page} repo=${repo} path=${path} commentOnly=${commentOnly} list=${list} open=${open} />
+    <//>
+  `;
+}
+
+/** The sidebar's head: Docs + the active repo, with a dropdown to switch repos when the mind has
+ *  more than one, or a plain brand when it has one. */
+function RepoSwitcher({ repo, repos }) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  if (repos.length <= 1) {
+    return html`<${AppShellBrand} app="Docs" line=${repo} logo=${MIND_ICON} href="./" />`;
+  }
+  return html`
+    <${SidebarMenu}>
+      <${SidebarMenuItem}>
+        <${DropdownMenu}>
+          <${DropdownMenuTrigger}
+            render=${html`
+              <${SidebarMenuButton}
+                size="lg"
+                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+                aria-label=${`Repo: ${repo}`}
+              >
+                <span
+                  className="flex aspect-square size-8 items-center justify-center rounded-md bg-black"
+                >
+                  ${MIND_ICON}
+                </span>
+                <span className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">Docs</span>
+                  <span className="truncate text-xs text-muted-foreground">${repo}</span>
+                </span>
+                <${ChevronDownIcon} className="ml-auto" />
+              <//>
+            `}
+          />
+          <${DropdownMenuContent}
+            align="start"
+            side=${isMobile ? "bottom" : "right"}
+            sideOffset=${4}
+            className="min-w-56 rounded-lg"
+          >
+            <${DropdownMenuGroup}>
+              <${DropdownMenuLabel}>Repos<//>
+              ${repos.map(
+                (name) => html`
+                  <${DropdownMenuItem}
+                    key=${name}
+                    className="gap-2"
+                    onClick=${() => {
+                      if (name !== repo)
+                        go(hrefOf({ repo: name, doc: undefined, mode: undefined }));
+                      if (isMobile) setOpenMobile(false);
+                    }}
+                  >
+                    <span className="truncate">${name}</span>
+                    ${name === repo ? html`<${CheckIcon} className="ml-auto" />` : null}
+                  <//>
+                `,
+              )}
+            <//>
+          <//>
+        <//>
+      <//>
     <//>
   `;
 }
@@ -225,25 +302,11 @@ function Page({ repo, path, commentOnly, list, open }) {
   `;
 }
 
-/** The sidebar: the repo's name, or a picker when the mind has more than one repo, and its files
- *  as a tree. */
+/** The sidebar: the repo's name and its files as a tree. */
 function Files({ repo, list, path, open }) {
-  const repos = useRead("repos", async () => repoNames(await itx.repos.list()));
-  const names = repos?.value || [];
-  const picker = html`
-    <select
-      class="docs-repo"
-      aria-label="Repo"
-      value=${repo}
-      onChange=${(event) =>
-        go(hrefOf({ repo: event.target.value, doc: undefined, mode: undefined }))}
-    >
-      ${names.map((name) => html`<option key=${name} value=${name}>${name}</option>`)}
-    </select>
-  `;
   return html`
     <${SidebarGroup}>
-      <${SidebarGroupLabel}>${names.length > 1 ? picker : repo}<//>
+      <${SidebarGroupLabel}>${repo}<//>
       <${SidebarGroupContent}>
         <${DocTree} list=${list} openPath=${path} onOpen=${open} author=${author} />
       <//>

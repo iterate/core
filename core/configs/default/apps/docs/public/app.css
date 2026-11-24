@@ -13,12 +13,3 @@ body,
   color: var(--muted-foreground);
   font-size: 0.875rem;
 }
-
-/* the repo picker in the sidebar's label, when the mind has more than one repo */
-.docs-repo {
-  max-width: 100%;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-}
