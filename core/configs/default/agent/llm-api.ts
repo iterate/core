@@ -124,7 +124,8 @@ export type LlmApi = {
     path(modelName: string): string;
     /** Through the gateway the model is named by `itx.ai.run`; straight to a server, in the body. */
     modelInBody: boolean;
-    headers?: Record<string, string>;
+    /** The headers this body goes with, under the provider's own (`llmProviders.<name>.headers`). */
+    headers?(body: Record<string, unknown>): Record<string, string>;
   };
   /** A way of its own to its model for this attempt, or null for the gateway or the `baseUrl`. */
   transport?(attempt: {
@@ -877,15 +878,15 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
       const { direct } = this.deps.api;
       const name = modelNameOf(request.model);
       const url = `${provider.baseUrl.replace(/\/$/, "")}${direct.path(name)}`;
-      const headers = {
-        "content-type": "application/json",
-        ...direct.headers,
-        ...provider.headers,
-      };
       return {
         name: "direct",
         events: (body) => {
           const sent = direct.modelInBody ? { model: name, ...body } : body;
+          const headers = {
+            "content-type": "application/json",
+            ...direct.headers?.(body),
+            ...provider.headers,
+          };
           const init = { method: "POST", headers, body: JSON.stringify(sent) };
           return this.directEvents(state, through, url, init, signal);
         },
@@ -1296,7 +1297,9 @@ function base64Of(bytes: Uint8Array): string {
 
 // ── an HTTP answer, as the API's events ──
 
-/** Server-sent events, or one JSON body, as the API's events, one by one. */
+/** Server-sent events, or one JSON body, as the API's events, one by one. The content-type says
+ *  which. An answer with none says it by its first character: one JSON body starts with `{` or `[`,
+ *  and server-sent events never do. OpenAI sends a ChatGPT plan token's stream with no content-type. */
 async function* httpEvents(
   response: Response,
   idleMs: number,
@@ -1306,12 +1309,18 @@ async function* httpEvents(
   const reader = response.body?.getReader();
   if (!reader) throw new LlmRequestFailure("transport", "the answer has no body");
   const decoder = new TextDecoder();
-  const eventStream = response.headers.get("content-type")?.includes("text/event-stream");
+  const contentType = response.headers.get("content-type");
+  let eventStream = contentType ? contentType.includes("text/event-stream") : null;
   let buffered = "";
   try {
     for (;;) {
       const { value, done } = await unlessIdleOrAborted(reader.read(), idleMs, signal);
       buffered += decoder.decode(value, { stream: !done });
+      if (eventStream === null) {
+        const start = buffered.trimStart();
+        if (start === "" && !done) continue; // nothing to tell them apart by yet
+        eventStream = !start.startsWith("{") && !start.startsWith("[");
+      }
       if (!eventStream && !done) continue; // one JSON body: read it whole
       const lines = eventStream ? buffered.split("\n") : [];
       if (eventStream) buffered = done ? "" : (lines.pop() ?? "");

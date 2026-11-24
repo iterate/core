@@ -512,12 +512,17 @@ test("one exchange: the request, its exact bytes, the frames, the settlement, th
   // through the AI Gateway, with the provider's own body and no key
   const [call] = agent.calls;
   assert.equal(call.model, "openai/gpt-6.2-sol");
-  assert.deepEqual(call.body.input, [{ role: "user", content: "hello" }]);
+  // the prompt is the first input item, a `developer` message, and the body has no `instructions`:
+  // a ChatGPT plan's token reads the prompt cache only then (llm-apis/openai-responses.ts)
+  const [prompt, ...conversation] = call.body.input;
+  assert.equal(call.body.instructions, undefined);
+  assert.equal(prompt.role, "developer");
+  assert.deepEqual(conversation, [{ role: "user", content: "hello" }]);
   assert.equal(call.body.prompt_cache_key, "/agents/test");
   assert.equal(call.body.store, false);
-  // no tool: the instructions teach the one `<codemode>` block
+  // no tool: the prompt teaches the one `<codemode>` block
   assert.equal(call.body.tools, undefined);
-  assert.match(call.body.instructions, /YOUR RESPONSE IS ONE SCRIPT AND NOTHING ELSE/);
+  assert.match(prompt.content, /YOUR RESPONSE IS ONE SCRIPT AND NOTHING ELSE/);
   assert.deepEqual(call.options, {
     returnRawResponse: true,
     gateway: {
@@ -554,7 +559,7 @@ test("one exchange: the request, its exact bytes, the frames, the settlement, th
     // the request maker's own id: another instance's attempt-started has another body
     instanceId: started.payload?.instanceId,
     transport: "gateway",
-    inputChars: { instructions: call.body.instructions.length, words: 5 },
+    inputChars: { instructions: prompt.content.length, words: 5 },
     inputFileBytes: 0,
   });
   assert.match(String(started.payload?.instanceId), /^[0-9a-f-]{36}$/);
@@ -689,7 +694,7 @@ test("thinking with no words: a frame says `thinking` at once, and each window's
 test("an input is read once, whoever hosts the agent", async () => {
   const agent = agentOnALog({ model: () => openai({ say: "Got it." }) });
   const [input] = await agent.say("read this");
-  assert.equal(agent.calls[0].body.input[0].content, "read this");
+  assert.equal(agent.calls[0].body.input.at(-1).content, "read this");
 
   // a new host reads the same input again and writes nothing new
   await agent.wake().revive();
@@ -711,7 +716,7 @@ test("an input that is context only says so, and starts no request", async () =>
   assert.equal(agent.calls.length, 0);
   await agent.say("what did I tell you?");
   assert.deepEqual(
-    agent.calls[0].body.input.map((item) => item.content),
+    agent.calls[0].body.input.slice(1).map((item) => item.content),
     ["for your information", "what did I tell you?"],
   );
 });
@@ -724,7 +729,7 @@ test("anything else writes the agent's input directly, with the policy it wants"
   });
   assert.equal(agent.calls.length, 0);
   await agent.add("deploy it");
-  assert.deepEqual(agent.calls[0].body.input, [
+  assert.deepEqual(agent.calls[0].body.input.slice(1), [
     { role: "developer", content: "the build is green" },
     { role: "user", content: "deploy it" },
   ]);
@@ -753,7 +758,7 @@ test("one block: its script runs, its result answers it, and the chain goes on",
   await agent.runScripts();
   assert.deepEqual(agent.said(), ["Looking."]);
   assert.equal(agent.calls.length, 2);
-  assert.deepEqual(agent.calls[1].body.input, [
+  assert.deepEqual(agent.calls[1].body.input.slice(1), [
     { role: "user", content: "do two things" },
     // the model's own output items, verbatim: its one block
     ...answerItems({ say: "Looking.", script }),
@@ -1180,6 +1185,73 @@ test("a server in a basement: one config fact, and its Chat Completions are aske
   assert.deepEqual(agent.invalidFacts(), []);
 });
 
+/** OpenAI straight at its own address, paid by a ChatGPT plan: the provider of the next three tests. */
+const openaiByPlan = {
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+  headers: { authorization: 'Bearer getSecret("/secrets/chatgpt", { field: "accessToken" })' },
+};
+
+/** An answer with no content-type, as OpenAI sends a ChatGPT plan token's stream. */
+const withNoContentType = (text) => new Response(new TextEncoder().encode(text));
+
+test("a ChatGPT plan's token straight to OpenAI: its stream has no content-type and is read as server-sent events, and the request names its session", async () => {
+  const seen = [];
+  const agent = agentOnALog({
+    config: { llmProviders: { openai: openaiByPlan } },
+    model: () => assert.fail("the gateway is not used"),
+    fetch: async (request) => {
+      seen.push({ headers: Object.fromEntries(request.headers), body: await request.json() });
+      // as OpenAI sends it: an `event:` line and a `data:` line for each event
+      const events = openaiEvents({ say: "Hello from the plan." });
+      return withNoContentType(
+        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+      );
+    },
+  });
+  await agent.say("hello");
+  assert.deepEqual(agent.said(), ["Hello from the plan."]);
+  const [sent] = agent.durable("events.iterate.com/llm-request/attempt-started");
+  assert.equal(sent.payload?.transport, "direct");
+  // the session is the agent's cache key: over HTTP a plan's token reads the prompt cache only
+  // with it, and only with the prompt as the first input item
+  const [asked] = seen;
+  assert.equal(asked.headers.session_id, "/agents/test");
+  assert.equal(asked.body.prompt_cache_key, "/agents/test");
+  assert.equal(asked.body.instructions, undefined);
+  assert.equal(asked.body.input[0].role, "developer");
+  assert.deepEqual(agent.invalidFacts(), []);
+});
+
+test("an answer with no content-type that is one JSON body is read as JSON", async () => {
+  const agent = agentOnALog({
+    config: { llmProviders: { openai: openaiByPlan } },
+    model: () => assert.fail("the gateway is not used"),
+    // every event of the answer in one JSON array
+    fetch: async () =>
+      withNoContentType(`\n${JSON.stringify(openaiEvents({ say: "Hello in one body." }))}`),
+  });
+  await agent.say("hello");
+  assert.deepEqual(agent.said(), ["Hello in one body."]);
+  assert.deepEqual(agent.invalidFacts(), []);
+});
+
+test("a cache key that a header cannot hold goes escaped in `session_id`, and a provider's own header wins", async () => {
+  const seen = [];
+  const asks = (provider) =>
+    agentOnALog({
+      config: { llm: { promptCacheKey: "/agents/zoë ☃" }, llmProviders: { openai: provider } },
+      model: () => assert.fail("the gateway is not used"),
+      fetch: async (request) => {
+        seen.push(request.headers.get("session_id"));
+        return openai({ say: "Hello." });
+      },
+    }).say("hello");
+  await asks(openaiByPlan);
+  await asks({ ...openaiByPlan, headers: { ...openaiByPlan.headers, session_id: "my-own" } });
+  assert.deepEqual(seen, ["/agents/zo%C3%AB%20%E2%98%83", "my-own"]);
+});
+
 test("an AI binding by expression: one config fact, and the requests go through its `run`, not `itx.ai`", async () => {
   const lent = [];
   const agent = agentOnALog({
@@ -1310,7 +1382,7 @@ test("several requests at once: one request maker has them all in flight togethe
   await agent.append(asked(1), asked(2), asked(3));
   assert.equal(agent.calls.length, 3, "all three are sent before any answers");
   // (in flight together, they reach the model in any order)
-  assert.deepEqual(agent.calls.map((call) => call.body.instructions).toSorted(), [
+  assert.deepEqual(agent.calls.map((call) => call.body.input[0].content).toSorted(), [
     "You are expert 1.",
     "You are expert 2.",
     "You are expert 3.",
@@ -1369,7 +1441,8 @@ test("the model changes mid-conversation: its own items verbatim, another model'
   await agent.append(model("openai/gpt-6.2-sol"));
   await agent.say("thanks");
   const { input } = agent.calls[2].body;
-  assert.equal(input[1].type, "message", "OpenAI's own first response is given back verbatim");
+  // (after the prompt and the first words)
+  assert.equal(input[2].type, "message", "OpenAI's own first response is given back verbatim");
   assert.deepEqual(input.slice(-3), [
     { role: "assistant", content: written({ say: "It is 1." }) },
     { role: "developer", content: "Result of script 1:\n(it returned nothing)" },
@@ -1422,7 +1495,8 @@ test("the WebSocket: dialled once, kept between requests, OpenAI's own frames, n
   // the second request's fact repeats nothing: it extends the first (then the answer, its result
   // and the new words)
   assert.equal(second.payload?.extendsRequestStartedOffset, first.offset);
-  assert.equal(second.payload?.inputItemCountBefore, 1);
+  // (what it shares with the first: the prompt and the first words)
+  assert.equal(second.payload?.inputItemCountBefore, 2);
   assert.equal(second.payload.inputItemsAdded.length, 3);
   // the socket's own fact: dialled once for two requests (the test's clock stands still)
   assert.deepEqual(
@@ -1545,7 +1619,7 @@ test("an interrupt: the request is cancelled with what it had written, and the n
   assert.ok(result.usage.inputTokens > 0 && result.usage.costUsd > 0);
   assert.equal(answered.payload.result.status, "succeeded");
 
-  assert.deepEqual(agent.calls[1].body.input, [
+  assert.deepEqual(agent.calls[1].body.input.slice(1), [
     { role: "user", content: "write me a long story" },
     {
       role: "developer",
@@ -1574,7 +1648,7 @@ test("words that wait: by default a second message waits for the open request, t
   await agent.quiet();
   assert.equal(agent.calls.length, 2);
   assert.deepEqual(
-    agent.calls[1].body.input.map((item) => item.type ?? item.content),
+    agent.calls[1].body.input.slice(1).map((item) => item.type ?? item.content),
     ["first", "message", "Result of script 1:\n(it returned nothing)", "second"],
   );
   assert.deepEqual(agent.said(), ["First.", "Second."]);
@@ -1873,13 +1947,13 @@ test("rent or purchase: when the rent paid reaches a summary's cost, a summary r
     { purpose: "summary", through: answer.offset },
   );
   // the summary request reads the same history with the same instructions and tools: a cache hit
-  assert.deepEqual(agent.calls[1].body.input.slice(0, -1), [
+  assert.deepEqual(agent.calls[1].body.input.slice(1, -1), [
     { role: "user", content: "hello" },
     ...answerItems({ say: "Hello." }),
     { role: "developer", content: "Result of script 1:\n(it returned nothing)" },
   ]);
   assert.deepEqual(agent.calls[1].body.tools, agent.calls[0].body.tools);
-  assert.equal(agent.calls[1].body.instructions, agent.calls[0].body.instructions);
+  assert.deepEqual(agent.calls[1].body.input[0], agent.calls[0].body.input[0]);
 
   const state = await agent.state();
   assert.deepEqual(
@@ -1894,7 +1968,7 @@ test("rent or purchase: when the rent paid reaches a summary's cost, a summary r
   );
   assert.equal(state.history.rentUsd, 0);
   await agent.say("and now?");
-  assert.deepEqual(agent.calls[2].body.input, [
+  assert.deepEqual(agent.calls[2].body.input.slice(1), [
     {
       role: "developer",
       content: "Summary of the conversation before this point:\nThe user greeted; nothing is open.",
@@ -1979,8 +2053,9 @@ test("the conversation no longer fits the model: a summary of the older half fir
   assert.equal(summary?.payload?.purpose, "summary");
   await agent.fire("agent/timer");
   const answer = agent.calls.at(-1)?.body.input;
+  // (after the prompt)
   assert.equal(
-    answer[0].content,
+    answer[1].content,
     "Summary of the conversation before this point:\nThe older half, summarised.",
   );
   assert.deepEqual(answer.at(-1), { role: "user", content: "three" });
@@ -2016,7 +2091,7 @@ test("a `side` request, the small fact, off the second of seven requests: its ba
   // its body begins with the bytes of the second request's body, and carries the same key
   const secondBytes = JSON.stringify(secondCall.body);
   assert.ok(JSON.stringify(sideCall.body).startsWith(secondBytes.slice(0, -"]}".length)));
-  assert.equal(sideCall.body.instructions, secondCall.body.instructions);
+  assert.deepEqual(sideCall.body.input[0], secondCall.body.input[0]);
   assert.equal(sideCall.body.prompt_cache_key, "/agents/test");
   // the request maker read its base from the log: it holds only the newest two
   const settled = agent.durable("events.iterate.com/llm-request/settled").at(-1);

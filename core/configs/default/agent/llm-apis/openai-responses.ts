@@ -12,6 +12,13 @@
 // Two facts of this API's own say what the socket did: `openai-responses/websocket-connected` when it
 // was dialled, `openai-responses/websocket-closed` when it closed. A close while no attempt runs is
 // written by the next attempt.
+//
+// THE PROMPT CACHE OF A CHATGPT PLAN'S TOKEN reads a growing conversation only when two things hold,
+// and an API key reads it either way. The prompt is the first item of `input`, a `developer`
+// message, and not the field `instructions` (`body`). And a request over HTTP names its session in
+// the header `session_id` (`direct.headers`); the kept WebSocket needs no such header. Over HTTP
+// with both, the second request of a conversation read 4,224 of its 4,308 input tokens from the
+// cache; with either one missing, five requests read none (gpt-6.2-sol, 24 November 2026).
 
 import { z } from "zod";
 import {
@@ -61,7 +68,12 @@ export function openaiResponses(host: OpenaiResponsesHost = {}): LlmApi {
 
   return {
     name: "openai-responses",
-    direct: { path: () => "/responses", modelInBody: true },
+    direct: {
+      path: () => "/responses",
+      modelInBody: true,
+      // the session is the agent's cache key, as a header's value takes it
+      headers: (body) => ({ session_id: encodeURI(String(body.prompt_cache_key)) }),
+    },
     filePart,
     events: {
       "websocket-connected": {
@@ -82,7 +94,7 @@ export function openaiResponses(host: OpenaiResponsesHost = {}): LlmApi {
     },
 
     body({ model, instructions, items, cacheKey, reasoningEffort, maxOutputTokens }) {
-      const input = items.flatMap((item): unknown[] => {
+      const conversation = items.flatMap((item): unknown[] => {
         if (item.tag !== "llm-response") {
           const { parts, text } = item;
           const content = parts.length > 0 ? [...parts, { type: "input_text", text }] : text;
@@ -92,8 +104,9 @@ export function openaiResponses(host: OpenaiResponsesHost = {}): LlmApi {
           ownItemsOf(item, model) ?? (item.text ? [{ role: "assistant", content: item.text }] : [])
         );
       });
+      // the prompt is the first item, and the body has no `instructions` (THE PROMPT CACHE, above)
+      const input = [{ role: "developer", content: instructions }, ...conversation];
       const bodyWithoutInput = {
-        instructions,
         stream: true,
         // nothing is kept on OpenAI's side: the log is the memory, and the encrypted reasoning
         // comes back in the output items for the next request

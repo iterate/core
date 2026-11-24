@@ -193,7 +193,9 @@ test("a script appends `agent/subagent-requested` with `copyContext`: the child 
   assert.equal(childRequest.payload?.promptCacheKey, PARENT);
   const [first] = child.calls;
   const last = parent.calls.at(-1);
-  assert.equal(first.body.instructions, last.body.instructions);
+  // (the prompt is the first input item)
+  assert.equal(first.body.input[0].role, "developer");
+  assert.deepEqual(first.body.input[0], last.body.input[0]);
   assert.equal(first.body.prompt_cache_key, PARENT);
   const lastBytes = JSON.stringify(last.body);
   assert.ok(JSON.stringify(first.body).startsWith(lastBytes.slice(0, -"]}".length)));

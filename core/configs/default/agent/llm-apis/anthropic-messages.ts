@@ -21,7 +21,7 @@ export const anthropicMessages: LlmApi = {
   direct: {
     path: () => "/messages",
     modelInBody: false,
-    headers: { "anthropic-version": "2023-06-01" },
+    headers: () => ({ "anthropic-version": "2023-06-01" }),
   },
   filePart({ contentType }, base64) {
     const source = { type: "base64", media_type: contentType, data: base64 };
