@@ -211,11 +211,12 @@ export const AgentConfig = z.object({
   /** The AI Gateway of a provider with no `baseUrl`. (A mind enrolled in iterate Cloud gets the
    *  Cloud's gateway whatever it names.) */
   aiGateway: z.object({ id: z.string().min(1).default("default") }).prefault({}),
-  /** What an input that names no policy of its own does to a request that is open: wait for it,
-   *  or interrupt it. */
-  llmRequestPolicy: z
-    .object({ behaviour: z.enum(["after-current-request", "interrupt-current-request"]) })
-    .default({ behaviour: "after-current-request" }),
+  /** What an input of role `user` or `developer` that names no policy of its own does: wait for
+   *  the open request, interrupt it, or START NOTHING (`dont-trigger-request`). With the last, the
+   *  mind's own code decides which input starts a request: an input that must start one says so in
+   *  its own policy, and for any other the mind's code appends `agent/llm-request-triggered`. A
+   *  gate on words between agents is built so. A script's result still starts the next request. */
+  llmRequestPolicy: LlmRequestPolicy.default({ behaviour: "after-current-request" }),
   /** How long the agent waits between wanting a request and asking, so that more context can be
    *  added to the same request. 0 asks at once. */
   llmRequestDebounceMs: z.number().int().nonnegative().default(0),

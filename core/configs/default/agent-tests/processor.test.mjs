@@ -195,6 +195,40 @@ const triggerNow = {
   payload: { reason: "the person asked a direct question", inputOffset: 3 },
 };
 
+test("an agent whose config says that inputs start nothing: only an input with a policy of its own, or the trigger, starts a request", () => {
+  const gated = {
+    type: "events.iterate.com/agent/configured",
+    payload: { config: { llmRequestPolicy: { behaviour: "dont-trigger-request" } } },
+  };
+  const words = (content, llmRequestPolicy) => ({
+    type: "events.iterate.com/agent/context-added",
+    payload: { role: "user", content, llmRequestPolicy },
+  });
+  // the config is taken, and an input with no policy of its own is context only
+  const quiet = fold(gated, words("a note from another agent"));
+  assert.equal(quiet.config.llmRequestPolicy.behaviour, "dont-trigger-request");
+  assert.deepEqual(owes(quiet), []);
+  assert.deepEqual(quiet.pendingTriggerOffsets, []);
+  // an input that says what it starts is not held by the config
+  const asked = fold(
+    gated,
+    words("a note from another agent"),
+    words("a person's words", { behaviour: "after-current-request" }),
+  );
+  assert.deepEqual(owes(asked), ["llm-request/requested + itx/schedule-set + itx/schedule-set"]);
+  // the request reads the quiet note too: it is in the conversation
+  assert.deepEqual(
+    asked.obligations[0].events[0].payload.itemsAdded.map((item) => item.text),
+    ["a note from another agent", "a person's words"],
+  );
+  // and the mind's code starts a request for a quiet input with the trigger
+  const woken = fold(gated, words("a note from another agent"), {
+    type: "events.iterate.com/agent/llm-request-triggered",
+    payload: { reason: "triage says NOW", inputOffset: 4 },
+  });
+  assert.deepEqual(owes(woken), ["llm-request/requested + itx/schedule-set + itx/schedule-set"]);
+});
+
 test("the trigger after context only: a request at once, through a debounce, and it names the trigger", () => {
   const configured = {
     type: "events.iterate.com/agent/configured",
