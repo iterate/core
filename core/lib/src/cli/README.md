@@ -81,19 +81,23 @@ What it does, in order:
      API Token Provisioning"): `STACK_SCOPES` in [cloudflare-access.ts](cloudflare-access.ts) says
      which resource needs each scope.
 2. **The account.** One that you selected on Cloudflare's page, or a new one in your name
-   (`--new-account`): Cloudflare allows a login five extra accounts. An approval covers only the
-   accounts selected on that page, so for a new account, or one you did not select, Cloudflare
-   asks once more.
+   (`--new-account`): one Cloudflare login can own several accounts (up to five extra), giving the
+   mind a clean, separate place. An approval covers only the accounts selected on that page, so for
+   a new account, or one you did not select, Cloudflare asks once more.
 3. **The domain.** One unified list puts **Buy a brand new domain** at the top (available names
    made from your name with their yearly price, plus **Enter a brand new domain name and buy
-   that** to type a domain or keywords) and **Use an existing cloudflare zone** right below it. It
+   that** to type a domain or keywords) and **Use an existing cloudflare zone** right below it. If
+   a typed domain is taken and not yours at another registrar, the command checks alternatives made
+   from its stem and shows them in the same picker. It
    asks before it buys, with the price; `--buy` is the yes. Cloudflare charges the account's
    payment method and registers the domain to the account's contact. Both are set on Cloudflare's
    own pages: an account that never registered a domain is sent to the page for its contact details
    first, and a purchase that Cloudflare refuses says why and opens the page where that is set.
    A domain from another registrar you add on Cloudflare's own page, and the command waits until
-   the account has it. The mind takes a whole domain that nothing else uses (a new one is
-   best; a subdomain works when it is a zone of its own). A domain of the account with a route of
+   the account has it; once the zone appears as pending, it prints the nameservers to set and
+   reminds you to turn DNSSEC off at the current registrar first. The mind takes a whole domain that
+   nothing else uses, so it can be the domain's site, mail and apps (a new one is best; a subdomain
+   works when it is a zone of its own). A domain of the account with a route of
    another Worker, or with an A, AAAA, CNAME or MX record, is in use: the command says what is
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
