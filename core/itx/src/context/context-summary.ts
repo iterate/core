@@ -128,6 +128,14 @@ export class ContextSummaryTracker {
     );
   }
 
+  /** A new version of the context: the summary is of that version's own log, folded from its
+   *  start at the next `current`. */
+  startOver(): void {
+    this.#summary = EMPTY_CONTEXT_SUMMARY;
+    this.#storedThroughOffset = -1;
+    this.#atHead = false;
+  }
+
   /** The summary as far as one bounded catch-up brings it, stored when it moved. */
   current(): ContextSummary {
     let summary = this.#loaded();

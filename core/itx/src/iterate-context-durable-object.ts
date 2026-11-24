@@ -8,6 +8,7 @@ import {
   ITERATE_CAUSE_HEADER,
   releaseRpcSessions,
   reportIssue,
+  withTimeout,
 } from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
@@ -317,7 +318,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // No wake record here: the first entry point names the wake and its cause, and a call past the
     // loop limit wakes nothing. Not awaited: the runtime holds every event until this settles.
     void this.ctx.blockConcurrencyWhile(async () => {
+      // The alarm first, so the emptying's reconcile meets the earlier version's alarm and clears it.
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
+      if (this.#stream.owesEmptying()) this.#emptyWhatTheEarlierVersionLeft();
       // Before this incarnation writes anything, so a facet evicted mid-write meets no commit stopped.
       await this.#residency.resetUnclaimedFacetsAtBirth();
       this.#stream.storage.countIncarnation();
@@ -538,7 +541,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   async read(
     afterOffset = 0,
     limit = 500,
-    options: { includeEphemeral?: boolean } = {},
+    options: { includeEphemeral?: boolean; allVersions?: boolean } = {},
   ): Promise<StreamPage> {
     this.#inboundRequestInOneTurn("read");
     return this.#stream.read(afterOffset, limit, options);
@@ -619,14 +622,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     requester: Requester | undefined,
   ): Promise<void> {
     const cause = this.#stream.coreReducedState.scriptRuns[requestOffset]?.cause;
-    // Straight onto the stream: no writer can append the platform's own record.
-    const settle = (settlement: RunSettlement) =>
+    // Straight onto the stream: no writer can append the platform's own record. A run that is no
+    // longer open was settled already: by a new version, whose log its key no longer dedupes.
+    const settle = (settlement: RunSettlement) => {
+      if (!this.#stream.coreReducedState.scriptRuns[requestOffset]) return;
       this.#stream.append({
         type: "events.iterate.com/itx/run-settled",
         idempotencyKey: `itx/run-settled:${requestOffset}`,
         payload: { requestOffset, settlement },
         source: cause && { cause },
       });
+    };
     try {
       const { signingSecret, loader } = itxHost();
       const scriptCause =
@@ -756,6 +762,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       abort: (name, reason) => this.#facetHost.abort(name, reason),
     },
     abortAfterTheAnswer: (message) => this.#abortAfterTheAnswer(message),
+    startNewVersion: (reason, source) => this.#startNewVersion(reason, source),
     schedules: {
       list: () => Object.values(this.#stream.coreReducedState.schedules),
       get: (key) => this.#stream.coreReducedState.schedules[key] ?? null,
@@ -803,6 +810,117 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     caller: () => this.#caller,
   });
+
+  // This incarnation only ends the version: the next one empties what it left and is born
+  // (`#emptyWhatTheEarlierVersionLeft`, `Stream.appendBirthRecord`). From the capstone on the
+  // stream refuses every append. The answer waits out the rule snapshots that other isolates
+  // hold, as a commit that takes a rule away does: when it leaves, no grant of the earlier
+  // version answers anywhere.
+  async #startNewVersion(
+    reason: string | undefined,
+    source: NonNullable<StreamEventInput["source"]>,
+  ): Promise<StreamEvent> {
+    const { path } = this.#durableObjectAddress;
+    // A client's subscription row goes with the version, so the capstone batch is the one word its
+    // live callback gets: its library (`iterate/client`) clears what it holds, subscribes again and
+    // reads the new version from its start. The rows are evaluated while they and the rules stand;
+    // the refusals below come after this, in the batch's own turn.
+    const liveCallbacks = await this.#subscriptionDelivery.liveCallbacks();
+    if (path === "/")
+      throw codedError(
+        "INVALID_CONTEXT",
+        "itx.newVersion: the root holds the mind's routes and its published config; a new version of it is not supported",
+      );
+    const firstParty = this.#facetHost.firstPartyFacetsHosted();
+    if (firstParty.length > 0)
+      throw codedError(
+        "INVALID_CONTEXT",
+        `itx.newVersion: ${path} hosts the first-party facets ${firstParty.join(", ")}, which keep resources outside this context (a repo, a sandbox, a workspace, mail, integrations); a new version would leave them behind`,
+      );
+    const caller = this.#caller;
+    // The masks stay, and so does a rule at one of the context's own verbs (core-processor.ts).
+    // But a rule at any other name goes, and under a mask one of them may narrow a name that the
+    // parent link gives again at the next start: the code the masks hold would then reach the
+    // wider one. So only a member's session starts a new version of a masked context.
+    const masked = Object.entries(this.#stream.coreReducedState.itxExpressionRewriteRules).flatMap(
+      ([match, rule]) => (rule.target ? [] : [match]),
+    );
+    if (masked.length > 0 && !caller.principal)
+      throw codedError(
+        "FORBIDDEN",
+        `itx.newVersion: this context masks names (${masked.slice(0, 5).join(", ")}${masked.length > 5 ? ", …" : ""}): only a member's session starts its new version`,
+      );
+    const before = this.#stream.coreReducedState;
+    try {
+      const { ended, created } = this.#stream.startNewVersion(
+        { reason, callerPath: caller.path, app: caller.app },
+        source,
+      );
+      this.#takeRevocationFence(before);
+      // What this incarnation still says of the context to the mind's catalog is of the new
+      // version: the earlier one's description and counts are not sent under the new offsets.
+      this.#contextSummary.startOver();
+      // Best effort, as the kernel, whatever each row consumes: a callback that fails or is offline
+      // misses the batch, and 2 s bounds how long the slowest one holds the answer. An event that
+      // a row does not take reaches its callback as the bare border, with the version alone: not
+      // the reason, who asked, or what the version held.
+      const bare = (event: StreamEvent): StreamEvent => ({
+        type: event.type,
+        offset: event.offset,
+        createdAt: event.createdAt,
+        path: event.path,
+        source: { origin: event.path },
+        payload: { version: event.payload?.version },
+      });
+      const told = this.#callerStorage.run({ principal: null }, () =>
+        Promise.allSettled(
+          liveCallbacks.map(({ call, takes }) =>
+            call(
+              [ended, created].map((event) => (takes(event) ? event : bare(event))),
+              { after: ended.offset - 1, through: created.offset },
+            ),
+          ),
+        ),
+      );
+      await Promise.all([
+        this.#waitOutOlderSnapshots(before, true),
+        withTimeout(told, 2_000, "the capstone to live callbacks").catch(() => undefined),
+      ]);
+      return ended;
+    } finally {
+      // Only the call whose batch landed restarts the object, whatever threw after it: a second
+      // call refused meanwhile leaves the first one's answer in place. In the answer's own turn,
+      // as `abort` does: the answer leaves before the reset.
+      if ((this.#stream.coreReducedState.version ?? 1) > (before.version ?? 1))
+        this.#abortAfterTheAnswer(
+          `itx.newVersion() started a new version of ${path}${reason ? `: ${reason}` : ""}`,
+        );
+    }
+  }
+
+  // Runs once for a version, before anything starts a facet: its last write is the marker
+  // (`Stream.owesEmptying`). A fault leaves the marker unwritten: it is reported and thrown, the
+  // constructor's critical section then resets the object, and the next construction tries again.
+  // A version is never born over what the earlier one left. The facet host and the delivery read
+  // their rows as fields, before this, so each clears memory too.
+  #emptyWhatTheEarlierVersionLeft(): void {
+    const { path } = this.#durableObjectAddress;
+    const { version } = this.#stream.coreReducedState;
+    try {
+      const facets = this.#facetHost.deleteEveryFacet();
+      this.#subscriptionDelivery.forgetEverySubscription();
+      // Kept: the ancestors know this path, `life` names this storage in a snapshot's version, and
+      // the fence guards the rules the earlier version took away.
+      const kept = new Set(["ancestors-announced", "life", "rule-revocation-fence"]);
+      for (const key of Array.from(this.ctx.storage.kv.list(), ([key]) => key))
+        if (!kept.has(key)) this.ctx.storage.kv.delete(key);
+      this.#stream.storage.writeEmptiedVersion(version ?? 1);
+      console.info({ event: "context.version-emptied", path, version, facets });
+    } catch (error) {
+      reportIssue("iterate-context.version-empty", error, { path, version });
+      throw error;
+    }
+  }
 
   // `ctx.abort` rejects an answer the output gate still holds, so the answer's own turn is a
   // critical section, `sync()` makes the fact durable, and the reset is one turn after.
@@ -1024,6 +1142,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     before: number | null,
     extra: Pick<AlarmTrace, "error" | "dueSchedules" | "runs"> = {},
   ) {
+    // A pass that met a new version traces nothing: the stream refuses the append.
+    if (this.#stream.versionEnded()) return;
     const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
     const trace: AlarmTrace = {

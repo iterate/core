@@ -191,13 +191,82 @@ test("a member's call and loaded code's call are not counted and not held to per
       await expect(call(caller, "call", ["end"])).resolves.toBeDefined();
 });
 
+test("a new version's deletion takes every facet that ran, and its rows", async () => {
+  const { call, host, kv, facet } = context();
+  await call(member, "notes", ["add"]);
+  expect([...kv.keys()]).toContain("facet-ran:notes");
+
+  host.deleteEveryFacet();
+
+  expect({ facet: facet("notes"), rows: [...kv.keys()] }).toEqual({ facet: undefined, rows: [] });
+});
+
+test("a new version's deletion takes a facet this incarnation never started, from each kind of row alone, and the claims it held in memory", () => {
+  const { host, kv, deleted } = context({
+    "facet-ran:loaded": true,
+    "facet:loaded": { source: "export default {}", className: "Loaded" },
+    "facet:loaded:restarts": 1,
+    "facet-claim:notes": { at: 1_000 },
+    "facet-claim-failures:call": 2,
+  });
+  expect(host.deadlines()).toEqual([{ name: "notes", at: 1_000 }]);
+
+  const names = host.deleteEveryFacet();
+
+  expect({
+    names: names.sort(),
+    deleted: deleted.sort(),
+    rows: [...kv.keys()],
+    deadlines: host.deadlines(),
+  }).toEqual({
+    names: ["call", "loaded", "notes"],
+    deleted: ["call", "loaded", "notes"],
+    rows: [],
+    deadlines: [],
+  });
+});
+
+test("a claim under the core reduce's name is no facet: the deletion takes its rows and deletes no facet", () => {
+  const { host, kv, deleted } = context({
+    "facet-claim:core": { at: 1_000 },
+    "facet-claim-failures:core": 1,
+  });
+
+  const names = host.deleteEveryFacet();
+
+  expect({ names, deleted, rows: [...kv.keys()], deadlines: host.deadlines() }).toEqual({
+    names: [],
+    deleted: [],
+    rows: [],
+    deadlines: [],
+  });
+});
+
+test("a first-party facet that ran is named as one a new version would leave behind", async () => {
+  const { call, host } = context();
+  expect(host.firstPartyFacetsHosted()).toEqual([]);
+  await call(member, "notes", ["add"]);
+  expect(host.firstPartyFacetsHosted()).toEqual(["notes"]);
+});
+
+test("a first-party facet known only by its claim, or only by a row that hosts it, is named too", () => {
+  const { host } = context(
+    { "facet-claim:notes": { at: 1_000 } },
+    {
+      calls: { hostedFacet: { name: "call", className: "Call" } },
+    },
+  );
+  expect(host.firstPartyFacetsHosted().sort()).toEqual(["call", "notes"]);
+});
+
 /** A context's facet host over stand-ins: storage in a Map, and facets made from `classes`.
  *  What the facets recorded for an earlier test is forgotten. */
-function context() {
+function context(rows: Record<string, unknown> = {}, subscriptions: Record<string, object> = {}) {
   reached.length = 0;
   joinMayGoOn = Promise.resolve();
   let caller: Caller = { principal: null };
-  const kv = new Map<string, unknown>();
+  const kv = new Map<string, unknown>(Object.entries(rows));
+  const deleted: string[] = [];
   const facets = new Map<string, object>();
   const started: string[] = [];
   const ctx = {
@@ -221,6 +290,10 @@ function context() {
         }
         return facets.get(name);
       },
+      delete: (name: string) => {
+        deleted.push(name);
+        facets.delete(name);
+      },
     },
     blockConcurrencyWhile: (work: () => Promise<unknown>) => work(),
   };
@@ -229,7 +302,7 @@ function context() {
     deployId: "deploy-1",
     iterateContextName: "context-a",
     path: PATH,
-    stream: { coreReducedState: { subscriptions: {} } },
+    stream: { coreReducedState: { subscriptions } },
     reconcileAlarm: () => {},
     loadedFacetMaterialized: () => {},
     deliveriesQueuedFor: async () => {},
@@ -239,6 +312,9 @@ function context() {
   } as unknown as ConstructorParameters<typeof FacetHost>[0]);
   return {
     started,
+    host,
+    kv,
+    deleted,
     facet: (name: string) => facets.get(name),
     /** One call by itx expression, as `as` makes it. The host reads the caller as the call
      *  starts. Async, as the walk that reaches a handle is: a refusal is a rejection. */

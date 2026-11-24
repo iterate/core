@@ -76,7 +76,7 @@ const CAPABILITY_NAME = /^[a-zA-Z][a-zA-Z0-9]*(\.[a-zA-Z][a-zA-Z0-9]*)*$/;
 const PLATFORM_NAMES = new Set([
   ...["builtins", "config", "whoami", "fetchRoutes", "append", "appendOffsets", "schedules"],
   ...["readEvents", "waitForEvent", "cd", "fetch", "rpcStubs", "rewriteRules", "facets", "abort"],
-  ...["subscriptions", "processors", "workers", "run"],
+  ...["subscriptions", "processors", "workers", "run", "newVersion"],
   ...["connectToOpenApi", "connectToCapnweb", "connectToMcp", "repos", "workspaces", "sandboxes"],
   ...["files", "kv", "ai", "cfArtifacts", "r2", "secrets", "approvals", "browser", "images", "git"],
   ...["email", "integrations", "url", "webhooks", "minds", "telemetry", "platformHook"],

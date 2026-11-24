@@ -1,6 +1,7 @@
 // client/live-state.test.ts — the client half's transport pins (the store's own reduce is exercised through it).
 
 import { expect, test } from "vitest";
+import { codedError } from "../lib.ts";
 import { connectLiveState, type LiveStateDelta, type LiveStateSeed } from "./live-state.ts";
 
 // ── live state client ── `connectLiveState` (client/live-state.ts) over a fake
@@ -174,28 +175,143 @@ test("a patch applyPatch REJECTS heals from a fresh seed instead of escaping the
   await connection.dispose();
 });
 
-/** A fake itx session (its `subscribe` hands the delivery callback to the test) and a `readSeed` whose
- *  every read parks until the test answers it. */
+// ── a new version of the context (`itx.newVersion`) ──
+
+/** The kernel's last batch to every row when the context starts version 2. */
+const versionTwo = [
+  { type: "events.iterate.com/itx/version-ended", offset: 40, payload: { version: 1 } },
+  { type: "events.iterate.com/itx/created", offset: 41, payload: { path: "/", version: 2 } },
+];
+
+test("after a border the store holds nothing, the connection subscribes again and takes the new producer's seed whatever its revision, and nothing of the earlier version lands after", async () => {
+  const h = harness();
+  const resyncs: ("healed" | Error)[] = [];
+  const connecting = connectLiveState(h.itx, {
+    key: "k",
+    readSeed: h.readSeed,
+    onResync: (result) => resyncs.push(result),
+  });
+  await settle();
+  h.seedReads[0]({ rev: 5, state: { n: 5 } });
+  const connection = await connecting;
+  // a heal of the earlier version is in flight when the border arrives
+  h.deliverDelta({ key: "k", from: 7, to: 8, patch: [{ op: "replace", path: "/n", value: 8 }] });
+  await settle();
+  expect(h.seedReads).toHaveLength(2);
+
+  h.deliverEvents(versionTwo);
+  await settle();
+  expect(connection.store.get()).toBeUndefined();
+  expect(connection.store.rev()).toBeNull();
+  expect(h.rows.map((row) => row.disposed)).toEqual([true, false]);
+  expect(h.rows[1]).toMatchObject({
+    consumes: ["events.iterate.com/itx/live-state-changed", "events.iterate.com/itx/created"],
+  });
+
+  // the earlier version's heal answers late: it is not taken, and the new version's seed is read
+  h.seedReads[1]({ rev: 9, state: { n: 9 } });
+  await settle();
+  expect(connection.store.rev()).toBeNull();
+  expect(h.seedReads).toHaveLength(3);
+  h.seedReads[2]({ rev: 1, state: { n: 1 } });
+  await settle();
+  expect(connection.store.rev()).toBe(1);
+  expect(connection.store.get()).toEqual({ n: 1 });
+  expect(resyncs).toEqual(["healed"]);
+
+  // a delta that the earlier row delivers after the border is not applied
+  h.deliverOn(0, [
+    { payload: { key: "k", from: 1, to: 2, patch: [{ op: "replace", path: "/n", value: 2 }] } },
+  ]);
+  await settle();
+  expect(connection.store.rev()).toBe(1);
+  // the new row's deltas are
+  h.deliverDelta({ key: "k", from: 1, to: 2, patch: [{ op: "replace", path: "/n", value: 2 }] });
+  await settle();
+  expect(connection.store.get()).toEqual({ n: 2 });
+  await connection.dispose();
+  expect(h.rows.map((row) => row.disposed)).toEqual([true, true]);
+});
+
+test("a seed read that fails with NO_FACET clears the store; any other failure keeps the value", async () => {
+  const h = harness();
+  const resyncs: ("healed" | Error)[] = [];
+  const connecting = connectLiveState(h.itx, {
+    key: "k",
+    readSeed: h.readSeed,
+    onResync: (result) => resyncs.push(result),
+  });
+  await settle();
+  h.seedReads[0]({ rev: 5, state: { n: 5 } });
+  const connection = await connecting;
+
+  h.deliverDelta({ key: "k", from: 7, to: 8, patch: null });
+  await settle();
+  h.seedFailures[1]!(new Error("seed read down"));
+  await settle();
+  expect(connection.store.get()).toEqual({ n: 5 });
+  expect(connection.store.rev()).toBe(5);
+
+  h.deliverDelta({ key: "k", from: 8, to: 9, patch: null });
+  await settle();
+  h.seedFailures[2]!(codedError("NO_FACET", "no facet k"));
+  await settle();
+  expect(connection.store.get()).toBeUndefined();
+  expect(connection.store.rev()).toBeNull();
+  expect(resyncs.map((result) => (result instanceof Error ? result.message : result))).toEqual([
+    "seed read down",
+    "no facet k",
+  ]);
+
+  // a producer hosted again: its first delta heals from its seed
+  h.deliverDelta({ key: "k", from: 1, to: 2, patch: null });
+  await settle();
+  h.seedReads[3]({ rev: 2, state: { n: 2 } });
+  await settle();
+  expect(connection.store.get()).toEqual({ n: 2 });
+  await connection.dispose();
+});
+
+/** A fake itx session (its `subscribe` hands the delivery callback to the test; a delivery goes to
+ *  the newest row) and a `readSeed` whose every read parks until the test answers or fails it. */
 function harness() {
-  let deliver!: (events: unknown[], range: unknown) => void;
+  const rows: {
+    consumes: string[] | undefined;
+    deliver: (events: unknown[], range: unknown) => void;
+    disposed: boolean;
+  }[] = [];
   const itx = {
     async subscribe(input: {
       name?: string;
       consumes?: string[];
       target: (events: unknown[], range: unknown) => void;
     }) {
-      deliver = input.target;
-      return { [Symbol.dispose]() {} };
+      const row = { consumes: input.consumes, deliver: input.target, disposed: false };
+      rows.push(row);
+      return {
+        [Symbol.dispose]() {
+          row.disposed = true;
+        },
+      };
     },
   };
+  const deliver = (events: unknown[]) => rows.at(-1)!.deliver(events, {});
   const seedReads: ((seed: Seed) => void)[] = [];
+  const seedFailures: ((error: Error) => void)[] = [];
   return {
     itx,
-    readSeed: () => new Promise<Seed>((resolve) => seedReads.push(resolve)),
+    rows,
+    readSeed: () =>
+      new Promise<Seed>((resolve, reject) => {
+        seedReads.push(resolve);
+        seedFailures.push(reject);
+      }),
     seedReads,
-    deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }], {}),
-    deliverRaw: (payload: unknown) => deliver([{ payload }], {}),
-    deliverEvents: (rawEvents: unknown[]) => deliver(rawEvents, {}),
+    seedFailures,
+    deliverDelta: (delta: LiveStateDelta) => deliver([{ payload: delta }]),
+    deliverRaw: (payload: unknown) => deliver([{ payload }]),
+    deliverEvents: (rawEvents: unknown[]) => deliver(rawEvents),
+    deliverOn: (index: number, rawEvents: unknown[]) => rows[index]!.deliver(rawEvents, {}),
   };
 }
 

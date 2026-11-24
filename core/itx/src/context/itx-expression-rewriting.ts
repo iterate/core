@@ -58,6 +58,8 @@ const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a durable facet hosted here: `facets.get(name)` · `facets.abort(name, reason?)` resets that one facet",
   abort:
     "reset this context: its log and storage stay, its in-memory state, facets and sockets go — `itx.abort(reason?)`; another: `itx.cd(path).abort()`",
+  newVersion:
+    "start this context over at the same path: the log goes on, its masks stay (and with no jail the rules at its own verbs), and its other rules, subscriptions, schedules, facets and their storage start empty — `itx.newVersion(reason?)`; another: `itx.cd(path).newVersion()`",
   subscriptions: "the rows delivered each commit: `subscriptions.list()`",
   processors: "hosted processors: `processors.enable(name, spec)` · `list()` · `disable(name)`",
   workers: "load code as a stateless worker: `workers.get({ source }).run()`",
@@ -73,6 +75,7 @@ const CONTEXT_ROOTS = [
   "append",
   "appendOffsets",
   "abort",
+  "newVersion",
   "readEvents",
   "waitForEvent",
   "cd",

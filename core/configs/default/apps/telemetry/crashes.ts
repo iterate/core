@@ -143,6 +143,16 @@ export function crashKind(said: string): string {
   return "uncaught";
 }
 
+/** A RESET THAT A CALLER ASKED A CONTEXT FOR IS NO CRASH: `itx.abort()` and `itx.newVersion()`
+ *  restart the context's object, and the runtime logs the restart's message as an error line, in
+ *  the asking call and in each call that it cut. The context says so itself at info
+ *  (`context.aborted`), and the caller has its answer. The texts are the kernel's
+ *  (core/itx/src/context/built-ins.ts `abort`, iterate-context-durable-object.ts `#startNewVersion`). */
+const ASKED_RESETS = [
+  "itx.abort() reset the context ",
+  "itx.newVersion() started a new version of ",
+];
+
 /** The store's time (`2026-11-21 15:50:02.652`, UTC with no zone) as ISO, or undefined. */
 export function isoOfStore(text: unknown): string | undefined {
   if (typeof text !== "string" || !text) return undefined;
@@ -170,6 +180,7 @@ export function crashesOf(rows: CrashRow[]): { fingerprint: string; seen: Seen }
   for (const row of rows) {
     const worker = String(row.scriptName ?? "");
     const said = String(row.said ?? "");
+    if (ASKED_RESETS.some((start) => said.startsWith(start))) continue;
     const count = Math.max(1, Number(row.n) || 1);
     const firstAt = isoOfStore(row.firstAt);
     const lastAt = isoOfStore(row.lastAt);

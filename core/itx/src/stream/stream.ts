@@ -15,6 +15,7 @@ import {
 } from "iterate/stream/processor";
 import { newChain, recordRefusal, refuseActPastLimit, storedCause, type Cause } from "../cause.ts";
 import type { Caller } from "../caller.ts";
+import { unavailableError } from "../unavailable.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import { eventsOwedAtWake } from "./wake-events.ts";
 import {
@@ -32,6 +33,8 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 // This incarnation's recent ephemerals, in serialized JS chars, oldest out first. An event over the
 // whole budget is kept alone until the next arrives.
 export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
+// U+001F, a control character: the first character of every stored key of a version above 1.
+const VERSION_KEY_MARK = "\u001f";
 
 // A paused stream must still accept its own resume, record its wake, be reset and learn its children.
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
@@ -145,20 +148,21 @@ export class Stream {
         this.#coreReducedThroughOffset = page.scannedThroughOffset;
       }
     }
+    this.storage.version = this.#coreReducedState.version ?? 1;
   }
 
   #wakeRecorded = false;
 
-  // A fresh store's birth is always a call's: nothing has an alarm before it exists.
+  // A fresh store's birth is always a call's: nothing has an alarm before it exists. A version's
+  // first wake is its birth too, with its `created` on the log already.
   appendBirthRecord(cause?: Cause, wake: Wake = { cause: "call" }): void {
-    if (this.#highestDurableOffset !== 0) return;
+    const versionStart = this.atVersionStart();
+    if (this.#highestDurableOffset !== 0 && !versionStart) return;
     const source = cause && { cause };
     this.append(
-      {
-        type: "events.iterate.com/itx/created",
-        payload: { path: this.#path },
-        source,
-      },
+      ...(versionStart
+        ? []
+        : [{ type: "events.iterate.com/itx/created", payload: { path: this.#path }, source }]),
       {
         type: "events.iterate.com/itx/woken",
         payload: { incarnation: this.storage.incarnation, ...wake },
@@ -168,6 +172,79 @@ export class Stream {
     );
     this.#wakeRecorded = true;
     this.#appendOwedAtWake(source);
+  }
+
+  // Nothing is on the log after this version's `created`: the version's birth record is owed
+  // (`appendBirthRecord`, `appendWakeRecord`).
+  atVersionStart(): boolean {
+    const { versionStartedAtOffset } = this.#coreReducedState;
+    return (
+      versionStartedAtOffset !== undefined && this.#highestDurableOffset === versionStartedAtOffset
+    );
+  }
+
+  // The next incarnation empties what the earlier version left (`owesEmptying`) and is born, so
+  // nothing of this incarnation may land after the `created`: every append after it is refused,
+  // as a deploy's reset refuses a call (asked again once, logged at info): the restart is meant.
+  #refusalAfterNewVersion: string | undefined;
+
+  // The version's storage still holds what the earlier version left: the marker of the emptying
+  // (`StreamStorage.emptiedVersion`) is behind the state's version.
+  owesEmptying(): boolean {
+    return (this.#coreReducedState.version ?? 1) > this.storage.emptiedVersion();
+  }
+
+  versionEnded(): boolean {
+    return this.#refusalAfterNewVersion !== undefined;
+  }
+
+  // An offset names one event of this path for ever, so the log goes on: the next version starts
+  // at the `created` this appends, with an empty state (core-processor.ts).
+  startNewVersion(
+    ended: { reason?: string; callerPath?: string; app?: true },
+    source: StreamEventInput["source"],
+  ): { ended: StreamEvent; created: StreamEvent } {
+    refuseActPastLimit(source?.cause, `a new version of ${this.#path}`);
+    if (!this.#coreReducedState.version && this.storage.holdsKeyWithVersionMark())
+      throw codedError(
+        "INVALID_CONTEXT",
+        `itx.newVersion: the log of ${this.#path} holds an idempotency key that begins with U+001F, the mark of a later version's keys; a later version's key could meet it`,
+      );
+    const {
+      version = 1,
+      schedules,
+      subscriptions,
+      itxExpressionRewriteRules,
+    } = this.#coreReducedState;
+    // What the version held, by name: a schedule that ends with it stays on the log.
+    const held = {
+      schedules: Object.keys(schedules),
+      subscriptions: Object.keys(subscriptions),
+      rewriteRules: Object.keys(itxExpressionRewriteRules),
+    };
+    // In `finally`: the state moves when the batch commits, before `onCommit`, so a hook that
+    // throws after the commit still leaves the refusal in place.
+    try {
+      const committed = this.append(
+        ...this.#interruptedRunSettlements(
+          "the context started a new version before the script's result was recorded; it may have partly or fully run, and it is not run again",
+        ),
+        {
+          type: "events.iterate.com/itx/version-ended",
+          payload: { version, ...ended, held },
+          source,
+        },
+        {
+          type: "events.iterate.com/itx/created",
+          payload: { path: this.#path, version: version + 1 },
+          source,
+        },
+      );
+      return { ended: committed.at(-2)!, created: committed.at(-1)! };
+    } finally {
+      if ((this.#coreReducedState.version ?? 1) > version)
+        this.#refusalAfterNewVersion = `the context ${this.#path} started version ${version + 1} and is about to restart; send the call again`;
+    }
   }
 
   // Every run the last incarnation left open is settled `interrupted` in the same batch: a run is
@@ -187,33 +264,32 @@ export class Stream {
       ...wake,
       ...(cause && storedCause(cause)),
     });
-    if (this.#highestDurableOffset === 0) return this.appendBirthRecord(cause, wake);
-    const interrupted = Object.entries(this.#coreReducedState.scriptRuns).map(
-      ([requestOffset, run]): StreamEventInput => ({
-        type: "events.iterate.com/itx/run-settled",
-        idempotencyKey: `itx/run-settled:${requestOffset}`,
-        source: run.cause && { cause: run.cause },
-        payload: {
-          requestOffset: Number(requestOffset),
-          settlement: {
-            status: "failed",
-            error:
-              "the context restarted before the script's result was recorded; it may have partly or fully run, and it is not run again",
-            failureKind: "interrupted",
-          },
-        },
-      }),
-    );
+    if (this.#highestDurableOffset === 0 || this.atVersionStart())
+      return this.appendBirthRecord(cause, wake);
     this.append(
       {
         type: "events.iterate.com/itx/woken",
         payload: { incarnation: this.storage.incarnation, ...wake, ...this.#wakeRecordDetail?.() },
         source: cause && { cause },
       },
-      ...interrupted,
+      ...this.#interruptedRunSettlements(
+        "the context restarted before the script's result was recorded; it may have partly or fully run, and it is not run again",
+      ),
     );
     this.#wakeRecorded = true;
     this.#appendOwedAtWake(cause && { cause });
+  }
+
+  #interruptedRunSettlements(error: string): StreamEventInput[] {
+    return Object.entries(this.#coreReducedState.scriptRuns).map(([requestOffset, run]) => ({
+      type: "events.iterate.com/itx/run-settled",
+      idempotencyKey: `itx/run-settled:${requestOffset}`,
+      source: run.cause && { cause: run.cause },
+      payload: {
+        requestOffset: Number(requestOffset),
+        settlement: { status: "failed", error, failureKind: "interrupted" },
+      },
+    }));
   }
 
   /** The host's wake events that this context has not had (./wake-events.ts), appended AFTER the
@@ -261,7 +337,9 @@ export class Stream {
     }
   }
 
+  // Not after a new version: the refusal of a call in that one turn is no loop.
   recordLoopLimit(cause: Cause, error: string): void {
+    if (this.versionEnded()) return;
     const idempotencyKey = `itx/loop-limit:${cause.chain}`;
     if (this.storage.readEventByIdempotencyKey(idempotencyKey)) return;
     this.append({
@@ -316,6 +394,8 @@ export class Stream {
   // Synchronous end to end, and every refusal happens before a single write. The marks move only
   // after the transaction returns, so a throw leaves them true.
   append(...events: StreamEventInput[]): StreamEvent[] {
+    if (this.#refusalAfterNewVersion)
+      throw unavailableError("deploy-reset", this.#refusalAfterNewVersion);
     if (events.length === 0) return [];
     for (const event of events) {
       // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement point (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
@@ -367,6 +447,13 @@ export class Stream {
         committedEvents.push(existingEvent);
         continue;
       }
+      // The kernel alone writes a key with the mark of a later version (`#keyInVersion`). A key
+      // that the log holds is echoed above; no new one lands.
+      if (eventInput.idempotencyKey?.startsWith(VERSION_KEY_MARK))
+        throw codedError(
+          "INVALID_INPUT",
+          "append: an idempotency key does not begin with the control character U+001F, the kernel's mark of a later version's keys",
+        );
       if (paused && !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type))
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // Past the loop limit the platform's records still land.
@@ -444,6 +531,7 @@ export class Stream {
         );
       });
       this.#coreReducedState = reducedState;
+      this.storage.version = reducedState.version ?? 1;
       this.#coreReducedThroughOffset = throughOffset;
       this.#highestAssignedOffset = throughOffset;
       this.#highestDurableOffset = throughOffset;
@@ -463,9 +551,20 @@ export class Stream {
 
   // `scannedThroughOffset` never names an ephemeral: persist it, never an event's offset.
   // Synchronous: the stream's own single-turn scans call it inline.
-  read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
+  read(
+    afterOffset = 0,
+    limit = 500,
+    options: { includeEphemeral?: boolean; allVersions?: boolean } = {},
+  ): StreamPage {
     // At most 1000: the object overhead of tiny events, which the byte budget cannot see.
     limit = Math.min(Math.max(1, limit), 1000);
+    // A read from the start (a processor's catch-up, a cursor row with `afterOffset: 0`, the
+    // summary) is of this version: it begins at this version's `created`. A positive `afterOffset`
+    // is taken as given, whatever version it is in, since an offset names one event of the path
+    // for ever: a point read answers that event, and a reader from an earlier offset reads on
+    // into this version.
+    if (afterOffset <= 0 && !options.allVersions)
+      afterOffset = (this.#coreReducedState.versionStartedAtOffset ?? 1) - 1;
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
       limit,
@@ -496,7 +595,13 @@ export class Stream {
         if (event.offset > afterOffset && event.offset <= ceiling) events.push(event);
       events.sort((a, b) => a.offset - b.offset);
     }
-    return { events, scannedThroughOffset, atHead };
+    const { version, versionStartedAtOffset } = this.#coreReducedState;
+    return {
+      events,
+      scannedThroughOffset,
+      atHead,
+      ...(version && version > 1 && { version, versionStartedAtOffset }),
+    };
   }
 
   async waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
@@ -645,6 +750,8 @@ class StreamStorage {
   readonly #sql: SqlStorageHandle;
   readonly reduceCheckpoints: ReduceCheckpointTable;
   readonly incarnation: number;
+  // The context's version (`Stream` keeps it): an idempotency key counts within its version.
+  version = 1;
 
   readonly #deployId: string;
   constructor(storage: DurableObjectStorageSlice, deployId: string) {
@@ -694,6 +801,21 @@ class StreamStorage {
     this.incarnation = (prior ? Number(prior.value) : 0) + 1;
   }
 
+  // The version whose emptying is done (`Stream.owesEmptying`); absent: 1, which owes none.
+  emptiedVersion(): number {
+    const row = this.#sql
+      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'emptied_version'")
+      .toArray()[0];
+    return row ? Number(row.value) : 1;
+  }
+
+  writeEmptiedVersion(version: number): void {
+    this.#sql.exec(
+      "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('emptied_version', ?)",
+      String(version),
+    );
+  }
+
   countIncarnation(): void {
     this.#sql.exec(
       "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('incarnation', ?)",
@@ -714,19 +836,20 @@ class StreamStorage {
 
   // A cut never splits a surrogate pair: a lone surrogate becomes U+FFFD on the SQLite TEXT bind.
   insertEvent(offset: number, serializedBody: string, idempotencyKey: string | null): void {
+    const storedKey = idempotencyKey ? this.#keyInVersion(idempotencyKey) : null;
     if (serializedBody.length <= EVENT_CHUNK_SIZE) {
       this.#sql.exec(
         "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
         offset,
         serializedBody,
-        idempotencyKey,
+        storedKey,
       );
       return;
     }
     this.#sql.exec(
       "INSERT INTO events (offset, body, idempotency_key) VALUES (?, '', ?)",
       offset,
-      idempotencyKey,
+      storedKey,
     );
     for (let start = 0, idx = 0; start < serializedBody.length; idx++) {
       let end = Math.min(start + EVENT_CHUNK_SIZE, serializedBody.length);
@@ -748,7 +871,7 @@ class StreamStorage {
     const row = this.#sql
       .exec<{ offset: number; body: string }>(
         "SELECT offset, body FROM events WHERE idempotency_key = ?",
-        idempotencyKey,
+        this.#keyInVersion(idempotencyKey),
       )
       .toArray()[0];
     if (!row) return undefined;
@@ -848,6 +971,35 @@ class StreamStorage {
     this.#sql.exec("DELETE FROM subscription_deliveries WHERE name = ?", name);
   }
 
+  deleteEverySubscriptionRow(): void {
+    this.#sql.exec("DELETE FROM subscription_cursors");
+    this.#sql.exec("DELETE FROM subscription_deliveries");
+  }
+
+  // A later version's key is stored under the mark and its version, so each key is free again in
+  // the next version. No caller's key begins with the mark: `append` refuses one, and the first
+  // new version refuses a log that holds one. Version 1 is stored as it is, as every log's keys
+  // are that never had a second version.
+  #keyInVersion(idempotencyKey: string): string {
+    return this.version === 1
+      ? idempotencyKey
+      : `${VERSION_KEY_MARK}v${this.version}${VERSION_KEY_MARK}${idempotencyKey}`;
+  }
+
+  // In version 1 the kernel stores no key under the mark: one that the log holds is a caller's.
+  holdsKeyWithVersionMark(): boolean {
+    return (
+      this.#sql
+        .exec(
+          // every key that begins with the mark: from U+001F up to, and not, U+0020
+          "SELECT 1 FROM events WHERE idempotency_key >= ? AND idempotency_key < ? LIMIT 1",
+          VERSION_KEY_MARK,
+          "\u0020",
+        )
+        .toArray().length > 0
+    );
+  }
+
   // An empty cell is the chunked marker: a real body is never empty JSON.
   #reassembleBody(offset: number, cell: string): string {
     if (cell !== "") return cell;
@@ -868,7 +1020,7 @@ export interface ReachableContext {
   read(
     afterOffset?: number,
     limit?: number,
-    options?: { includeEphemeral?: boolean },
+    options?: { includeEphemeral?: boolean; allVersions?: boolean },
   ): Promise<StreamPage>;
   reserveSend(key: string): Promise<{ recorded?: StreamEvent; reserved: boolean }>;
   releaseSend(key: string): Promise<void>;

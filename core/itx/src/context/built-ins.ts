@@ -75,6 +75,7 @@ export interface BuiltInScope {
   append: IterateContextApi["append"];
   appendOffsets: IterateContextApi["appendOffsets"];
   abort: IterateContextApi["abort"];
+  newVersion: IterateContextApi["newVersion"];
   schedules: IterateContextApi["schedules"];
   readEvents: IterateContextApi["readEvents"];
   waitForEvent: IterateContextApi["waitForEvent"];
@@ -105,7 +106,7 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
-function abortReasonOf(reason: unknown, verb: string): string | undefined {
+function reasonOf(reason: unknown, verb: string): string | undefined {
   const parsed = z.string().max(1000).optional().safeParse(reason);
   if (!parsed.success)
     throw codedError(
@@ -154,6 +155,13 @@ export interface BuildBuiltInsDeps {
     abort(name: string, reason: string | undefined): Promise<void>;
   };
   abortAfterTheAnswer: (message: string) => void;
+  /** Ends this context's version and starts the next (the DO's `#startNewVersion`): answers the
+   *  `itx/version-ended` event once no other isolate holds the earlier version's rules, and
+   *  restarts the object after the answer. `source` is the caller's stamp. */
+  startNewVersion: (
+    reason: string | undefined,
+    source: NonNullable<StreamEventInput["source"]>,
+  ) => Promise<StreamEvent>;
   claimFacetAlarm: (name: string, at: number | null) => void;
   // `config`: the loopback of the mind's published config (`Caller.config`)
   itxEntrypoint: (config?: boolean) => Fetcher;
@@ -166,6 +174,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const { path, iterateContextName } = deps;
 
   const ownContext = () => deps.context(path);
+  // nobody's when the cause's on-behalf-of token is forged or absent
+  const withVerifiedOnBehalfOf = async (caller: Caller): Promise<Caller> => {
+    const token = caller.cause?.onBehalfOf;
+    const { signingSecret } = itxHost();
+    const onBehalfOf =
+      token && signingSecret
+        ? await verifyOnBehalfOf(token, await signingSecret(), Date.now())
+        : undefined;
+    return { ...caller, onBehalfOf };
+  };
   const append = async (...events: StreamEventInput[]) => {
     const caller = deps.caller();
     admitRowsOfCall(caller, events, path);
@@ -184,16 +202,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           ),
         )
       : events;
-    // nobody's when the cause's on-behalf-of token is forged or absent
-    const token = caller.cause?.onBehalfOf;
-    const { signingSecret } = itxHost();
-    const onBehalfOf =
-      token && signingSecret
-        ? await verifyOnBehalfOf(token, await signingSecret(), Date.now())
-        : undefined;
-    return ownContext().append(
-      ...keyed.map((event) => stampCaller(event, { ...caller, onBehalfOf }, path)),
-    );
+    const stamped = await withVerifiedOnBehalfOf(caller);
+    return ownContext().append(...keyed.map((event) => stampCaller(event, stamped, path)));
   };
   const assertOnMindRoot = (verb: string) => {
     if (path !== "/")
@@ -273,7 +283,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       return (appended as StreamEvent[]).map(({ offset }) => offset);
     },
     abort: async (reasonInput) => {
-      const reason = abortReasonOf(reasonInput, "itx.abort");
+      const reason = reasonOf(reasonInput, "itx.abort");
       const { path: callerPath, app } = deps.caller();
       // The fact first, through `append` (attributed, pause-exempt); the reset is the DO's, after
       // the answer leaves.
@@ -285,6 +295,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         `itx.abort() reset the context ${path}${reason ? `: ${reason}` : ""}`,
       );
       return aborted;
+    },
+    // Attributed as `itx/aborted` is: the stamp `append` would give the caller's event.
+    newVersion: async (reasonInput) => {
+      const reason = reasonOf(reasonInput, "itx.newVersion");
+      const { source } = stampCaller({}, await withVerifiedOnBehalfOf(deps.caller()), path);
+      // the DO's: it schedules the restart once the version has ended, whatever throws after
+      return deps.startNewVersion(reason, source);
     },
     schedules: {
       ...deps.schedules,
@@ -322,8 +339,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
     },
-    readEvents: (afterOffset?: number, limit?: number, options?: { includeEphemeral?: boolean }) =>
-      ownContext().read(afterOffset, limit, options),
+    readEvents: (
+      afterOffset?: number,
+      limit?: number,
+      options?: { includeEphemeral?: boolean; allVersions?: boolean },
+    ) => ownContext().read(afterOffset, limit, options),
     waitForEvent: deps.waitForEvent,
     rpcStubs: deps.rpcStubs,
     facets: {
@@ -331,7 +351,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // The reset, then its fact: the host holds every other event off meanwhile, so the fact's
       // delivery to a processor facet meets the fresh instance.
       abort: async (name, reasonInput) => {
-        const reason = abortReasonOf(reasonInput, "itx.facets.abort");
+        const reason = reasonOf(reasonInput, "itx.facets.abort");
         const { path: callerPath, app } = deps.caller();
         await deps.facets.abort(name, reason);
         const [aborted] = await append({

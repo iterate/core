@@ -257,6 +257,8 @@ export class FacetHost {
         await this.callFacetAsPlatform(name, [["revive"]], cause);
         this.#facetRevived(name);
       } catch (error) {
+        // The version ended meanwhile: the next incarnation deletes this facet and its claim.
+        if (this.#deps.stream.versionEnded()) return;
         // Cut off by an abort or a platform restart: the fresh instance is owed the same revive, now.
         const code = errorCode(error);
         if (code === "FACET_ABORTED" || code === "FACET_RESTARTED") {
@@ -544,6 +546,45 @@ export class FacetHost {
         reportIssue("iterate-context.facet-startup-memo", error, { name });
       }
     }
+  }
+
+  // The first-party facets this context hosts: each keeps resources outside it (a repo, a sandbox).
+  firstPartyFacetsHosted(): string[] {
+    const ran = Array.from(this.#deps.ctx.storage.kv.list({ prefix: "facet-ran:" }), ([key]) =>
+      key.slice("facet-ran:".length),
+    );
+    const hosted = Object.values(this.#deps.stream.coreReducedState.subscriptions).flatMap((row) =>
+      row.hostedFacet ? [row.hostedFacet.name] : [],
+    );
+    return [...new Set([...ran, ...this.#facetClaims.keys(), ...hosted])].filter(
+      (name) => !!firstPartyFacetClassOf(name),
+    );
+  }
+
+  // A new version's: every facet this context's storage knows goes, with its storage and its rows,
+  // whether or not this incarnation started it. Answers their names.
+  deleteEveryFacet(): string[] {
+    const names = new Set(this.#liveFacetNames);
+    for (const prefix of ["facet-ran:", "facet-claim:", "facet-claim-failures:"])
+      for (const [key] of this.#deps.ctx.storage.kv.list({ prefix }))
+        names.add(key.slice(prefix.length));
+    // A facet whose start was cut off may have storage and no `facet-ran:` row yet: its spec row
+    // (`facet:<name>`, the one row under the prefix that holds a class name) names it.
+    for (const [key, row] of this.#deps.ctx.storage.kv.list({ prefix: "facet:" }))
+      if (Object.hasOwn(Object(row), "className")) names.add(key.slice("facet:".length));
+    // The core reduce's name is no facet, though a claim may name it: its claim and failure count
+    // go, and nothing else.
+    if (names.delete(CoreContract.slug)) {
+      this.#claimFacetAlarm(CoreContract.slug, null);
+      this.#facetRevived(CoreContract.slug);
+    }
+    for (const name of names)
+      this.#deleteFacet(
+        name,
+        firstPartyFacetClassOf(name) ||
+          this.#deps.ctx.storage.kv.get<FacetSpec>(`facet:${name}`)?.className,
+      );
+    return [...names];
   }
 
   // Done after the commit and before the append returns: only the pre-commit state knows what the
@@ -905,12 +946,18 @@ export class FacetHost {
         };
       } else {
         const { worker } = resolved;
+        const version = this.#deps.stream.coreReducedState.version ?? 1;
         let preparedLoaderId: string | undefined;
         const { loaderId, load, retire } = await itxLoader(`facet "${name}"`).prepareConfinedWorker(
           {
             itxEntrypoint: this.#deps.itxEntrypoint(),
             kind: "facet",
-            owner: [this.#deps.iterateContextName, memo.className],
+            // A later version's facets load in an isolate of their own: what the earlier
+            // version's code kept in module scope is not theirs.
+            owner:
+              version > 1
+                ? [this.#deps.iterateContextName, memo.className, version]
+                : [this.#deps.iterateContextName, memo.className],
             source: worker.source,
             cacheKey: worker.cacheKey,
             mainModule: memo.mainModule,
@@ -1199,11 +1246,16 @@ export class FacetHost {
   }
 
   // The runtime aborts the facet it deletes, ending an unreleased call session on it `exception` with
-  // no line; the prd fault alarm reads that summary in this Durable Object as this deletion's.
-  #deleteFacet(name: string, className: string): void {
+  // no line; the prd fault alarm reads that summary in this Durable Object as this deletion's. A
+  // facet with no class known never started from a memo here, so no runtime line names its class.
+  #deleteFacet(name: string, className: string | undefined): void {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
-    console.info({ event: "facet.deleted", name, message: `${className}.jsrpc` });
+    console.info({
+      event: "facet.deleted",
+      name,
+      ...(className && { message: `${className}.jsrpc` }),
+    });
     this.#deps.ctx.facets.delete(name);
     this.#facetGeneration(name).endedBy = {
       code: "NO_FACET",

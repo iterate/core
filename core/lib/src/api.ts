@@ -44,6 +44,11 @@ export interface StreamPage {
   scannedThroughOffset: number;
   /** True iff the scan reached the durable mark: nothing more to read until the next commit. */
   atHead: boolean;
+  /** The context's version and the offset of that version's `itx/created`, from the second
+   *  version on (`newVersion`); absent in a first version. A reader that holds one version of a
+   *  log reads nothing below the offset. */
+  version?: number;
+  versionStartedAtOffset?: number;
 }
 
 /** `waitForEvent`'s filter: an event type (or one of a list), payload fields the event must carry
@@ -1746,10 +1751,57 @@ export interface IterateContextApi {
    *  Another context of the mind: `itx.cd(path).abort()`. A rewrite rule masks it like any name
    *  (`provide("itx.abort", null)`). */
   abort(reason?: string): Promise<StreamEvent>;
+  /** START THIS CONTEXT OVER at the same path, in the same Durable Object: it ends the context's
+   *  version (a number that starts at 1) and starts the next. Resolves with the
+   *  `events.iterate.com/itx/version-ended { version, reason?, callerPath?, app?, held }` event it
+   *  recorded, where `held` names the version's schedules, subscriptions and rewrite rules.
+   *  `events.iterate.com/itx/created { path, version }` follows it, and the object restarts. The
+   *  next incarnation empties what the earlier version left, and its first wake is the version's
+   *  birth: `itx/woken`, then the host's birth events and its wake events. The answer waits until
+   *  no other isolate holds the earlier version's rules (5 s at most), so no grant of the earlier
+   *  version answers after it. An append that arrives between the capstone and the restart is
+   *  refused as `UNAVAILABLE` and may be sent again.
+   *  EACH CALL THAT RUNS STARTS A VERSION: a second call that reaches the context after the
+   *  restart starts another, so call once for a path and do not send it again after an error.
+   *  A LIVE CLIENT IS TOLD. A subscriber whose target is a client's live callback gets the capstone
+   *  (`itx/version-ended` and `itx/created`) as its last batch, whatever it consumes, since its row
+   *  goes with the version; an event that its row does not take comes as the bare border, with the
+   *  version alone. `iterate/client` then subscribes again and reads the new version from its
+   *  start. A WebSocket that a client holds through the context to a provider (a fetch upgrade)
+   *  dials again after the restart, as it does after `abort`, and goes on when its expression still
+   *  resolves; a name that a client lent the earlier version goes with it. A write that another context makes in
+   *  reaction to the earlier version and that arrives after the capstone lands in the new version:
+   *  it is sent again like any write. A handle made with `facets.get(name, spec)` names a spec;
+   *  called after a new version, it hosts that spec under the name again.
+   *  GOES: every rewrite rule but the holds (below), subscriptions, schedules, fetch routes and pause, every open run
+   *  (settled `interrupted`), every facet and its storage, every subscription's cursor and
+   *  deliveries, the at-most-once send marks; then everything `abort` drops.
+   *  STAYS: the log and its offsets, and what other objects keep under this path: child contexts,
+   *  the parent's catalog row, secrets, the mind's kv, files, telemetry. A child announces itself
+   *  to its ancestors once, so a new version of an ancestor holds no `itx/child-created` for the
+   *  children that exist, and a catalog it folds from those facts starts empty. A read from the start
+   *  begins at the current version (`allVersions: true` reads from the log's start); a read from
+   *  a positive offset answers that offset's event whatever its version.
+   *  An idempotency key counts within its version, so an event delivered again after a new version
+   *  is taken as new. (No key begins with the control character U+001F: the kernel stores a later
+   *  version's keys under it, and `append` refuses one.) WHAT HOLDS THE CONTEXT'S CODE STAYS: a
+   *  mask (a rule with a null target, a jail's bare `itx ⇒ null` among them), and a rule at one of
+   *  the context's own verbs (`itx.cd` pointed at a broker, `itx.run` at a jail); loaded code can
+   *  remove neither. Every other rule goes (the parent link, and a rule at any other name; under a
+   *  jail every rule with a target, since each is a grant there), so the config writes a jail's
+   *  grants again. A context that masks a name takes a new version only
+   *  from a member's session.
+   *  Refused on `/` and on a context that hosts a first-party facet (a repo, a sandbox, a
+   *  workspace, mail, integrations), whose resources are outside the context. Another context of
+   *  the mind: `itx.cd(path).newVersion()`. A rewrite rule masks it like any name. */
+  newVersion(reason?: string): Promise<StreamEvent>;
   readEvents(
     afterOffset?: number,
     limit?: number,
-    options?: { includeEphemeral?: boolean },
+    /** A read from the start (`afterOffset` 0 or absent) begins at the current version
+     *  (`newVersion`), unless `allVersions` is true. A positive `afterOffset` is taken as given,
+     *  whatever version it is in. */
+    options?: { includeEphemeral?: boolean; allVersions?: boolean },
   ): Promise<StreamPage>;
   waitForEvent(filter?: WaitForEventFilter): Promise<StreamEvent>;
   /** The request through this context's rule for `itx.fetch`. The method, headers and body go

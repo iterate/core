@@ -210,6 +210,18 @@ test("the merge: twenty internal errors with other references are one, with the 
   assert.equal(crashesOf([row("a"), row("b")]).length, 2);
 });
 
+test("a reset that a caller asked a context for is no crash: the runtime's line of it is left out", () => {
+  const crashes = crashesOf([
+    row("itx.abort() reset the context /agents/a: stuck", { n: 3 }),
+    row("itx.newVersion() started a new version of /agents/a: start over", { n: 6 }),
+    row("x is not a function"),
+  ]);
+  assert.deepEqual(
+    crashes.map(({ seen }) => seen.message),
+    ["x is not a function"],
+  );
+});
+
 test("a sweep: one event for each kind, keyed by the hour of its last time; a later sweep of the hour appends nothing", async () => {
   const mind = recordingMind();
   cloudflare([

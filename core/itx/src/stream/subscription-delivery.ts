@@ -21,6 +21,7 @@ import {
   rowsPushingFacet,
   type Subscription,
   targetIsAnotherService,
+  targetIsLentCallback,
   targetOwnsProgress,
 } from "./core-processor.ts";
 import { evaluateFilter, evaluatePayload } from "./event-expressions.ts";
@@ -521,6 +522,36 @@ export class SubscriptionDelivery {
     return this.#deliveryRecordByName.get(name)?.cursor;
   }
 
+  // A new version's: no row of the earlier version is delivered again, nor claims the alarm.
+  forgetEverySubscription(): void {
+    this.#stream.storage.deleteEverySubscriptionRow();
+    this.#deliveryRecordByName.clear();
+    this.#reconcileAlarm();
+  }
+
+  // A new version's: the function that calls each row whose head is a client's lent callback, the
+  // rows `#pushEventBatch` pushes to a live client. Asked while the version's rows and rules stand.
+  // A facet's row is not evaluated (that would start the facet), and a row whose evaluation throws
+  // is none.
+  async liveCallbacks() {
+    const state = this.#stream.coreReducedState;
+    const calls = await Promise.all(
+      Object.entries(state.subscriptions).map(async ([name, row]) => {
+        if (!targetIsLentCallback(state, row)) return undefined;
+        try {
+          const { head, call } = await this.#evaluateTargetHeadForRow(name, row);
+          if (!(head instanceof RpcStubHandle)) return undefined;
+          // `takes`: whether the row's own words ask for the event (a filter asks for no record
+          // of the kernel's)
+          return { call, takes: (event: StreamEvent) => !row.filter && rowTakes(row, event) };
+        } catch {
+          return undefined;
+        }
+      }),
+    );
+    return calls.filter((callback) => !!callback);
+  }
+
   #forgetSubscription(name: string): void {
     this.#stream.storage.deleteSubscriptionCursor(name);
     this.#stream.storage.deleteSubscriptionDeliveries(name);
@@ -629,6 +660,8 @@ export class SubscriptionDelivery {
     row: Subscription,
     error: unknown,
   ): void {
+    // A failure after a new version is that version's end: its rows go at the next incarnation.
+    if (this.#stream.versionEnded()) return;
     const failureSite = `subscription-delivery.${action}`;
     if (errorCode(error) === "NO_FACET" && !this.#isStillTheRow(name, row)) {
       console.log({
@@ -788,6 +821,7 @@ export class SubscriptionDelivery {
             throw codedError("PERMANENT_FAILURE", `${event.type} is never copied`);
           const evaluated = evaluatePayload(copy.payload || "{}", event);
           if ("error" in evaluated) throw evaluated.error;
+          const { version, versionStartedAtOffset } = this.#stream.coreReducedState;
           const toSend: EventCopy = {
             type: copy.type || event.type,
             payload: evaluated.payload,
@@ -798,6 +832,12 @@ export class SubscriptionDelivery {
               createdAt: event.createdAt,
               type: event.type,
               subscription: name,
+              // An `itx/*` event is never copied, so a later version says so on each copy. A
+              // copy of an event from before this version's start (a row that asked for history)
+              // names none: the log does not say which earlier version that event was of.
+              ...(version &&
+                version > 1 &&
+                event.offset >= (versionStartedAtOffset ?? 0) && { version }),
             },
           };
           // The head (`itx.cd(path)`) was evaluated only so this context's rules can stop a copy.

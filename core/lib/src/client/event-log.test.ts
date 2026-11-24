@@ -6,6 +6,7 @@
 
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
+import { codedError } from "../lib.ts";
 import { committedEvent } from "../stream/test-support.ts";
 import { connectEventLog, type EventLogItx } from "./event-log.ts";
 
@@ -263,47 +264,248 @@ test("the log holds the name of its own subscription row, as a handle or an RPC 
   log.dispose();
 });
 
+test("a log connected in a second version reads nothing below its start: tail, all, loadOlder and a since in the earlier version", async () => {
+  for (const opts of [
+    { history: "tail" as const },
+    { history: "all" as const },
+    { history: "tail" as const, since: 200 },
+  ]) {
+    const context = fakeContext(offsetsWithGaps(400), firstVersionCreated);
+    const { created } = context.newVersion(50);
+    const log = connectEventLog(context.itx, { consumes: ["*"], ...opts });
+    await settle();
+    expect(log.get()).toMatchObject({ caughtUp: true, version: 2, older: { exhausted: true } });
+    expect(offsetsOf(log.get().events)).toEqual(context.offsets.filter((o) => o >= created));
+    log.loadOlder();
+    await settle();
+    expect(offsetsOf(log.get().events)[0]).toBe(created);
+    // a read from 0 begins at the version's start; every other read starts at or above it
+    expect(context.reads.filter(([after]) => after !== 0 && after < created - 1)).toEqual([]);
+    log.dispose();
+  }
+});
+
+test("a border pushed to the row: the earlier version's events and actors go, the log subscribes again, reads the new version from its start, and holds version 2", async () => {
+  const context = fakeContext(offsetsWithGaps(100), (offset) => ({
+    ...firstVersionCreated(offset),
+    ...(offset < 100 && { source: { origin: "/", principal: { actor: "user_a" } } }),
+  }));
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  expect(log.get()).toMatchObject({ caughtUp: true, version: 1 });
+  expect(log.get().actors).toHaveLength(1);
+  const read = context.itx.readEvents.bind(context.itx);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  context.itx.readEvents = async (...args) => {
+    await held;
+    return read(...args);
+  };
+  const readsBefore = context.reads.length;
+  const { created } = context.newVersion(5);
+  await settle();
+  // the border is held, the earlier version is not, and the read of the new version is pending
+  expect(offsetsOf(log.get().events)).toEqual([created]);
+  expect(log.get()).toMatchObject({ version: 2, caughtUp: false, actors: [] });
+  release();
+  await settle();
+  expect(offsetsOf(log.get().events)).toEqual(context.offsets.filter((o) => o >= created));
+  expect(log.get()).toMatchObject({
+    version: 2,
+    caughtUp: true,
+    older: { exhausted: true },
+    tableVersion: created,
+  });
+  expect(context.rows.map((row) => row.disposed)).toEqual([true, false]);
+  expect(context.rows[1]).toMatchObject({ consumes: ["*"] });
+  expect(context.reads.slice(readsBefore)).toEqual([[created - 1, 1000]]);
+  log.dispose();
+  expect(context.rows[1]).toMatchObject({ disposed: true });
+});
+
+test("a border seen twice (the kernel's last batch, then a push and a page that hold it) is one border", async () => {
+  const context = fakeContext(offsetsWithGaps(100), firstVersionCreated);
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  const { ended, created } = context.newVersion(5);
+  await settle();
+  context.pushOn(1, [ended, created]);
+  await settle();
+  expect(context.subscribes()).toBe(2);
+  expect(offsetsOf(log.get().events)).toEqual(context.offsets.filter((o) => o >= created));
+  expect(log.get()).toMatchObject({ version: 2, caughtUp: true });
+  log.dispose();
+});
+
+test("a row made in the earlier version, whose last batch arrives after the connect's first read answered the new version, is still a border", async () => {
+  const context = fakeContext(offsetsWithGaps(100), firstVersionCreated);
+  const read = context.itx.readEvents.bind(context.itx);
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  context.itx.readEvents = async (...args) => {
+    await held;
+    return read(...args);
+  };
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  // the row exists, the first read has not answered, and the context starts a new version
+  const { ended, created } = context.newVersion(5, false);
+  release();
+  await settle();
+  expect(log.get()).toMatchObject({ version: 2, caughtUp: true });
+  expect(context.subscribes()).toBe(1);
+  context.pushOn(0, [ended, created]);
+  await settle();
+  expect({
+    subscribes: context.subscribes(),
+    disposed: context.rows.map((row) => row.disposed),
+  }).toEqual({ subscribes: 2, disposed: [true, false] });
+  expect(offsetsOf(log.get().events)).toEqual(context.offsets.filter((o) => o >= created));
+  expect(log.get()).toMatchObject({ version: 2, caughtUp: true });
+  log.dispose();
+});
+
+test("a subscribe refused as UNAVAILABLE is made again after retryAfterMs and then succeeds; thirty refusals end in error", async () => {
+  const context = fakeContext(offsetsWithGaps(100), firstVersionCreated);
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  context.refuseSubscribes(3);
+  const { created } = context.newVersion(5);
+  await vi.waitFor(() => expect(log.get()).toMatchObject({ version: 2, caughtUp: true }));
+  expect(context.subscribes()).toBe(1 + 3 + 1);
+  expect(offsetsOf(log.get().events)).toEqual(context.offsets.filter((o) => o >= created));
+  log.dispose();
+
+  const refused = fakeContext(offsetsWithGaps(100), firstVersionCreated);
+  const failing = connectEventLog(refused.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  refused.refuseSubscribes(30);
+  refused.newVersion(5);
+  await vi.waitFor(() =>
+    expect(failing.get()).toMatchObject({ error: "the context restarts", caughtUp: false }),
+  );
+  expect(refused.subscribes()).toBe(1 + 30);
+  failing.dispose();
+});
+
+test("after a border, what the new row delivers is held, and what the earlier row delivers is not", async () => {
+  const context = fakeContext(offsetsWithGaps(100), firstVersionCreated);
+  const log = connectEventLog(context.itx, { consumes: ["*"], history: "tail" });
+  await settle();
+  context.newVersion(5);
+  await settle();
+  const head = context.head;
+  context.pushOn(1, [head + 1]);
+  context.pushOn(0, [head + 2]);
+  await settle();
+  expect(offsetsOf(log.get().events).slice(-2)).toEqual([head, head + 1]);
+  expect(log.get()).toMatchObject({ head: head + 1 });
+  log.dispose();
+});
+
 // ── the fake context ──
+/** A first version's `itx/created`, at offset 1, with no `version`. */
+const firstVersionCreated = (offset: number): Partial<StreamEvent> =>
+  offset === 1 ? { type: "events.iterate.com/itx/created", payload: { path: "/" } } : {};
+
 function fakeContext(
   offsets: number[],
   extra: (offset: number) => Partial<StreamEvent> = () => ({}),
 ) {
-  const head = offsets.at(-1) ?? 0;
+  const log = [...offsets];
+  /** The kernel's events of a new version, by offset. */
+  const kernel = new Map<number, Partial<StreamEvent>>();
+  /** The current version's `itx/created` (a read from 0 begins there); 0 = the log's first. */
+  let start = 0;
+  let version = 1;
   const eventAt = (offset: number) => ({
     ...committedEvent(offset, "test.example.com/thing", { offset }),
     ...extra(offset),
+    ...kernel.get(offset),
   });
-  let target: ((batch: unknown[]) => void) | undefined;
+  const rows: {
+    consumes: string[] | undefined;
+    deliver: (batch: unknown[]) => void;
+    disposed: boolean;
+  }[] = [];
+  let subscribes = 0;
+  let refusals = 0;
   const reads: [number, number][] = [];
   let inFlight = 0;
   const itx: EventLogItx = {
     async subscribe(input) {
-      target = (batch) => input.target(batch, undefined);
-      return { [Symbol.dispose]() {} };
+      subscribes += 1;
+      if (refusals > 0) {
+        refusals -= 1;
+        throw codedError("UNAVAILABLE", "the context restarts", {
+          kind: "deploy-reset",
+          retryAfterMs: 1,
+        });
+      }
+      const row = {
+        consumes: input.consumes,
+        deliver: (batch: unknown[]) => input.target(batch, undefined),
+        disposed: false,
+      };
+      rows.push(row);
+      return {
+        [Symbol.dispose]() {
+          row.disposed = true;
+        },
+      };
     },
     async readEvents(after = 0, limit = 500) {
       reads.push([after, limit]);
       inFlight += 1;
       await Promise.resolve();
       inFlight -= 1;
+      const head = log.at(-1) ?? 0;
+      const from = after === 0 ? Math.max(0, start - 1) : after;
       const cap = Math.min(Math.max(1, limit), 1000, 300); // 300: the byte budget's cut
-      const rows = offsets.filter((offset) => offset > after).slice(0, cap);
-      const last = rows.at(-1) ?? after;
-      const atHead = rows.length < cap || last >= head;
+      const found = log.filter((offset) => offset > from).slice(0, cap);
+      const last = found.at(-1) ?? from;
+      const atHead = found.length < cap || last >= head;
       return {
-        events: rows.map(eventAt),
+        events: found.map(eventAt),
         atHead,
         scannedThroughOffset: atHead ? head : last,
+        // as the kernel's page: the version and its start, from the second version on
+        ...(version > 1 && { version, versionStartedAtOffset: start }),
       };
     },
   };
   return {
     itx,
-    head,
-    offsets,
+    get head() {
+      return log.at(-1) ?? 0;
+    },
+    offsets: log,
     reads,
+    rows,
+    subscribes: () => subscribes,
     pendingOlder: () => inFlight > 0,
-    push: (pushed: number[]) => target!(pushed.map(eventAt)),
+    push: (pushed: number[]) => rows.at(-1)!.deliver(pushed.map(eventAt)),
+    /** A delivery on the `index`th row the log subscribed, whether or not it is still live. */
+    pushOn: (index: number, pushed: number[]) => rows[index]!.deliver(pushed.map(eventAt)),
+    refuseSubscribes: (count: number) => (refusals = count),
+    /** `itx.newVersion()`: the capstone and the next version's `itx/created` go to every row
+     *  as the kernel's last batch, then `count` events of the new version are appended. */
+    newVersion(count: number, deliver = true) {
+      const ended = (log.at(-1) ?? 0) + 1;
+      const created = ended + 1;
+      kernel.set(ended, { type: "events.iterate.com/itx/version-ended", payload: { version } });
+      version += 1;
+      kernel.set(created, {
+        type: "events.iterate.com/itx/created",
+        payload: { path: "/", version },
+      });
+      log.push(ended, created);
+      start = created;
+      if (deliver)
+        for (const row of rows) if (!row.disposed) row.deliver([eventAt(ended), eventAt(created)]);
+      for (let i = 1; i <= count; i += 1) log.push(created + i);
+      return { ended, created };
+    },
   };
 }
 

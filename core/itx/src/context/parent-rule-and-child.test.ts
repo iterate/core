@@ -219,6 +219,7 @@ const KERNEL_ROOTS = [
   "append",
   "appendOffsets",
   "abort",
+  "newVersion",
   "schedules",
   "readEvents",
   "waitForEvent",

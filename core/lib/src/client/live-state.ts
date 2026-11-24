@@ -4,7 +4,8 @@
 //   live state client — `connectLiveState`: wire an itx session's `subscribe` + a seed read to the store
 
 import { z } from "zod";
-import { applyPatch, type PatchOp } from "../lib.ts";
+import { applyPatch, errorCode, type PatchOp } from "../lib.ts";
+import { retryWhileUnavailable, versionStartedBy } from "./new-version.ts";
 
 // ── live state store ── THE CLIENT HALF of live state, for browsers and node test clients.
 // A deliberately small store for the platform's live-state wire:
@@ -55,6 +56,9 @@ export type LiveStateStore<S> = {
   subscribe(listener: () => void): () => void;
   /** Seed (or re-seed) from a seed read — the first paint, and the heal after a gap. */
   seed(seed: LiveStateSeed<S>): void;
+  /** Hold nothing again (`rev` null, value undefined): the producer whose state it held is gone
+   *  (a new version of its context, or its facet no longer hosted). Any seed is taken next. */
+  clear(): void;
   /** Reduce one delta in; on a revision gap call `resync` and hold the value until a fresh seed. */
   apply(delta: LiveStateDelta, resync: () => void): void;
 };
@@ -79,6 +83,10 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
       held = { rev: seed.rev, state: seed.state };
       notify();
     },
+    clear: () => {
+      held = { rev: null, state: undefined };
+      notify();
+    },
     apply: (delta, resync) => {
       // A delta at-or-behind the held rev is a duplicate/out-of-order frame — drop it silently.
       // (Epochs are minted from the clock, so a reborn producer's fresh chain sits numerically above
@@ -100,9 +108,9 @@ export function createLiveStateStore<S>(): LiveStateStore<S> {
 }
 
 // ── live state client ── wire an itx session's `subscribe` + a seed read to a LiveStateStore.
-// This is the whole cleanroom client: a subscription that consumes the one live-state event type
-// (`itx.subscribe({ target, consumes: ["events.iterate.com/itx/live-state-changed"] })`) delivers every
-// key's deltas in batches; this filters the watched `key` and reduces each delta into the store; a
+// This is the whole cleanroom client: a subscription that consumes the live-state event type
+// (`itx.subscribe({ target, consumes: ["events.iterate.com/itx/live-state-changed", …] })`) delivers
+// every key's deltas in batches, and the `itx/created` of the context's next version; this filters the watched `key` and reduces each delta into the store; a
 // `readSeed` thunk reads `{rev, state}` for the first paint and every gap heal. Transport lives here so
 // the store above and the React hook stay pure.
 
@@ -131,7 +139,14 @@ export type LiveStateConnection<S> = {
  *  own `state()` method). Subscribe happens BEFORE the first seed, so a delta racing the seed just
  *  triggers one seed re-read — never a lost update. Gap heals are SINGLE-FLIGHT (a burst of gapped
  *  frames triggers one seed read, not one per frame); a failed heal is reported through `onResync`
- *  and retried by the next delivered delta (its `from` still mismatches, so it re-triggers). */
+ *  and retried by the next delivered delta (its `from` still mismatches, so it re-triggers).
+ *
+ *  The store never holds an earlier version's state (`itx.newVersion`, core/lib/README.md "A new
+ *  version of a context"). When the context starts a later version, its `itx/created` reaches the
+ *  row (the kernel's last batch to every row, whatever it consumes): the store is cleared, the
+ *  connection subscribes again — the row went with the earlier version — and reads the new
+ *  producer's seed. A seed read that fails with code `NO_FACET` clears the store too: the facet
+ *  whose state it held is not hosted now. */
 export async function connectLiveState<S>(
   itx: LiveStateItx,
   opts: {
@@ -139,7 +154,8 @@ export async function connectLiveState<S>(
     name?: string;
     readSeed: () => Promise<LiveStateSeed<S>>;
     /** Called after each gap heal attempt: "healed" on a fresh seed, the error when the seed read
-     *  failed (the store keeps its last value; the next delta retries). */
+     *  failed (the store keeps its last value, or holds nothing after `NO_FACET`; the next delta
+     *  retries), or when the subscribe of a new version failed. */
     onResync?: (result: "healed" | Error) => void;
     /** Abort while the FIRST seed is still pending (a component unmounting): the row just configured
      *  is recalled and the connect rejects — a seed read that never answers leaves nothing lent. */
@@ -150,6 +166,10 @@ export async function connectLiveState<S>(
   let healing = false;
   let healWantedAgain = false; // a gap seen WHILE a heal was in flight: the seed may predate it
   let disposed = false;
+  let subscription: { [Symbol.dispose](): void } | undefined;
+  /** How many later versions of the context the connection has followed: a row's delivery and a
+   *  seed read begun in an earlier version answer into nothing. */
+  let versions = 0;
   const reseed = () => {
     if (disposed) return;
     if (healing) {
@@ -157,6 +177,7 @@ export async function connectLiveState<S>(
       return;
     }
     healing = true;
+    const of = versions;
     const settled = () => {
       healing = false;
       if (disposed || !healWantedAgain) return;
@@ -165,55 +186,96 @@ export async function connectLiveState<S>(
     };
     void opts.readSeed().then(
       (s) => {
-        if (!disposed) {
+        if (!disposed && versions === of) {
           store.seed(s);
           opts.onResync?.("healed");
         }
         settled();
       },
       (e: unknown) => {
-        if (!disposed) opts.onResync?.(e instanceof Error ? e : new Error(String(e)));
+        if (!disposed && versions === of) {
+          if (errorCode(e) === "NO_FACET") store.clear();
+          opts.onResync?.(e instanceof Error ? e : new Error(String(e)));
+        }
         settled();
       },
     );
   };
-  const subscription = await itx.subscribe({
-    name: opts.name,
-    consumes: ["events.iterate.com/itx/live-state-changed"],
-    // A batch of live-state deltas (every key's); keep the watched key's.
-    target: (events: unknown[]) => {
-      if (disposed) return;
-      for (const e of events) {
-        // capnweb hands each event as a live proxy value — deep-copy to a plain object, then PARSE
-        // the frame (never cast network data). The whole decode is guarded: an ABSENT payload makes
-        // `JSON.parse(JSON.stringify(undefined))` throw before validation, and any throw here would
-        // skip every later delta in the batch. A malformed OR undecodable frame heals from a fresh seed
-        // instead of poisoning the held rev or escaping this callback.
-        let parsed: ReturnType<(typeof LiveStateDeltaMessage)["safeParse"]> | undefined;
-        try {
-          parsed = LiveStateDeltaMessage.safeParse(
-            JSON.parse(JSON.stringify((e as { payload: unknown }).payload)),
-          );
-        } catch {
-          parsed = undefined;
-        }
-        if (!parsed?.success) {
-          reseed();
-          continue;
-        }
-        if (parsed.data.key !== opts.key) continue;
-        // `store.apply` runs `applyPatch`, which THROWS on a patch it refuses (a `/__proto__` path a
-        // legitimate state with an own `__proto__` key produces, say). Contain it per frame: heal from
-        // a fresh seed — which re-seeds the state DIRECTLY, no patch to reject — instead of escaping this
-        // callback and skipping every later frame.
-        try {
-          store.apply(parsed.data, reseed);
-        } catch {
-          reseed();
-        }
+  /** A batch the row of version `of` delivers: live-state deltas (every key's; the watched key's
+   *  are kept), and the kernel's events of a new version. */
+  const take = (of: number, events: unknown[]) => {
+    if (disposed || versions !== of) return;
+    for (const e of events) {
+      // capnweb hands each event as a live proxy value — deep-copy to a plain object, then PARSE
+      // the frame (never cast network data). An event that does not decode (`undefined` makes
+      // `JSON.parse(JSON.stringify(undefined))` throw) fails the parse below like a malformed
+      // one: any throw here would skip every later delta in the batch. A malformed OR undecodable
+      // frame heals from a fresh seed instead of poisoning the held rev or escaping this callback.
+      let event: unknown;
+      try {
+        event = JSON.parse(JSON.stringify(e));
+      } catch {
+        event = undefined;
       }
-    },
-  });
+      const started = versionStartedBy(event);
+      if (started !== undefined && started > 1) {
+        startOver();
+        return;
+      }
+      // `itx/version-ended`, which comes first in the kernel's last batch, and a first version's
+      // `itx/created`: no delta, and no gap
+      if (KernelVersionEvent.safeParse(event).success) continue;
+      const parsed = LiveStateDeltaEvent.safeParse(event);
+      if (!parsed.success) {
+        reseed();
+        continue;
+      }
+      if (parsed.data.payload.key !== opts.key) continue;
+      // `store.apply` runs `applyPatch`, which THROWS on a patch it refuses (a `/__proto__` path a
+      // legitimate state with an own `__proto__` key produces, say). Contain it per frame: heal from
+      // a fresh seed — which re-seeds the state DIRECTLY, no patch to reject — instead of escaping this
+      // callback and skipping every later frame.
+      try {
+        store.apply(parsed.data.payload, reseed);
+      } catch {
+        reseed();
+      }
+    }
+  };
+  /** Subscribe the row for the version held. False when it is of no use (disposed, or a later
+   *  version started while it was made). */
+  const subscribeRow = async () => {
+    const of = versions;
+    const handle = await retryWhileUnavailable(
+      () =>
+        itx.subscribe({
+          name: opts.name,
+          consumes: ["events.iterate.com/itx/live-state-changed", "events.iterate.com/itx/created"],
+          target: (events: unknown[]) => take(of, events),
+        }),
+      () => disposed || versions !== of,
+    );
+    if (!handle) return false;
+    if (disposed || versions !== of) {
+      disposeRow(handle);
+      return false;
+    }
+    subscription = handle;
+    return true;
+  };
+  /** The context started a later version: its producer and this connection's row are gone. */
+  const startOver = () => {
+    versions += 1;
+    const earlier = subscription;
+    subscription = undefined;
+    disposeRow(earlier);
+    store.clear();
+    void subscribeRow().then(
+      (subscribed) => subscribed && reseed(),
+      (e: unknown) => !disposed && opts.onResync?.(e instanceof Error ? e : new Error(String(e))),
+    );
+  };
+  await subscribeRow();
   try {
     const seed = opts.readSeed();
     const { signal } = opts;
@@ -229,16 +291,14 @@ export async function connectLiveState<S>(
         else signal.addEventListener("abort", abort, { once: true });
       });
     if (aborted) seed.catch(() => undefined); // the seed read may still settle after the abort — quietly
-    store.seed(await (aborted ? Promise.race([seed, aborted]) : seed));
+    const first = await (aborted ? Promise.race([seed, aborted]) : seed);
+    // a new version that started while the first seed was read reads its own seed
+    if (versions === 0) store.seed(first);
   } catch (error) {
     // The seed failed after the row was configured: recall it, or the server keeps delivering to a
     // callback no one holds (and the session's other rows wait behind it).
     disposed = true;
-    try {
-      subscription[Symbol.dispose]();
-    } catch {
-      // a dead session has already removed it
-    }
+    disposeRow(subscription);
     throw error;
   }
   return {
@@ -246,11 +306,24 @@ export async function connectLiveState<S>(
     async dispose() {
       if (disposed) return;
       disposed = true;
-      try {
-        subscription[Symbol.dispose](); // the server removes the row and recalls the lent callback
-      } catch {
-        // a dead session has already removed it — the socket close disposed every handle
-      }
+      disposeRow(subscription); // the server removes the row and recalls the lent callback
     },
   };
+}
+
+/** The delta event as the subscription delivers it. */
+const LiveStateDeltaEvent = z.object({ payload: LiveStateDeltaMessage });
+
+/** The kernel's events of a version's border, which reach every row whatever it consumes. */
+const KernelVersionEvent = z.object({
+  type: z.enum(["events.iterate.com/itx/version-ended", "events.iterate.com/itx/created"]),
+});
+
+function disposeRow(row: { [Symbol.dispose](): void } | undefined) {
+  try {
+    row?.[Symbol.dispose]();
+  } catch {
+    // a dead session has already removed it — the socket close disposed every handle — and a
+    // row of an earlier version went with that version
+  }
 }

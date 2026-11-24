@@ -188,6 +188,71 @@ A processor whose work takes steps is still one contract, one state, one `reduce
 8. **Test it as tables:** events through `reduceProcessor`, states through `processEvent` with a fake
    effect on a fake clock, and a re-reduce row.
 
+## A new version of a context
+
+A context path has a version, a number that starts at 1. `itx.newVersion(reason?)` ends the
+current version and starts the next one at the same path, in the same Durable Object. The log goes
+on: an offset names one event of the path for ever.
+
+```
+K     itx/run-settled   (each open run, `interrupted`)
+K+n   itx/version-ended { version: 1, reason?, callerPath?, app?, held: { schedules, subscriptions, rewriteRules } }
+K+n+1 itx/created       { path, version: 2 }
+      (the object restarts)
+K+n+2 itx/woken, then the host's birth events and its wake events: the version's birth
+```
+
+The answer waits until no other isolate holds the earlier version's rules (5 s at most). An append
+that arrives between the capstone and the restart is refused as `UNAVAILABLE` and may be sent
+again. The next incarnation empties what the earlier version left: the subscriptions, schedules,
+fetch routes, pause and open runs, every facet with its storage, every cursor and delivery, and
+the kernel's own kv rows. `held` names the schedules, subscriptions and rules that the version
+held. What holds the context's code stays: a mask (a rule with a null target, a jail's bare
+`itx ⇒ null` among them), and a rule at one of the context's own verbs (`itx.cd` pointed at a
+broker, `itx.run` at a jail). Loaded code can remove neither. Every other rule goes: the parent
+link, and a rule at any other name. Under a jail every rule with a target goes, at an own verb
+too: there each is a grant. So the config writes a jail's grants again. A context that
+masks a name takes a new version only from a member's session.
+
+A subscriber whose target is a client's live callback gets the capstone (`itx/version-ended` and
+`itx/created`) as its last batch, whatever it consumes: its row goes with the version. An event
+that its row does not take comes as the bare border, with the version alone. `iterate/client`
+then subscribes again and reads the new version from its start. The limits:
+
+- Each call that runs starts a version. A second call that reaches the context after the restart
+  starts another: call once for a path, and do not send the call again after an error.
+
+- A WebSocket that a client holds through the context to a provider (a fetch upgrade) dials
+  again after the restart, as it does after `itx.abort()`, and goes on when its expression still
+  resolves in the new version.
+- A name that a client lent the earlier version (`provide`) goes with it. The client is not
+  told, and provides again by its own call.
+- A write that another context makes in reaction to the earlier version, and that arrives after
+  the capstone, lands in the new version: it is sent again like any write. A schedule or a
+  subscription of another context that appends here goes on.
+- A handle made with `facets.get(name, spec)` names a spec; called after a new version, it hosts
+  that spec under the name again.
+- What another context keeps about this one is that context's: a catalog row on a parent keeps
+  its title and description. Each copy of an event of the current version names that version
+  (`source.copiedFrom.version`, from 2 on), so a catalog can start a row over when it rises.
+- A rule at a name that is none of the context's own verbs goes with the other rules, also when
+  it narrowed what the parent link gives. Under a mask, write it again before code runs there.
+- The kit (`@iterate-com/ui`) keeps what it last drew for a moment after the border.
+
+The log stays, and so does what other objects keep under the path: child contexts, the parent's
+catalog row, secrets, the mind's kv, files and telemetry. A child announces itself to its
+ancestors once, so a new version of an ancestor holds no `itx/child-created` for the children that
+exist, and a catalog that it folds from those facts (`/agents`) starts empty. A read from the
+start (`afterOffset` 0)
+begins at the current version; `allVersions: true` reads from the log's start. A read from a
+positive offset is taken as given: it answers the event at that offset whatever its version, and
+reads on into the current version. An idempotency key counts within its version. The root `/`
+and a context that hosts a first-party facet refuse a new version.
+
+An agent's kind sends the agent's start facts, keyed, with every input. After a new version those
+keys are free again. So the next input starts whatever implementation the config has now, on an
+empty version: `itx.cd(path).newVersion()` starts an agent over.
+
 ## Node connections
 
 `iterate/node` connects a Node script to a mind at its address, with the same protocol, sign-in

@@ -129,7 +129,10 @@ export function useLiveState<S>(
   );
   if (!store && opts.initial)
     return { value: opts.initial.state, rev: opts.initial.rev, status, error };
-  return { value, rev: store?.rev() ?? null, status, error };
+  const rev = store?.rev() ?? null;
+  // a live store that holds nothing was cleared (a new version of the context): it waits for the
+  // new producer's first seed, as a store does before its first
+  return { value, rev, status: status === "live" && rev === null ? "connecting" : status, error };
 }
 
 /** The live state of a facet hosted on a held context — `useLiveState` seeded by the facet's own
@@ -279,6 +282,8 @@ export function useIterateContext(
   presence: { actors: IterateContextPresence[]; rpcStubs: string[] };
   /** The name of this log's own row among `processors.rows` (`EventLogSnapshot.subscription`). */
   subscription?: string;
+  /** The version of the context that `events` are of (`EventLogSnapshot.version`). */
+  version: number;
   liveState: Record<string, LiveStateResult>;
 } {
   // ── the log ──
@@ -313,7 +318,7 @@ export function useIterateContext(
     () => connection?.get() ?? EMPTY_EVENT_LOG,
     () => EMPTY_EVENT_LOG,
   );
-  const { events: sorted, caughtUp, head, tableVersion } = held;
+  const { events: sorted, caughtUp, head, tableVersion, version } = held;
   const loadOlder = useCallback(() => connection?.loadOlder(), [connection]);
   const older = useMemo(
     () => ({ loadOlder, loading: held.older.loading, exhausted: held.older.exhausted }),
@@ -425,9 +430,16 @@ export function useIterateContext(
           }
           disposers.push(connection.dispose);
           disposers.push(
-            connection.store.subscribe(() =>
-              patch(name, { value: connection.store.get(), rev: connection.store.rev() }),
-            ),
+            connection.store.subscribe(() => {
+              const rev = connection.store.rev();
+              // a store cleared by a new version of the context waits for the new producer's
+              // first seed, as it did for its first
+              patch(name, {
+                value: connection.store.get(),
+                rev,
+                ...(rev === null && { status: "connecting", error: undefined }),
+              });
+            }),
           );
           patch(name, {
             value: connection.store.get(),
@@ -449,17 +461,25 @@ export function useIterateContext(
   }, [itx, liveStateKey]);
   // THE CORE REDUCE has no live state (a delta per commit on every context, for one panel): its `snapshot()` — `{ offset, state }` — is read once caught up and again as the
   // head moves (at most once a second), one read in flight; a head that moves during a read is
-  // read once more after it.
+  // read once more after it. A read remembers the version of the log it was made in: an earlier
+  // version's core state is never shown beside a later version's log.
   const wantsCore = (JSON.parse(liveStateKey) as string[]).includes("core");
-  const [core, setCore] = useState<{ itx: IterateContextHandle; result: LiveStateResult }>();
-  const coreReads = useRef<{ itx?: IterateContextHandle; inFlight: boolean; again: boolean }>({
-    inFlight: false,
-    again: false,
-  });
+  const [core, setCore] = useState<{
+    itx: IterateContextHandle;
+    version: number;
+    result: LiveStateResult;
+  }>();
+  const coreReads = useRef<{
+    itx?: IterateContextHandle;
+    version: number;
+    inFlight: boolean;
+    again: boolean;
+  }>({ version, inFlight: false, again: false });
   useEffect(() => {
     if (!itx || !wantsCore || !caughtUp) return;
     const reads = coreReads.current;
     if (reads.itx !== itx) Object.assign(reads, { itx, inFlight: false, again: false });
+    reads.version = version;
     if (reads.inFlight) {
       reads.again = true;
       return;
@@ -467,6 +487,7 @@ export function useIterateContext(
     const read = (): void => {
       reads.inFlight = true;
       reads.again = false;
+      const of = reads.version;
       itx
         .invoke("itx.facets.get('core').snapshot()")
         .then(
@@ -475,6 +496,7 @@ export function useIterateContext(
             if (reads.itx !== itx) return;
             setCore({
               itx,
+              version: of,
               result: { value: snapshot.state, rev: snapshot.offset, status: "live" },
             });
           },
@@ -482,6 +504,7 @@ export function useIterateContext(
             reads.itx === itx &&
             setCore({
               itx,
+              version: of,
               result: {
                 value: undefined,
                 rev: null,
@@ -497,7 +520,7 @@ export function useIterateContext(
         });
     };
     read();
-  }, [itx, wantsCore, caughtUp, headForReads]);
+  }, [itx, wantsCore, caughtUp, headForReads, version]);
   useEffect(
     () => () => {
       coreReads.current.itx = undefined; // unmounted: a read that lands after is dropped
@@ -512,10 +535,10 @@ export function useIterateContext(
     const held: Record<string, LiveStateResult> = {
       ...(itx && liveStates?.itx === itx && liveStates.key === liveStateKey && liveStates.entries),
     };
-    if (itx && core?.itx === itx) held.core = core.result;
+    if (itx && core?.itx === itx && core.version === version) held.core = core.result;
     else delete held.core;
     return Object.fromEntries(names.map((name) => [name, held[name] || LIVE_STATE_CONNECTING]));
-  }, [itx, liveStateKey, liveStates, core]);
+  }, [itx, liveStateKey, liveStates, core, version]);
 
   return {
     events: sorted,
@@ -530,6 +553,7 @@ export function useIterateContext(
     },
     presence: { actors: held.actors, rpcStubs },
     subscription: held.subscription,
+    version,
     liveState,
   };
 }

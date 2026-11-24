@@ -167,6 +167,12 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
   return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
 }
 
+// A client's lent callback: the stub under `rpcStubs.get(key)`. From the rules alone, as above.
+export function targetIsLentCallback(state: CoreState, row: Subscription): boolean {
+  const resolved = resolveThroughCommittedState(state, row.target);
+  return !!resolved && !!builtInsGetStep(resolved, "rpcStubs");
+}
+
 export function targetIsAnotherService(state: CoreState, row: Subscription): boolean {
   const resolved = resolveThroughCommittedState(state, row.target);
   return (
@@ -250,6 +256,10 @@ export type Subscription = {
 export type CoreState = {
   path?: string;
   createdAt?: string;
+  // Absent: 1. `itx.newVersion` starts the next at the same path, with this state empty.
+  version?: number;
+  // The offset of this version's `itx/created`; absent: the log's start.
+  versionStartedAtOffset?: number;
   incarnation?: number;
   contextAbortedOffset?: number;
   wokenAfterContextAbortedOffset?: number;
@@ -285,11 +295,12 @@ function parseSubscriptionName(name: string): string {
 export const CoreContract = {
   slug: "core",
   // A bump re-reduces the log from offset 0 in the DO constructor. Bump it whenever a reducer
-  // reads an event otherwise: a table that the old reducer kept is not this one's. 18: a fetch
-  // route's matcher has no `routingSlug`, which the earlier stack's 17 kept and read as "every
-  // request" here. Measured on 18 Nov 2026 with a local copy of the reduce: iterate.com's root
-  // (94,420 events, 284 MiB) re-reduces in 0.7 s of CPU, its largest context (2.7 GiB) in 6 s.
-  version: "18.0.0",
+  // reads an event otherwise: a table that the old reducer kept is not this one's. 19: an
+  // `itx/created` of a version above 1 starts the state over; a reducer that reads it as a path
+  // alone keeps the earlier version's tables. Measured on 18 Nov 2026 with a local copy of
+  // the reduce: iterate.com's root (94,420 events, 284 MiB) re-reduces in 0.7 s of CPU, its
+  // largest context (2.7 GiB) in 6 s.
+  version: "19.0.0",
   events: { ...CoreEventCatalog.events, ...RunEventCatalog.events },
   initialState: (): CoreState => ({
     paused: null,
@@ -369,12 +380,46 @@ function reduceCoreEvent(
       delete scriptRuns[requestOffset];
       return { ...state, scriptRuns };
     }
-    case "events.iterate.com/itx/created":
+    case "events.iterate.com/itx/created": {
+      const version = payload.version;
+      // A new version: nothing derived from the earlier one stands. `snapshotVersion` moves so a
+      // rules snapshot that another isolate holds reads as old.
+      if (typeof version === "number" && version > 1) {
+        // What holds the context's code is not the context's own state, and stays: a mask (a
+        // jail's bare `itx ⇒ null` among them), and a rule at one of the context's own verbs
+        // (`itx.cd` pointed at a broker, `itx.run` at a jail), which narrows what every context
+        // has. Loaded code can remove neither. A grant is the context's state and goes: the bare
+        // `itx` with a target (the parent link), and a rule at any other name. Under a jail every
+        // rule with a target is a grant, at an own verb too: the bare null gave that verb nothing.
+        const rules = state.itxExpressionRewriteRules;
+        const jailed = !!rules.itx && !rules.itx.target;
+        const ownVerbs = implicitRootsAt(payload.path as string);
+        const holds = Object.fromEntries(
+          Object.entries(rules).filter(([, rule]) => {
+            const verb = rule.match.length > 1 ? itxExpressionStepName(rule.match[1]!) : undefined;
+            return !rule.target || (!jailed && !!verb && ownVerbs.has(verb));
+          }),
+        );
+        return {
+          ...CoreContract.initialState(),
+          path: payload.path as string,
+          createdAt: event.createdAt,
+          incarnation: state.incarnation,
+          version,
+          versionStartedAtOffset: event.offset,
+          snapshotVersion: event.offset,
+          itxExpressionRewriteRules: holds,
+          // A deliberate reset, as `itx/aborted` is: the version's first `woken` moves it to
+          // `wokenAfterContextAbortedOffset`, so an upgrade the restart cut reads as this reset.
+          contextAbortedOffset: event.offset,
+        };
+      }
       return {
         ...state,
         path: payload.path as string,
         createdAt: event.createdAt,
       };
+    }
     case "events.iterate.com/itx/woken":
       return {
         ...state,
@@ -652,6 +697,7 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
 // from anyone else, so no caller can forge who a context is, a halt, or a run's settlement.
 export const STREAM_RECORD_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
+  "events.iterate.com/itx/version-ended",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
   "events.iterate.com/itx/subscription-delivery-failed",

@@ -147,7 +147,7 @@ export type PrepareConfinedWorkerOptions = {
   itxEntrypoint: Fetcher;
   kind: "worker" | "facet";
   // one element of the JSON-array loader id, so a ":" in either half cannot alias another owner
-  owner: string | readonly [iterateContextName: string, className: string];
+  owner: string | readonly [iterateContextName: string, className: string, version?: number];
   source: WorkerSource;
   cacheKey?: string;
   mainModule?: string;

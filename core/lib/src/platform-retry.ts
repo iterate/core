@@ -42,7 +42,8 @@ export function failureKind(error: unknown): FailureKind {
     return isPlatformFailureKind(stamped.data?.kind) ? stamped.data.kind : "failed";
   if (typeof stamped.code === "string") return "refused";
   const text = messagesOf(error);
-  if (/reset because its code was updated/.test(text)) return "deploy-reset";
+  if (/reset because its code was updated/.test(text) || ASKED_RESET_MESSAGE.test(text))
+    return "deploy-reset";
   if (stamped.overloaded === true || OVERLOADED_MESSAGE.test(text)) return "overloaded";
   if (stamped.retryable === true || DISCONNECTED_MESSAGE.test(text)) return "disconnected";
   return "failed";
@@ -62,6 +63,13 @@ export function failureKind(error: unknown): FailureKind {
  *  Workers KV's binding quotes the HTTP status the KV service answered ("KV PUT failed: 429 Too Many
  *  Requests", workerd api/kv.c++ `checkForErrorStatus`), read as `httpFailureKind` reads a status:
  *  KV allows one write per key per second (https://developers.cloudflare.com/kv/platform/limits/). */
+/** A reset that a caller asked a context for (`itx.abort()`, `itx.newVersion()`): the runtime
+ *  rejects every other call in flight with the reset's own message, which the kernel words
+ *  (core/itx/src/context/built-ins.ts `abort`, iterate-context-durable-object.ts
+ *  `#startNewVersion`). It is an expected reset, as a deploy's is: the next call reaches the new
+ *  incarnation. */
+const ASKED_RESET_MESSAGE =
+  /^itx\.(abort\(\) reset the context|newVersion\(\) started a new version of) /m;
 const OVERLOADED_MESSAGE =
   /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset|KV [A-Z]+ failed: (429|408)\b/;
 const DISCONNECTED_MESSAGE =

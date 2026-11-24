@@ -8,7 +8,7 @@
 // processor-rules.test.ts.
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
-import { applyPatch, errorCode, type PatchOp } from "../lib.ts";
+import { applyPatch, codedError, errorCode, type PatchOp } from "../lib.ts";
 import {
   defineProcessorContract,
   type StreamEvent,
@@ -168,6 +168,44 @@ test("rule 3 — runInBackground escapes the barrier", async () => {
   expect(order).toEqual(["fg 1", "fg 2"]); // background hasn't landed — it overtakes/loiters
   await new Promise((r) => setTimeout(r, 30));
   expect(order.slice(2).sort()).toEqual(["bg 1", "bg 2"]);
+});
+
+test("background work that meets a context's expected reset reports nothing; any other failure is reported", async () => {
+  const issues = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const mem = memoryStream();
+  const Contract = defineProcessorContract({
+    slug: "bg-reset",
+    version: "1",
+    description: "",
+    stateSchema: z.object({}),
+    consumes: ["e"],
+    emits: [],
+  });
+  class ResetProcessor extends StreamProcessor<object> {
+    readonly contract = Contract;
+    override processEvent(args: ProcessEventArgs<object>): undefined {
+      if (!args.event) return;
+      const reset = args.event.offset === 1;
+      args.runInBackground(async () => {
+        throw reset
+          ? codedError("UNAVAILABLE", "the context started version 2 and is about to restart", {
+              kind: "deploy-reset",
+              retryAfterMs: 1_000,
+            })
+          : new Error("a real fault");
+      });
+    }
+  }
+  const engine = new ProcessorEngine(new ResetProcessor(), {
+    stream: mem.stream,
+    storage: memoryStorage(),
+  });
+  mem.stream.append({ type: "e" }, { type: "e" });
+  await engine.catchUpFromLog();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(issues.mock.calls.map((call) => JSON.stringify(call))).toEqual([
+    expect.stringContaining("a real fault"),
+  ]);
 });
 
 test("rule 4 — one persist per pushed scannedOffsetRange, cursor advances only after", async () => {

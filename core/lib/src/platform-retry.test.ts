@@ -46,6 +46,21 @@ test.for([
     kind: "deploy-reset",
   },
   {
+    name: "a call cut by a new version that a caller asked for is an expected reset",
+    error: new Error("itx.newVersion() started a new version of /agents/a: start over"),
+    kind: "deploy-reset",
+  },
+  {
+    name: "a call cut by an abort that a caller asked for is an expected reset",
+    error: new Error("itx.abort() reset the context /agents/a"),
+    kind: "deploy-reset",
+  },
+  {
+    name: "a message that only names the verb in its middle is no reset",
+    error: new Error("the script said: itx.newVersion() started a new version of /agents/a"),
+    kind: "failed",
+  },
+  {
     name: "a lost connection is disconnected",
     error: stamped("Network connection lost.", { retryable: true }),
     kind: "disconnected",

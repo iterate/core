@@ -52,6 +52,7 @@
 import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { codedError, diff, errorCode, jsonEqual, oneStepDeeper, reportIssue } from "../lib.ts";
 import { runCausedBy } from "../cause.ts";
+import { failureKind } from "../platform-retry.ts";
 import type { Principal } from "../principal.ts";
 import type { Envelope } from "../signed.ts";
 import type { EmittedEventInput, ProcessorContract } from "./contract.ts";
@@ -139,6 +140,14 @@ export function consumesEvent(
 const unlessLoopLimit = (error: unknown): void => {
   const recorded = (error as { data?: { recorded?: boolean } } | undefined)?.data?.recorded;
   if (errorCode(error) !== "LOOP_LIMIT" || !recorded) throw error;
+};
+
+/** A failure of a context's expected reset (`deploy-reset`: a deploy, or a new version of the
+ *  context, whose stream refuses every append until the object restarts) is not reported: the
+ *  context restarts under the work, and the work's claim revives it, or the new version deleted
+ *  the facet. Any other is rethrown. */
+const unlessExpectedReset = (error: unknown): void => {
+  if (failureKind(error) !== "deploy-reset") throw error;
 };
 
 /** What the ENGINE reduces: the contract's consumes, minus the one type no processor may ever reduce or
@@ -558,6 +567,7 @@ export class ProcessorEngine<State> {
     }
     void work()
       .catch(unlessLoopLimit)
+      .catch(unlessExpectedReset)
       .catch((error) => reportIssue("processor.background", error, { slug: this.#contract.slug }))
       .finally(() => {
         this.#backgroundWorkInFlight -= 1;
@@ -784,8 +794,10 @@ type EventCause = { chain: string; depth: number; at?: number; parent?: string }
 export type EventPointer = { path: string; offset: number; createdAt: string; type: string };
 
 /** The event that a copy was copied from (`source.copiedFrom`), and which subscription row copied
- *  it. */
-export type EventCopiedFrom = EventPointer & { subscription: string };
+ *  it. `version` is the version of the context it was copied from, from 2 on (`itx.newVersion`),
+ *  when the event is of that context's current version: a reader that keeps a row for each source
+ *  starts that row over when it rises. */
+export type EventCopiedFrom = EventPointer & { subscription: string; version?: number };
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
