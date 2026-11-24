@@ -195,7 +195,7 @@ Dash shows what it registered and links to its page.
 ## Onboarding
 
 `apps/onboarding/` is a centered, no-AI setup wizard that gets a new owner from a fresh deploy into
-their Dash chat with `/agents/onboarding`. This repo keeps its routes and its steps; the page
+their Dash chat with `/agents/main`. This repo keeps its routes and its steps; the page
 (`index.html`, `public/`), the agent's guides and the cards of the Tasks board are the repo
 `/repos/onboarding`, which a new mind starts with. Every request on `onboarding.<zone>` that the
 app does not answer goes to the worker of that repo at its newest commit (`pageFromRepo` in
@@ -209,9 +209,9 @@ app does not answer goes to the worker of that repo at its newest commit (`pageF
    adds an OpenAI API key (`itx.secrets.collectFromUser`), connects a ChatGPT Plus/Pro plan
    (`npx iterate@latest chatgpt connect <mind>`), or uses Cloudflare AI Gateway credit.
 3. **Verify & wake:** a loading gate that runs a real server-side test LLM inference request
-   (`POST /verify-ai`), triggers the idempotent opener on `/agents/onboarding`, and waits for the
+   (`POST /verify-ai`), triggers the idempotent opener on `/agents/main`, and waits for the
    onboarding agent's first assistant response before redirecting to
-   `https://dash.<zone>/agents/agents/onboarding`.
+   `https://dash.<zone>/agents/agents/main`.
 
 The step "Connect to iterate Cloud" writes four events on `/apps/onboarding` (`contract.ts`), and
 every button of it is also the onboarding agent's call `itx.config.onboardingStep(step, action)`,

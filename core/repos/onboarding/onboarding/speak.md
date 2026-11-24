@@ -24,7 +24,7 @@ turn on, and they know what is not ready.
 ## How
 
 Ask once, when it fits. Say how in one sentence, with the link to this chat. On a "later", note
-it in `mind.md` through `/agents/onboarding/mind-md`.
+it in `mind.md` through `/agents/main/mind-md`.
 
 Check that the voice agent can be paid for:
 

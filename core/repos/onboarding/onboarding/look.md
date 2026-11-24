@@ -41,7 +41,7 @@ colour. The owner watches the
 page, so nobody waits for the publish.
 
 A look that takes design (a drawn icon, a font, a whole palette) goes to the subagent
-`/agents/onboarding/look` (`onboarding/subagents.md`). The Dash needs a sign-in the subagent does
+`/agents/main/look` (`onboarding/subagents.md`). The Dash needs a sign-in the subagent does
 not have, so it checks the publish's outcome and not the page:
 
 ```ts

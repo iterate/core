@@ -2,7 +2,7 @@
 status: todo
 tags: [onboarding, first-sitting]
 priority: low
-agent: /agents/onboarding
+agent: /agents/main
 depends-on:
   - tasks/onboarding-look.md
   - tasks/onboarding-website.md

@@ -10,23 +10,23 @@ The owner should come away with: the mind already knows a little about them, gav
 - `await itx.browser.quickAction("markdown", { url })` renders one page and answers its text as
   Markdown. A failed action throws.
 - `profile/icon.svg` at the top of `/repos/config` is the mind's square SVG logo (`viewBox="0 0 64 64"`), shown in the Dash header, tab icon, and homepage. The open Dash picks it up automatically ~6 seconds after publish.
-- A subagent does this, `/agents/onboarding/researcher` (`onboarding/subagents.md`), so `/agents/onboarding` keeps talking.
+- A subagent does this, `/agents/main/researcher` (`onboarding/subagents.md`), so `/agents/main` keeps talking.
 
 ## Not ready
 
 - With no AI Gateway credit (an owner who pays with a ChatGPT plan alone) the search may fail.
-  On a failure, still generate a starter logo and STILL kick off `/agents/onboarding/website` so the owner gets a logo and homepage either way.
+  On a failure, still generate a starter logo and STILL kick off `/agents/main/website` so the owner gets a logo and homepage either way.
 
 ## How
 
-You are the subagent `/agents/onboarding/researcher`, and this is your job. Do all five steps yourself, in order, batching reads and commits cleanly so you finish quickly:
+You are the subagent `/agents/main/researcher`, and this is your job. Do all five steps yourself, in order, batching reads and commits cleanly so you finish quickly:
 
 ### 1. Find the owner's name & email and search lightly
 
-Get the owner's email from the sign-up record or `/agents/onboarding` events:
+Get the owner's email from the sign-up record or `/agents/main` events:
 
 ```ts
-const { events } = await itx.cd("/agents/onboarding").readEvents(0, 200);
+const { events } = await itx.cd("/agents/main").readEvents(0, 200);
 return events
   .map((event) => event.source?.principal?.email || event.source?.onBehalfOf?.principal?.email)
   .find(Boolean);
@@ -45,16 +45,16 @@ Read the tip of `/repos/config` and check `mind.md` and `profile/icon.svg`:
 - Check `profile/icon.svg`: if it is missing or still the default template mark (not already customised by the owner), craft one crisp, minimal square SVG logo (`viewBox="0 0 64 64"`, no external links or scripts) tailored to the owner's initials, domain, or craft.
 - Commit `mind.md` and `profile/icon.svg` together in one commit to `/repos/config` (`parent: tip`; if tip moved, re-read tip and retry) and wait for `events.iterate.com/mind/worker-updated`.
 
-### 3. Pass your findings to `/agents/onboarding/website`
+### 3. Pass your findings to `/agents/main/website`
 
-Always start `/agents/onboarding/website` after step 2 (even if web search failed or returned nothing) so the website agent builds on your findings instead of racing ahead blank:
+Always start `/agents/main/website` after step 2 (even if web search failed or returned nothing) so the website agent builds on your findings instead of racing ahead blank:
 
 ```ts
-await itx.agents.create("/agents/onboarding/website");
-await itx.agents.get("/agents/onboarding/website").message(brief);
+await itx.agents.create("/agents/main/website");
+await itx.agents.get("/agents/main/website").message(brief);
 ```
 
-Your brief to `/agents/onboarding/website` must include:
+Your brief to `/agents/main/website` must include:
 
 - `Read onboarding/website.md and tasks/onboarding-website.md of /repos/onboarding and build the initial public homepage at https://<zone>/.`
 - A concise summary of the harmless public facts you found (with source URLs), or a note that nothing public was found — clearly separated from any private sign-up notes (which guide purpose only and never go on the public page).
@@ -64,13 +64,13 @@ Your brief to `/agents/onboarding/website` must include:
 
 Update `tasks/onboarding-research.md` in `/repos/onboarding` so its frontmatter `status:` is `done`.
 
-### 5. Report to `/agents/onboarding` ONLY AFTER steps 1–4 are complete
+### 5. Report to `/agents/main` ONLY AFTER steps 1–4 are complete
 
-Send one short, plain message to `/agents/onboarding`:
+Send one short, plain message to `/agents/main`:
 
 ```ts
 await itx.agents
-  .get("/agents/onboarding")
+  .get("/agents/main")
   .message(
     "I looked you up lightly, made a starter logo for your mind (you can ask to change it anytime), and passed what I found to the website agent to build your homepage.",
   );

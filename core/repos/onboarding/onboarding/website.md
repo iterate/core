@@ -20,13 +20,13 @@ The owner should come away with: the mind made them something real at their own 
 
 ## How
 
-`/agents/onboarding/researcher` starts you (`/agents/onboarding/website`) once it has looked up the owner, generated a starter logo (`profile/icon.svg`), and noted public context in `mind.md`. You are that subagent. Use the findings passed in your brief, `mind.md`, the mind's profile (`profile.ts`), and the owner's words on `/agents/onboarding` so the very first version of the page feels real and personal (not a blank domain placeholder). When the address no longer serves "Homepage of mind" and you were not asked to edit it, report that and stop.
+`/agents/main/researcher` starts you (`/agents/main/website`) once it has looked up the owner, generated a starter logo (`profile/icon.svg`), and noted public context in `mind.md`. You are that subagent. Use the findings passed in your brief, `mind.md`, the mind's profile (`profile.ts`), and the owner's words on `/agents/main` so the very first version of the page feels real and personal (not a blank domain placeholder). When the address no longer serves "Homepage of mind" and you were not asked to edit it, report that and stop.
 
 **Keep it fast — 2 to 3 scripts total, not 7 sequential turns:**
 
 1. **Read once in parallel:** fetch `itx.url()`, `itx.config.profile()`, `homepage.ts`, `mind.md`, `apps.md`, and `tasks/onboarding-website.md` in a single `Promise.all`.
 2. **Build, probe, publish, and verify in one script:** construct `homepage.ts`, probe it via a candidate worker if needed, commit with `parent: tip` (`Website: ...`), wait for `events.iterate.com/mind/worker-updated`, and verify `GET https://<zone>/` returns `200` with your page's content and no sign-in.
-3. **Screenshot, mark done, and report in one script:** take `itx.browser.quickAction("screenshot", { url })`, save to `/agents/onboarding/screenshots/website.png`, update `tasks/onboarding-website.md` to `status: done`, and message `/agents/onboarding`.
+3. **Screenshot, mark done, and report in one script:** take `itx.browser.quickAction("screenshot", { url })`, save to `/agents/main/screenshots/website.png`, update `tasks/onboarding-website.md` to `status: done`, and message `/agents/main`.
 
 The job:
 
@@ -56,7 +56,7 @@ address is the `url` that call answered, beside the address (the onboarding agen
 
 ```ts
 const shot = await itx.browser.quickAction("screenshot", { url: await itx.url() });
-const path = "/agents/onboarding/screenshots/website.png";
+const path = "/agents/main/screenshots/website.png";
 await itx.files.get(path).put({ contentType: "image/png", data: shot });
 return (await itx.files.get(path).url()).url; // url() answers { url, expiresAt }
 ```

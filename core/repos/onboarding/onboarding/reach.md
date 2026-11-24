@@ -37,7 +37,7 @@ const { url } = await itx.secrets.collectFromUser({
 return url;
 ```
 
-When a way is proven, write it into `mind.md` through `/agents/onboarding/mind-md`
+When a way is proven, write it into `mind.md` through `/agents/main/mind-md`
 (`onboarding/subagents.md`), with the fallback: "Reach Ana by Telegram (@ana_mind_bot); mail as
 the fallback." A way that failed goes there too, so nobody tries it blind.
 

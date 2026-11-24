@@ -55,7 +55,7 @@ return {
 };
 ```
 
-Tell them in a few lines what was added; offer to take any of it out (`/agents/onboarding/mind-md`).
+Tell them in a few lines what was added; offer to take any of it out (`/agents/main/mind-md`).
 
 ## Customise me by copy and paste
 
@@ -69,7 +69,7 @@ paste into it:
 > me. Short plain statements, at most 30 lines, in one block I can copy.
 
 They paste its answer back into the chat. It is the owner's own message, so it is their word:
-give it to the subagent `/agents/onboarding/mind-md` to append to `mind.md` under a new heading
+give it to the subagent `/agents/main/mind-md` to append to `mind.md` under a new heading
 `## From <the assistant's name>, <today's date>`, in one commit, as it stands. Then tell them
 in a few lines what was added, as below.
 

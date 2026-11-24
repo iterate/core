@@ -2,9 +2,9 @@
 //   Step 1: Connect to iterate Cloud (optional, collapsible fine print)
 //   Step 2: Configure AI (iterate Cloud credit, OpenAI API key, ChatGPT Plus/Pro, or Cloudflare AI Gateway),
 //           and below it the optional card "Connect Cloudflare" (steps/connect-cloudflare.ts)
-//   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/onboarding's
+//   Step 3: Verify & wake gate (real server-side POST /verify-ai + wait for /agents/main's
 //           first assistant response, then show the verified result and clear Done state with link
-//           into https://dash.<zone>/agents/agents/onboarding)
+//           into https://dash.<zone>/agents/agents/main)
 import { html, render, useCallback, useEffect, useRef, useState } from "@iterate-com/ui/page";
 import { Badge } from "@iterate-com/ui/components/ui/badge";
 import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
@@ -29,7 +29,7 @@ import {
   SquareTerminalIcon,
 } from "@iterate-com/ui/icons";
 
-const AGENT = "/agents/onboarding";
+const AGENT = "/agents/main";
 const CLOUD_STEP = "connect-iterate-cloud";
 const CLOUDFLARE_STEP = "connect-cloudflare";
 
@@ -90,7 +90,7 @@ const hasModelReply = (events) => {
 function friendlyWakeError(raw) {
   const text = String(raw || "").trim();
   if (!text || text.startsWith("{") || text.includes('"error"'))
-    return "Your onboarding agent could not complete its first response. Check your AI configuration and try again.";
+    return "Your main agent could not complete its first response. Check your AI configuration and try again.";
   if (/402|credit|billing|quota|payment/i.test(text))
     return "Your AI provider reported a billing or credit issue. Go back to check your AI configuration.";
   if (/401|invalid.*key|unauthorized/i.test(text))
@@ -156,7 +156,7 @@ function App() {
     void reload();
   }, [reload, onboardingHead]);
 
-  // Watch /agents/onboarding live so revisiting onboarding after setup shows "Done", and Step 3
+  // Watch /agents/main live so revisiting onboarding after setup shows "Done", and Step 3
   // sees the first model-authored reply immediately.
   const agent = useContextStub(() => itx.cd(AGENT), []);
   const agentContext = useIterateContext(agent.stub, {
@@ -187,7 +187,7 @@ function App() {
   }, []);
 
   // Choose the initial step once loaded, and auto-advance from Step 1 once iterate Cloud connects.
-  // Do not block the wizard if watching /agents/onboarding fails.
+  // Do not block the wizard if watching /agents/main fails.
   const agentSettled = Boolean(agentContext.caughtUp || agent.error || agentContext.error);
   useEffect(() => {
     if (!cards || !aiStatus || !agentSettled) return;
@@ -786,7 +786,7 @@ function AiStep({
           ${
             hasReadyProvider
               ? "Your mind has an AI connection configured. Continue to verify that it works."
-              : "Choose how your mind pays for AI models before launching your onboarding agent."
+              : "Choose how your mind pays for AI models before launching your main conversation."
           }
         <//>
       <//>
@@ -854,7 +854,7 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
     };
   }, [attempt]);
 
-  // Phase 2: trigger idempotent opener on /agents/onboarding and wait for first model-written reply.
+  // Phase 2: trigger idempotent opener on /agents/main and wait for first model-written reply.
   useEffect(() => {
     if (phase !== "waking-agent" || !agentContext.caughtUp) return;
     const events = agentContext.events;
@@ -882,7 +882,7 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
     wakeTriggeredRef.current = true;
     wakeStartOffsetRef.current = events.at(-1)?.offset ?? 0;
 
-    // POST /verify-ai has already created /agents/onboarding, seeded its instructions and tasks
+    // POST /verify-ai has already created /agents/main, seeded its instructions and tasks
     // overview, appended its opener, and started the background subagents. Only send a recovery
     // wake if the latest triggered turn already settled without producing a model reply.
     (async () => {
@@ -924,12 +924,12 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
     })();
   }, [phase, agentContext.caughtUp, agentContext.events, agent.stub, onDone]);
 
-  // Bounded wait while waking the onboarding agent (60 seconds).
+  // Bounded wait while waking the main agent (60 seconds).
   useEffect(() => {
     if (phase !== "waking-agent") return;
     const timer = setTimeout(() => {
       setErrorMessage(
-        "Your onboarding agent took too long to respond. Try again or check your AI configuration.",
+        "Your main agent took too long to respond. Try again or check your AI configuration.",
       );
       setPhase("error");
     }, 60_000);
@@ -937,13 +937,11 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
   }, [phase, attempt]);
 
   const statusTitle =
-    phase === "verifying-ai"
-      ? "Checking that AI connection works…"
-      : "Waking your onboarding agent…";
+    phase === "verifying-ai" ? "Checking that AI connection works…" : "Waking your main agent…";
   const statusDesc =
     phase === "verifying-ai"
       ? "Running a quick test request to confirm your model responds."
-      : "Waiting for your onboarding agent's first message.";
+      : "Waiting for your main agent's first message.";
 
   let verifyBanner = null;
   if (verifyResult) {
@@ -1005,8 +1003,8 @@ function DoneStep({ verifyResult, aiStatus, cloudCard, onReviewAi }) {
   const summaryLine = verifyResult
     ? `AI check passed — ${verifySummaryOf(verifyResult)}`
     : activeProviders.length > 0
-      ? `Connected via ${activeProviders.join(", ")}. Your onboarding agent has replied and is ready.`
-      : "Your onboarding agent has replied and is ready.";
+      ? `Connected via ${activeProviders.join(", ")}. Your main agent has replied and is ready.`
+      : "Your main agent has replied and is ready.";
 
   return html`
     <${Card} data-step="done">
@@ -1016,7 +1014,7 @@ function DoneStep({ verifyResult, aiStatus, cloudCard, onReviewAi }) {
           <span>Done: your mind is set up</span>
         <//>
         <${CardDescription}>
-          Your AI connection works and your onboarding agent is waiting in the Dash.
+          Your AI connection works and your main conversation is waiting in the Dash.
         <//>
       <//>
 

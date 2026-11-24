@@ -2,7 +2,7 @@
 status: backlog
 tags: [onboarding, later]
 priority: low
-agent: /agents/onboarding
+agent: /agents/main
 depends-on: [tasks/onboarding-secrets-and-approvals.md]
 ---
 

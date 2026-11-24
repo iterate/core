@@ -71,14 +71,14 @@ const AGENT_PATH = /^\/agents\/[A-Za-z0-9/_-]{1,200}$/;
 /** `itx.config.cloudflareConnect({ tell? })`: the ONE link to give a member, the MCP server's
  *  consent page for this mind, and `nonce`, which names the attempt
  *  (`itx.secrets.oauthResult(CLOUDFLARE_GRANT, { nonce })`). `tell` is the path of the agent that
- *  asks (`/agents/onboarding`): once the consent has landed and is checked, that agent gets a note
+ *  asks (`/agents/main`): once the consent has landed and is checked, that agent gets a note
  *  that starts its turn, and the member's browser comes back to its chat. */
 export async function cloudflareConnect(
   itx: Pick<CloudflareItx, "secrets" | "kv" | "url">,
   options: { tell?: string; next?: string } = {},
 ) {
   if (options.tell && !AGENT_PATH.test(options.tell))
-    throw new Error('cloudflareConnect: tell is the path of an agent, like "/agents/onboarding"');
+    throw new Error('cloudflareConnect: tell is the path of an agent, like "/agents/main"');
   const apex = new URL(await itx.url());
   const zone = apex.hostname;
   const dash = dashLinks(zone);

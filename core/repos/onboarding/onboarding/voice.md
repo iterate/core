@@ -16,7 +16,7 @@ to be written to. Never as a form to fill.
 1. From what you know of them (the sign-up record, the research, how they write), choose one or
    two characters from a book or a film who would fit. Say which you would take, and why, in one
    sentence. One question.
-2. On their pick, give it to `/agents/onboarding/mind-md` (`onboarding/subagents.md`): a paragraph under
+2. On their pick, give it to `/agents/main/mind-md` (`onboarding/subagents.md`): a paragraph under
    `## Voice` in `mind.md`, five lines at most. It describes the manner in plain words, so that an
    agent that never heard of the character can follow it: short or long, formal or warm, dry or
    playful, which language and spelling, what it never does. The character's name may stand

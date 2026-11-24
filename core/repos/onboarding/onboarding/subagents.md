@@ -4,22 +4,22 @@ The owner should come away with: you never go quiet; slow work happens beside th
 
 ## Ready today
 
-- A subagent is an agent under your own path: `/agents/onboarding/<job>`. It cannot see this chat.
+- A subagent is an agent under your own path: `/agents/main/<job>`. It cannot see this chat.
 - Anything that takes more than a few seconds goes to a subagent: a commit that needs thought and a
   check (the website, a change to it, a section of `mind.md`), an app at an address of its own,
   an integration, the research.
 - One subagent for each job, and the SAME subagent for every later change of that job:
-  `/agents/onboarding/website`, `/agents/onboarding/mind-md`, `/agents/onboarding/researcher`.
+  `/agents/main/website`, `/agents/main/mind-md`, `/agents/main/researcher`.
 - What needs no wait you do yourself: an answer, a read, a mail, a mark, and the scripts that
   `onboarding.md` gives you to copy. NEVER start a subagent for the logo, the colour, the corners
   or the name: each is one script of yours, and a subagent makes the owner wait many times longer for a
-  change of one line. `/agents/onboarding/look` is for a look that takes design alone: a drawn
+  change of one line. `/agents/main/look` is for a look that takes design alone: a drawn
   icon, a font, a whole palette.
 
 ## How
 
 ```ts
-const subagent = "/agents/onboarding/website";
+const subagent = "/agents/main/website";
 await itx.agents.create(subagent);
 await itx.agents.get(subagent).message(brief);
 ```
@@ -29,7 +29,7 @@ change, in the owner's own words, which file, and how to report. Put this last p
 brief, as it stands:
 
 > When it is live (you waited for the publish and fetched the page), and only then:
-> `await itx.agents.get('/agents/onboarding').message('<one or two plain sentences for the owner>')`.
+> `await itx.agents.get('/agents/main').message('<one or two plain sentences for the owner>')`.
 > If it does not work after three commits, send what went wrong the same way. Another subagent may
 > commit at the same time: when a commit is refused because the tip moved, read the tip again and
 > commit again. YOUR REPORT IS SHOWN TO THE OWNER in their chat: write it for them. One or two

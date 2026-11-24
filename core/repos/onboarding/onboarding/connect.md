@@ -47,7 +47,7 @@ change nothing there, and it cannot read what would let it act as the mind or as
    errors there and see what is deployed, and it can change nothing." The link is made in the
    turn that gives it:
    ```ts
-   const { link } = await itx.config.cloudflareConnect({ tell: "/agents/onboarding" });
+   const { link } = await itx.config.cloudflareConnect({ tell: "/agents/main" });
    return { link };
    ```
    `tell` is the agent that talks to the owner. Give no other link in that message, and no link
@@ -61,7 +61,7 @@ change nothing there, and it cannot read what would let it act as the mind or as
    that every scope granted is one of the reads asked for and that the consent reaches one
    account, the one that holds this mind. A consent that fails either check is not kept: the
    page that the owner comes back to says why (the extra permissions by name, or the account),
-   and says to connect again. `/agents/onboarding` gets a note that starts its turn:
+   and says to connect again. `/agents/main` gets a note that starts its turn:
    - kept: at once. It says who it is connected as (when Cloudflare names the person; when not,
      the note says so), and the mind's own Workers in the last hour: requests by Worker and by
      how they ended, and how many error lines (at most five are counted). Say both at once.

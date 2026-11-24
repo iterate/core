@@ -1,17 +1,17 @@
 // The default config's publish hook (core/configs/default/worker.ts, the `mind/worker-updated`
-// case): each step by itself. Creating `/agents/onboarding` lives in the onboarding app
+// case): each step by itself. Creating `/agents/main` lives in the onboarding app
 // (`apps/onboarding/launch.ts`), not the publish hook.
 import { expect, test, vi } from "vitest";
 import Config from "../../configs/default/worker.ts";
 
 const PUBLISH = { type: "events.iterate.com/mind/worker-updated", path: "/", offset: 7 };
 
-test("a publish does not create /agents/onboarding (the onboarding app owns agent launch)", async () => {
+test("a publish does not create /agents/main (the onboarding app owns agent launch)", async () => {
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
   const root = rootOf();
   await publish(root.itx);
   errors.mockRestore();
-  expect(root.calls).not.toContain("agents.create /agents/onboarding");
+  expect(root.calls).not.toContain("agents.create /agents/main");
   expect(root.calls).toContain("contexts.list");
 });
 

@@ -32,11 +32,11 @@ return await itx.approvals.propose({ verb: "email.send", to: ["*@example.com"] }
 Give the owner `signAt`; once signed, `(await itx.approvals.rules()).rules` shows it. A subagent sends:
 
 ```ts
-await itx.agents.create("/agents/onboarding/held");
+await itx.agents.create("/agents/main/held");
 await itx.agents
-  .get("/agents/onboarding/held")
+  .get("/agents/main/held")
   .message(
-    "Run `await itx.email.send({ from: 'onboarding@<zone>', to: 'nobody@example.com', subject: 'A mail that waits', text: 'This mail waits for your passkey.' })`. It waits up to five minutes, then throws. Report to /agents/onboarding in one plain sentence for the owner: sent, rejected, or still waiting.",
+    "Run `await itx.email.send({ from: 'onboarding@<zone>', to: 'nobody@example.com', subject: 'A mail that waits', text: 'This mail waits for your passkey.' })`. It waits up to five minutes, then throws. Report to /agents/main in one plain sentence for the owner: sent, rejected, or still waiting.",
   );
 ```
 

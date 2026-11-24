@@ -227,8 +227,9 @@ const foot = [
 // Personal items inside the account popover above Sign out.
 const accountLinks = [{ name: "Your sessions", href: `${stack}/sessions`, icon: HistoryIcon }];
 
-// The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open,
-// or the rail of icons for a first arrival at the onboarding agent). A choice they made wins.
+// The sidebar for a person who has not toggled it yet: as index.html drew it in its frame (open
+// by default, or collapsed when `#sidebar=collapsed` / `?sidebar=collapsed` is in the URL). A
+// choice they made wins.
 const sidebarDefaultOpen = document.documentElement.dataset.sidebar !== "collapsed";
 
 // The mind's name and icon, as its owner wrote them (profile.ts, the folder profile/ of the
@@ -272,6 +273,7 @@ function MindDash() {
     mind,
     pages,
     links,
+    mainAgent: "/agents/main",
     foot,
     accountLinks,
     sidebarDefaultOpen,

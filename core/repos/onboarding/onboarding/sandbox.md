@@ -7,7 +7,7 @@ The owner should come away with: their mind has its own computer for code, with 
 - A sandbox is a Linux computer of the mind, a Cloudflare container. A new one has Debian, Node
   and npm alone. `sandboxes.md` says how the mind gets one with git, Claude Code and Codex: one
   sandbox installs them, a snapshot keeps its disk, and every later sandbox starts as a copy.
-- A subagent does it, `/agents/onboarding/sandbox` (`onboarding/subagents.md`), so the onboarding
+- A subagent does it, `/agents/main/sandbox` (`onboarding/subagents.md`), so the onboarding
   agent keeps talking. The build takes about two minutes.
 - **A server in a sandbox gets a host of the mind**, `https://<name>.<domain>/`, with its pages
   and WebSockets. A request that finds it stopped starts it (`sandboxes.md`, "Serve a port at a
@@ -23,7 +23,7 @@ The owner should come away with: their mind has its own computer for code, with 
 
 ## How
 
-You are the subagent `/agents/onboarding/sandbox`, and this is your job. Do it yourself and start
+You are the subagent `/agents/main/sandbox`, and this is your job. Do it yourself and start
 no other agent.
 
 1. Read `sandboxes.md` in the mind's code: `await itx.repos.get("/repos/config").readFile("sandboxes.md")`.
@@ -40,7 +40,7 @@ no other agent.
 
 A message that asks for a server or a program at a link is yours too.
 
-1. Start a new sandbox for it, `/agents/onboarding/sandbox/<name>`, from the snapshot
+1. Start a new sandbox for it, `/agents/main/sandbox/<name>`, from the snapshot
    (`sandboxes.md`, "Start a sandbox from the snapshot"). Never use `coding`, the snapshot's own.
 2. Install the program there: apt, `git clone`, its install and its build. Long work goes to the
    background, and you poll its log (`sandboxes.md`, "Use it").

@@ -62,7 +62,7 @@ export function onboardingApp({ repo = ONBOARDING_REPO }: { repo?: string } = {}
         using itx = host.getItx() as IterateContextApiWith<"agents"> & Disposable;
         return await answer(async () => {
           const result = await verifyAi(itx);
-          // The moment AI is proven working, create /agents/onboarding with its bespoke
+          // The moment AI is proven working, create /agents/main with its bespoke
           // instructions, generated tasks & dependencies overview, owner email, opener, and
           // background subagents.
           if (result.ok) {

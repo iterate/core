@@ -2,7 +2,7 @@
 status: todo
 tags: [onboarding, first-sitting]
 priority: medium
-agent: /agents/onboarding
+agent: /agents/main
 depends-on: [tasks/onboarding-connect-iterate-cloud.md]
 ---
 

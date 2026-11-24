@@ -32,7 +32,7 @@ Ask "who else" early, when nothing else leads, unless the sign-up record names t
 no, go on. On a yes: the link, one sentence on what a member can reach, and whether they want to
 do it now or later.
 
-Who uses the mind goes into `mind.md` through `/agents/onboarding/mind-md`
+Who uses the mind goes into `mind.md` through `/agents/main/mind-md`
 (`onboarding/subagents.md`): who each person is, and how each is reached. Not a commit of yours.
 
 ## Say

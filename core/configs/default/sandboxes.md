@@ -11,9 +11,9 @@ the mind gets one with git, Claude Code and Codex in it, and how you start yours
   Hub or any other public registry, and the mind's token cannot push an image. So the mind
   installs its tools in one sandbox and takes a **snapshot** of its disk. Other sandboxes start
   as a copy of that snapshot, in about a second.
-- **The mind's coding snapshot is the sandbox `/agents/onboarding/sandbox/coding`.** It holds git,
+- **The mind's coding snapshot is the sandbox `/agents/main/sandbox/coding`.** It holds git,
   gh, curl, jq, ripgrep, Python 3, pnpm, Claude Code and Codex, and git's sign-in for this mind's
-  repos. The onboarding subagent `/agents/onboarding/sandbox` builds it (`onboarding/sandbox.md` of `/repos/onboarding`).
+  repos. The onboarding subagent `/agents/main/sandbox` builds it (`onboarding/sandbox.md` of `/repos/onboarding`).
   Never run anything in that sandbox yourself: its next idle save would replace the snapshot.
 
 ## Start a sandbox from the snapshot
@@ -23,7 +23,7 @@ const box = "/agents/<your name>/box"; // a context creates sandboxes only benea
 await itx.sandboxes.create(box); // harmless when it exists
 const { events } = await itx.cd(box).readEvents();
 if (!events.some((event) => event.type === "events.iterate.com/sandbox/started")) {
-  await itx.sandboxes.get(box).start({ from: "/agents/onboarding/sandbox/coding" });
+  await itx.sandboxes.get(box).start({ from: "/agents/main/sandbox/coding" });
 }
 ```
 
@@ -151,11 +151,11 @@ return await box.exposePort(8080, { name: "hello", command: ["node", "/root/serv
 
 Rebuild when a start from the snapshot fails ("cannot restore snapshot"): a snapshot lasts 30
 days after its last restore, and it works only on the image it was taken from. To add a tool, add
-it to `APT` or `NPM` below and rebuild. Only the subagent `/agents/onboarding/sandbox` runs this: it
+it to `APT` or `NPM` below and rebuild. Only the subagent `/agents/main/sandbox` runs this: it
 creates the sandbox beneath its own path. About two minutes, in one script:
 
 ```ts
-const BASE = "/agents/onboarding/sandbox/coding";
+const BASE = "/agents/main/sandbox/coding";
 const APT = "ca-certificates git gh curl jq ripgrep python3 unzip openssh-client procps less";
 const NPM = "@anthropic-ai/claude-code @openai/codex pnpm";
 const text = (bytes) => new TextDecoder().decode(bytes);
@@ -217,12 +217,12 @@ return snapshot; // { id, size, name }
 
 ## Check it
 
-This starts `/agents/onboarding/sandbox/proof` from the snapshot, runs each tool, clones this
+This starts `/agents/main/sandbox/proof` from the snapshot, runs each tool, clones this
 mind's code and checks that git may push (a dry run: nothing is pushed). Claude Code and Codex
 answer one prompt when the mind has their key.
 
 ```ts
-const PROOF = "/agents/onboarding/sandbox/proof";
+const PROOF = "/agents/main/sandbox/proof";
 const text = (bytes) => new TextDecoder().decode(bytes);
 const remote = await (await itx.cfArtifacts.get("/repos/config")).remote();
 const secrets = new Set((await itx.secrets.list()).map((secret) => secret.path));
@@ -232,7 +232,7 @@ if (secrets.has("/secrets/anthropic")) env.ANTHROPIC_API_KEY = 'getSecret("/secr
 await itx.sandboxes.create(PROOF);
 const proof = itx.sandboxes.get(PROOF);
 await proof.container.destroy();
-await proof.start({ from: "/agents/onboarding/sandbox/coding" });
+await proof.start({ from: "/agents/main/sandbox/coding" });
 const run = async (command) => {
   const answer = await proof.exec(["bash", "-c", command], { env });
   return {

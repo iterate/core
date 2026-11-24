@@ -39,21 +39,23 @@
     <!-- THE FRAME'S SHAPE, said before the first paint. The body draws the app's frame from HTML
          and app.css alone, in the places the shell will draw it, so nothing moves when the app
          takes over. These lines decide what the shell decides: the sidebar as the person left it
-         (the cookie `sidebar_state`, which the shell writes at each toggle), and whether the
-         page is an agent's, which has a header row. A first arrival at the onboarding agent, with
-         no choice stored, starts with the sidebar as a rail of icons, so the chat has the room:
-         app.js hands the Dash the same choice. `data-frame` on the root element tells the
-         components that the person's wait began with this frame. -->
+         (the cookie `sidebar_state`, which the shell writes at each toggle), or an explicit
+         `#sidebar=collapsed` / `?sidebar=collapsed` (or `open`) in the URL when no choice is
+         stored, and whether the page is an agent's, which has a header row. app.js hands the Dash
+         the same default. `data-frame` on the root element tells the components that the person's
+         wait began with this frame. -->
     <script>
       {
         const query = new URLSearchParams(location.search);
+        const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+        const sidebarParam = hash.get("sidebar") || query.get("sidebar");
         const agent = location.pathname.startsWith("/agents/")
           ? location.pathname.slice("/agents".length)
           : location.pathname === "/agents"
             ? query.get("contextPath")
             : null;
         const left = /(?:^|; )sidebar_state=(true|false)/.exec(document.cookie)?.[1];
-        const open = left ? left === "true" : agent !== "/agents/onboarding";
+        const open = left ? left === "true" : sidebarParam !== "collapsed";
         document.documentElement.dataset.sidebar = open ? "open" : "collapsed";
         if (agent) document.documentElement.dataset.page = "agent";
       }

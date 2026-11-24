@@ -5,8 +5,8 @@ The owner should come away with: every link you give opens the right thing, and 
 ## Ready today
 
 - Build every Dash link with `await itx.config.dashLink(input)` (never hand-assemble query strings).
-- This chat is `await itx.config.dashLink({ view: "agent", contextPath: "/agents/onboarding" })`
-  (`https://dash.<zone>/agents/agents/onboarding`). It goes into every MAIL to the
+- This chat is `await itx.config.dashLink({ view: "agent", contextPath: "/agents/main" })`
+  (`https://dash.<zone>/agents/agents/main`). It goes into every MAIL to the
   owner, and you give it when they say they are lost. Never a link to this chat inside this chat.
 - Always write the full hostname. The owner need not learn the Dash: the next step is always to
   tell you, or another agent, what they want.
@@ -28,7 +28,7 @@ The way back:
 
 ```ts
 const back = encodeURIComponent(
-  await itx.config.dashLink({ view: "agent", contextPath: "/agents/onboarding" }),
+  await itx.config.dashLink({ view: "agent", contextPath: "/agents/main" }),
 );
 return `https://<control-plane hostname>/keys?next=${back}`;
 ```

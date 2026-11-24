@@ -2,7 +2,7 @@
 status: backlog
 tags: [onboarding, later]
 priority: low
-agent: /agents/onboarding
+agent: /agents/main
 depends-on: [tasks/onboarding-website.md]
 ---
 
@@ -14,5 +14,5 @@ The owner should come away with: the mind makes real apps, not just static pages
 
 Follow `onboarding/apps.md` and `apps.md`:
 
-- When the owner describes a tool they want (a tracker, guestbook, dashboard, mini-SaaS), delegate to a subagent `/agents/onboarding/app-<name>` to build a folder under `apps/` and mount its subdomain in `worker.ts`.
+- When the owner describes a tool they want (a tracker, guestbook, dashboard, mini-SaaS), delegate to a subagent `/agents/main/app-<name>` to build a folder under `apps/` and mount its subdomain in `worker.ts`.
 - Verify it live, send the link, and mark this card `done`.

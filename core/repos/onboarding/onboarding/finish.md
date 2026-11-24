@@ -27,12 +27,12 @@ In one turn, three things.
    });
    ```
 
-2. Add one line to `mind.md`, through `/agents/onboarding/mind-md` (`onboarding/subagents.md`):
+2. Add one line to `mind.md`, through `/agents/main/mind-md` (`onboarding/subagents.md`):
    "Onboarding finished on 17 Nov 2026, on the owner's word. Not seen yet: telemetry."
 3. Cancel the reminder:
 
    ```ts
-   await itx.cd("/agents/onboarding").schedules.cancel("onboarding-reminder");
+   await itx.cd("/agents/main").schedules.cancel("onboarding-reminder");
    ```
 
 Whether it is finished already (read it in your first turn, and in any later session):

@@ -2,7 +2,7 @@
 status: todo
 tags: [onboarding, first-sitting]
 priority: medium
-agent: /agents/onboarding
+agent: /agents/main
 ---
 
 # Keep a secret the agent cannot read and gate an action with your passkey

@@ -1,11 +1,11 @@
-// launch.ts — CREATES AND SEEDS `/agents/onboarding` THE MOMENT AI IS PROVEN WORKING
+// launch.ts — CREATES AND SEEDS `/agents/main` THE MOMENT AI IS PROVEN WORKING
 // (`app.ts`: POST /verify-ai). It reads the repo `/repos/onboarding` at its newest commit, and
-// appends a fat, idempotent event stack onto `/agents/onboarding`:
+// appends a fat, idempotent event stack onto `/agents/main`:
 //   1. Bespoke instructions from `onboarding/instructions.md` of that repo (dont-trigger-request)
 //   2. Generated overview of all `onboarding`-tagged markdown cards in that repo's `tasks/` and
 //      their `depends-on` dependencies, with live statuses and filtered Tasks app deep-links
 //      (dont-trigger-request)
-//   3. The idempotent opener (`opener:/agents/onboarding`) that wakes the agent for its greeting
+//   3. The idempotent opener (`opener:/agents/main`) that wakes the agent for its greeting
 // And immediately starts the background subagents (`researcher`, which hands off to `website`
 // after researching the owner and generating a starter logo, plus `sandbox`) via
 // `startFirstSubagents` (idempotent across Cloud handover and direct `npx iterate deploy`).
@@ -14,7 +14,7 @@ import { errorCode } from "iterate/lib";
 import { type HandoverItx, startFirstSubagents } from "../../cloud-handover.ts";
 import { ONBOARDING_REPO } from "./app.ts";
 
-export const ONBOARDING_AGENT = "/agents/onboarding";
+export const ONBOARDING_AGENT = "/agents/main";
 const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
 
 /** The mind, as the launch uses it: the handover's calls, optional whoami, and reads of `/repos/onboarding`. */
@@ -144,7 +144,7 @@ function parseOnboardingTasks(files: Record<string, string>): OnboardingTaskSumm
 }
 
 /** Builds the Markdown overview of onboarding tasks and their `depends-on` dependencies that is
- *  seeded onto `/agents/onboarding` at launch. */
+ *  seeded onto `/agents/main` at launch. */
 export function renderOnboardingTasksOverview(
   files: Record<string, string>,
   zone: string,
@@ -244,7 +244,7 @@ function ownerSummaryOf(owner: { email?: string; name?: string } | undefined): s
   return lines.length > 0 ? `About the owner:\n${lines.join("\n")}` : "";
 }
 
-/** CREATES `/agents/onboarding` AND APPENDS ITS FAT EVENT STACK once AI is proven working:
+/** CREATES `/agents/main` AND APPENDS ITS FAT EVENT STACK once AI is proven working:
  *  bespoke instructions from `onboarding/instructions.md` of `/repos/onboarding`, the generated
  *  tasks & dependencies overview from that repo's `tasks/*.md`, the signed-in owner's email/name
  *  when known, and the idempotent opener — then kicks off the background `researcher` (which

@@ -327,7 +327,7 @@ function words(state: StepState, context: StepContext): Card {
         ...(half ? [{ label: "Try again", action: "connect", primary: true }] : []),
         {
           label: "Try a voice call",
-          href: dashLinks(context.zone).agent("/agents/onboarding"),
+          href: dashLinks(context.zone).agent("/agents/main"),
           ...(!half && { primary: true }),
         },
         openCloud(context),
@@ -665,7 +665,7 @@ async function tellAgent(
   type = "events.iterate.com/agent/context-added",
 ): Promise<boolean> {
   return context.itx
-    .cd("/agents/onboarding")
+    .cd("/agents/main")
     .append({ type, idempotencyKey, payload, metadata: { claim: crypto.randomUUID() } })
     .then(
       () => true,

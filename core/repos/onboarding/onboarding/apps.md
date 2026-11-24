@@ -33,8 +33,8 @@ one offer. On a yes, ask what it should do. Then give it to a subagent, as the w
 (`onboarding/subagents.md`):
 
 ```ts
-await itx.agents.create("/agents/onboarding/app-<name>");
-await itx.agents.get("/agents/onboarding/app-<name>").message(brief);
+await itx.agents.create("/agents/main/app-<name>");
+await itx.agents.get("/agents/main/app-<name>").message(brief);
 ```
 
 The brief holds what the app does, in the owner's words; its host; who may come, and so which

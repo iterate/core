@@ -145,7 +145,7 @@ LLM API. `itx.agents` is the platform's (`iterate/agents`): the list on `/agents
 at any path, and a commit that changes `agent/` reaches an agent at its next message.
 
 An agent is told `AGENTS.md` when it starts (`agent-prompt.ts`), and an agent at `/agents/<name>`
-is told `<name>.md` after it, when this repo has one. `/agents/onboarding` is the agent where a
+is told `<name>.md` after it, when this repo has one. `/agents/main` is the agent where a
 new owner starts. Its guides are in the
 repo `/repos/onboarding`, which a new mind starts with: `onboarding/instructions.md` is what it is
 told (the onboarding app appends it as an event when AI is proven working,
@@ -232,7 +232,7 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   A guest reads the whole conversation and can write to the agent, so make a link only on a
   member's word.
 - `apps/onboarding/` is the onboarding app, on `onboarding.<zone>` for members: the onboarding
-  steps as cards above the chat with `/agents/onboarding`, each button also the agent's
+  steps as cards above the chat with `/agents/main`, each button also the agent's
   `itx.config.onboardingStep(step, action)` ([apps.md](apps.md), "Onboarding"). Its page is the
   repo `/repos/onboarding`.
 - `apps/guestbook/` is an app for end users on `guestbook.<zone>`, off in a new mind

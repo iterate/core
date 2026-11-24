@@ -2,7 +2,7 @@
 status: backlog
 tags: [onboarding, later]
 priority: medium
-agent: /agents/onboarding
+agent: /agents/main
 depends-on: [tasks/onboarding-look.md]
 ---
 

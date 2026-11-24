@@ -269,7 +269,7 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
     buttons: [
       {
         label: "Try a voice call",
-        href: "https://dash.example.com/agents/agents/onboarding",
+        href: "https://dash.example.com/agents/agents/main",
       },
       OPEN_LINK,
       { label: "Disconnect", action: "disconnect", opens: true },
@@ -2197,9 +2197,9 @@ test("renderOnboardingTasksOverview formats onboarding cards, depends-on links, 
   const { text, tasks } = renderOnboardingTasksOverview(
     {
       "tasks/onboarding-website.md":
-        "---\nstatus: in-progress\ntags: [onboarding, first-sitting]\npriority: high\nagent: /agents/onboarding/website\n---\n\n# Build a first public homepage\n\nMake a public page at your domain.\n",
+        "---\nstatus: in-progress\ntags: [onboarding, first-sitting]\npriority: high\nagent: /agents/main/website\n---\n\n# Build a first public homepage\n\nMake a public page at your domain.\n",
       "tasks/onboarding-telemetry.md":
-        "---\nstatus: todo\ntags: [onboarding, first-sitting]\npriority: medium\nagent: /agents/onboarding\ndepends-on: [tasks/onboarding-website.md]\n---\n\n# Inspect live visits\n\nCheck visits via itx.telemetry.query.\n",
+        "---\nstatus: todo\ntags: [onboarding, first-sitting]\npriority: medium\nagent: /agents/main\ndepends-on: [tasks/onboarding-website.md]\n---\n\n# Inspect live visits\n\nCheck visits via itx.telemetry.query.\n",
       "tasks/other.md": "---\nstatus: todo\ntags: [personal]\n---\n\n# Buy milk\n",
     },
     "example.com",
@@ -2216,7 +2216,7 @@ test("renderOnboardingTasksOverview formats onboarding cards, depends-on links, 
   expect(text).not.toContain("Buy milk");
 });
 
-test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions, tasks & dependencies overview, opener, and immediate background subagents (idempotently)", async () => {
+test("launchOnboardingAgent creates /agents/main with bespoke instructions, tasks & dependencies overview, opener, and immediate background subagents (idempotently)", async () => {
   const mind = fakeMind();
   const created: string[] = [];
   const launchItx = {
@@ -2234,11 +2234,7 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
   });
   expect(first).toMatchObject({ launched: true });
   expect(first.tasksCount).toBeGreaterThanOrEqual(10);
-  expect(created).toEqual([
-    ONBOARDING_AGENT,
-    "/agents/onboarding/researcher",
-    "/agents/onboarding/sandbox",
-  ]);
+  expect(created).toEqual([ONBOARDING_AGENT, "/agents/main/researcher", "/agents/main/sandbox"]);
   const onboardingEvents = mind.chat();
   expect(onboardingEvents.map((event) => event.idempotencyKey)).toEqual([
     "onboarding:init:instructions",
@@ -2247,7 +2243,7 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
     `opener:${ONBOARDING_AGENT}`,
     "onboarding:helpers-started",
   ]);
-  expect(JSON.stringify(onboardingEvents[0]?.payload)).toContain("Onboarding agent instructions");
+  expect(JSON.stringify(onboardingEvents[0]?.payload)).toContain("Main agent instructions");
   expect(onboardingEvents[0]?.payload).toMatchObject({
     role: "developer",
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -2267,17 +2263,17 @@ test("launchOnboardingAgent creates /agents/onboarding with bespoke instructions
   expect(onboardingEvents[3]?.payload).not.toHaveProperty("llmRequestPolicy");
   // Background `researcher` (which hands off to `website` after research + logo) and `sandbox` subagents started immediately,
   // and `researcher` receives the owner's email right in its initial prompt.
-  expect(mind.logs.get("/agents/onboarding/researcher")).toHaveLength(1);
-  expect(JSON.stringify(mind.logs.get("/agents/onboarding/researcher")?.[0]?.payload)).toContain(
+  expect(mind.logs.get("/agents/main/researcher")).toHaveLength(1);
+  expect(JSON.stringify(mind.logs.get("/agents/main/researcher")?.[0]?.payload)).toContain(
     "ada@example.com",
   );
-  expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
+  expect(mind.logs.get("/agents/main/sandbox")).toHaveLength(1);
 
   // Re-running launch is idempotent and appends nothing twice
   await launchOnboardingAgent(launchItx, { email: "ada@example.com", name: "Ada Lovelace" });
   expect(mind.chat()).toHaveLength(5);
-  expect(mind.logs.get("/agents/onboarding/researcher")).toHaveLength(1);
-  expect(mind.logs.get("/agents/onboarding/sandbox")).toHaveLength(1);
+  expect(mind.logs.get("/agents/main/researcher")).toHaveLength(1);
+  expect(mind.logs.get("/agents/main/sandbox")).toHaveLength(1);
 });
 
 test("launchOnboardingAgent reads the instructions and the cards of /repos/onboarding at its tip, and makes no repo", async () => {
@@ -2361,7 +2357,7 @@ test("a member's request for the page goes to the worker of /repos/onboarding at
   );
 });
 
-test("POST /verify-ai launches /agents/onboarding on success and does not create it on failure", async () => {
+test("POST /verify-ai launches /agents/main on success and does not create it on failure", async () => {
   const app = onboardingApp();
   const createdOk: string[] = [];
   const mindOk = fakeMind();
@@ -2384,11 +2380,7 @@ test("POST /verify-ai launches /agents/onboarding on success and does not create
   );
   expect(okRes).toMatchObject({ status: 200 });
   expect(await okRes.json()).toMatchObject({ ok: true, provider: "ai-gateway" });
-  expect(createdOk).toEqual([
-    ONBOARDING_AGENT,
-    "/agents/onboarding/researcher",
-    "/agents/onboarding/sandbox",
-  ]);
+  expect(createdOk).toEqual([ONBOARDING_AGENT, "/agents/main/researcher", "/agents/main/sandbox"]);
   expect(mindOk.chat().map((event) => event.idempotencyKey)).toEqual([
     "onboarding:init:instructions",
     "onboarding:init:tasks-overview",
@@ -2455,7 +2447,7 @@ test("a note that fails at the signed rule leaves the connect waiting: the retry
     ...mind.itx,
     cd: (path: string) => {
       const at = mind.itx.cd(path);
-      if (path !== "/agents/onboarding" || !fail) return at;
+      if (path !== "/agents/main" || !fail) return at;
       fail = false;
       return { ...at, append: async () => Promise.reject(new Error("the append failed")) };
     },
@@ -2482,7 +2474,7 @@ test("at iterate's enrolment-open, a note that fails is one log line: the connec
     ...mind.itx,
     cd: (path: string) => {
       const at = mind.itx.cd(path);
-      if (path !== "/agents/onboarding") return at;
+      if (path !== "/agents/main") return at;
       return { ...at, append: async () => Promise.reject(new Error("the append failed")) };
     },
   } as OnboardingItx;
@@ -2806,7 +2798,7 @@ function fakeMind(
     mailed,
     sign,
     onboarding: () => logOf("/apps/onboarding").map((e) => e.type.split("/").at(-1)),
-    chat: () => logOf("/agents/onboarding"),
+    chat: () => logOf("/agents/main"),
   };
 }
 

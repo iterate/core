@@ -29,7 +29,7 @@ The owner should come away with: an unusual or risky request waits for their sig
 ## How
 
 Offer it late, once the owner relies on the mind: it acts for them by mail, chat or phone. Say
-the idea in one sentence, then ask. On a yes, the subagent `/agents/onboarding/mind-md` appends
+the idea in one sentence, then ask. On a yes, the subagent `/agents/main/mind-md` appends
 this to `mind.md`, under a heading `## Signed requests`, in one commit, the tip as `parent`:
 
 > An unusual request (AGENTS.md, "When you are unsure who asks, ask for a signature") waits for my
@@ -40,7 +40,7 @@ Then let them sign one, from another device if they have one at hand:
 
 ```ts
 const { signAt } = await itx.approvals.proposeStatement({
-  path: "/agents/onboarding",
+  path: "/agents/main",
   type: "request/confirmed",
   payload: { request: "A try: the owner signs a request from another device" },
   signerEmail: "<the owner's email>",
@@ -48,7 +48,7 @@ const { signAt } = await itx.approvals.proposeStatement({
 return signAt;
 ```
 
-Give them `signAt`. The signed event lands on `/agents/onboarding`: `event.source.signer.principal.email`
+Give them `signAt`. The signed event lands on `/agents/main`: `event.source.signer.principal.email`
 says who signed. Offer the security key only when they have one or ask.
 
 ## Say
