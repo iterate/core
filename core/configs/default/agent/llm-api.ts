@@ -590,7 +590,7 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
         now,
         record,
       };
-      transport = (await api.transport?.(attemptOf)) ?? this.route(state, request, signal);
+      transport = (await api.transport?.(attemptOf)) ?? (await this.route(state, request, signal));
 
       // THE ATTEMPT STARTS, in ONE append before the bytes leave: no request reaches a model without
       // its record. The shared fact's key names the request and the attempt, so that of two
@@ -878,16 +878,26 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
     );
   }
 
-  /** THE PROVIDER'S ROUTE, from its config. With a `baseUrl`: HTTP straight to that address,
-   *  through its fetcher. With none: through its AI binding. */
-  private route(state: LlmApiState, request: OpenRequest, signal: AbortSignal): LlmTransport {
+  /** THE PROVIDER'S ROUTE, from its config. First what pays: the first of its `keys` whose
+   *  secret is set, straight to that key's address through the facet's own `fetch`. Then the
+   *  provider's own way. With a `baseUrl`: HTTP straight to that address, through its fetcher.
+   *  With none: through its AI binding. */
+  private async route(
+    state: LlmApiState,
+    request: OpenRequest,
+    signal: AbortSignal,
+  ): Promise<LlmTransport> {
     const provider = state.config.llmProviders[providerNameOf(request.model)];
-    // the provider's fetcher, else the facet's own `fetch`; with neither, the AI binding
-    const through = provider?.fetcher || this.deps.fetch;
-    if (provider?.baseUrl && through) {
+    const key = await this.firstKeySet(provider?.keys || []);
+    const baseUrl = key?.baseUrl || provider?.baseUrl;
+    // a key's request leaves through the facet's own `fetch`: only the mind's egress makes its
+    // header the secret. Else the provider's fetcher, or the facet's own `fetch`; with neither,
+    // the AI binding
+    const through = key ? this.deps.fetch : provider?.fetcher || this.deps.fetch;
+    if (baseUrl && through) {
       const { direct } = this.deps.api;
       const name = modelNameOf(request.model);
-      const url = `${provider.baseUrl.replace(/\/$/, "")}${direct.path(name)}`;
+      const url = `${baseUrl.replace(/\/$/, "")}${direct.path(name)}`;
       return {
         name: "direct",
         events: (body) => {
@@ -895,7 +905,8 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
           const headers = {
             "content-type": "application/json",
             ...direct.headers?.(body),
-            ...provider.headers,
+            // a key that pays brings its own headers; else the provider's
+            ...(key ? key.headers : provider?.headers),
           };
           const init = { method: "POST", headers, body: JSON.stringify(sent) };
           return this.directEvents(state, through, url, init, signal);
@@ -906,6 +917,37 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
     const ai = provider?.cloudflareAiBinding || CLOUDFLARE_AI_BINDING;
     return { name: "gateway", events: (body) => this.aiEvents(state, request, ai, body, signal) };
   }
+
+  /** WHAT PAYS: the first of a provider's `keys` whose secret is set in the mind, or none. One
+   *  read of the mind's secrets for each path (`itx.secrets.describe`), kept for
+   *  `SECRET_SET_KEPT_MS`: a request costs no read, and a key that the owner connects, or takes
+   *  away, counts within that time. A read that fails counts as "not set" and is not kept: the
+   *  request takes the next way, and the next request reads again. */
+  private async firstKeySet<Key extends { secret: string }>(keys: Key[]): Promise<Key | undefined> {
+    for (const key of keys) {
+      const kept = this.secretsSet.get(key.secret);
+      if (kept && this.deps.now() - kept.readAtMs < SECRET_SET_KEPT_MS) {
+        if (kept.set) return key;
+        continue;
+      }
+      try {
+        using itx = this.deps.getItx();
+        const described = await called(itx, "itx.secrets", ["describe", key.secret]);
+        const set = SecretDescribed.safeParse(described).data?.set === true;
+        this.secretsSet.set(key.secret, { set, readAtMs: this.deps.now() });
+        if (set) return key;
+      } catch (error) {
+        this.deps.report({
+          event: "llm-api.secret-read-failed",
+          secret: key.secret,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return undefined;
+  }
+  /** RUNTIME STATE, gone with the host: which of the mind's secrets are set, and when it was read. */
+  private readonly secretsSet = new Map<string, { set: boolean; readAtMs: number }>();
 
   /** THE WAY STRAIGHT TO A SERVER: one HTTP request to the provider's `baseUrl`. `through` is the
    *  provider's fetcher, an itx expression: the request goes through its `fetch`, and the `itx`
@@ -975,6 +1017,11 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
 /** ONE CALL ON AN ITX EXPRESSION: the expression's steps after its root, then `call`, walked on
  *  the context's scope as one pipelined chain (iterate/expression). With `itx.ai` and a `run`
  *  step, it is `itx.ai.run(…)`. */
+/** How long the answer "is this secret set" is kept (`firstKeySet`). */
+const SECRET_SET_KEPT_MS = 60_000;
+/** What `itx.secrets.describe(path)` answers, the part read here. */
+const SecretDescribed = z.object({ set: z.boolean() });
+
 function called(itx: LlmApiItx, expression: string, call: ItxExpressionStep): Promise<unknown> {
   return Promise.resolve(walkStepsOnRpcStub(itx, [...parse(expression).slice(1), call]));
 }

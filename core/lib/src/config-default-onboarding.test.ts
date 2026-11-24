@@ -1076,10 +1076,18 @@ test("a request that iterate's proxy refused for storage starts a check and chan
   fake.calls.length = 0;
   for (const code of ["iterate_credit_store_not_off", "iterate_credit_nothing_stored"])
     await hook(mind, fake.credit, {
-      type: "events.iterate.com/agent/llm-request-settled",
+      type: "events.iterate.com/llm-request/settled",
       path: "/agents/a",
       offset: 900,
-      payload: { failedKeys: [{ key: 1, error: `400 ${code}: storage at OpenAI must be off` }] },
+      payload: {
+        llmRequestOffset: 899,
+        attempt: 0,
+        result: {
+          status: "failed",
+          failureKind: "provider",
+          errorMessage: `400 ${code}: storage at OpenAI must be off`,
+        },
+      },
     });
   // each event read the balance again, and set or deleted nothing
   expect(fake).toMatchObject({ calls: ["balance", "balance"] });
@@ -1191,11 +1199,17 @@ test("iterate's limit at the provider on a forwarded answer deletes no secret by
   const before = await runStep(context, STEP, "check");
   fake.calls.length = 0;
   await hook(mind, fake.credit, {
-    type: "events.iterate.com/agent/llm-request-settled",
+    type: "events.iterate.com/llm-request/settled",
     path: "/agents/a",
     offset: 901,
     payload: {
-      failedKeys: [{ key: 1, error: "503 iterate_credit_provider_limit: iterate's limit" }],
+      llmRequestOffset: 900,
+      attempt: 0,
+      result: {
+        status: "failed",
+        failureKind: "provider",
+        errorMessage: "503 iterate_credit_provider_limit: iterate's limit",
+      },
     },
   });
   expect(fake).toMatchObject({
@@ -1500,10 +1514,14 @@ test("the hook reads nothing for an event no step hears", async () => {
     { type: "events.iterate.com/secret/set", path: "/secrets/google", offset: 2 },
     { type: "events.iterate.com/mind-meld/configured", path: "/minds/other.example", offset: 3 },
     {
-      type: "events.iterate.com/agent/llm-request-settled",
+      type: "events.iterate.com/llm-request/settled",
       path: "/agents/a",
       offset: 4,
-      payload: { failedKeys: [{ key: 1, error: "429 rate limited" }] },
+      payload: {
+        llmRequestOffset: 3,
+        attempt: 0,
+        result: { status: "failed", failureKind: "provider", errorMessage: "429 rate limited" },
+      },
     },
   ])
     await onboardingEvent(itx, event);

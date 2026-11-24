@@ -731,12 +731,16 @@ async function act(
 
 const CREDIT_PATHS = new Set<string>(CREDIT_SECRETS.map((secret) => secret.path));
 
-/** A failed agent request whose key answered with one of iterate's credit codes. It only starts a
+/** A failed request of an agent whose error has one of iterate's credit codes (the request
+ *  maker writes the provider's answer into `errorMessage`, agent/llm-request.ts). It only starts a
  *  check, which reads the balance: a refusal that is no spent credit (`iterate_credit_store_not_off`,
  *  `iterate_credit_nothing_stored`) leaves the card as it was, because "used" comes from the
  *  balance alone (`changed`). */
 const CreditRefused = z.object({
-  failedKeys: z.array(z.object({ error: z.string().regex(/iterate_credit_/) })).min(1),
+  result: z.object({
+    status: z.literal("failed"),
+    errorMessage: z.string().regex(/iterate_credit_/),
+  }),
 });
 
 function hears(event: MindEvent) {
@@ -749,7 +753,7 @@ function hears(event: MindEvent) {
       return CREDIT_PATHS.has(event.path);
     case "events.iterate.com/mind/worker-updated":
       return event.path === "/";
-    case "events.iterate.com/agent/llm-request-settled":
+    case "events.iterate.com/llm-request/settled":
       return CreditRefused.safeParse(event.payload).success;
     default:
       return false;

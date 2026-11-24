@@ -469,6 +469,7 @@ test("a provider's `cloudflareAiBinding` and `fetcher` are itx expressions: a pa
     baseUrl: null,
     fetcher: 'itx.minds.get("llm.example")',
     headers: {},
+    keys: [],
     webSocket: null,
   });
   // a provider that names neither: the mind's AI Gateway, and the facet's own `fetch`
@@ -1291,6 +1292,100 @@ test("an AI binding by expression: one config fact, and the requests go through 
   const [words] = agent.durable("events.iterate.com/agent-ui/message-sent");
   assert.equal(words.payload?.message, "Hello from the Cloud.");
   assert.deepEqual(agent.invalidFacts(), []);
+});
+
+test("what pays: a request takes the first key whose secret is set, through the facet's own fetch, and the provider's own way when none is set", async () => {
+  const seen = [];
+  const set = new Set(["/secrets/second"]);
+  const described = [];
+  const key = (name) => ({
+    secret: `/secrets/${name}`,
+    baseUrl: `https://${name}.example/v1`,
+    headers: { authorization: `Bearer getSecret("/secrets/${name}")` },
+  });
+  const agent = agentOnALog({
+    config: {
+      llm: { model: "other/llama-5" },
+      llmProviders: {
+        // the provider's own way is the AI binding: it pays when no key's secret is set
+        other: { api: "chat-completions", keys: [key("first"), key("second")] },
+      },
+    },
+    model: (call) => {
+      seen.push({ gateway: call.model });
+      return xai({ say: "Hello from the gateway." });
+    },
+    fetch: async (request) => {
+      seen.push({ url: request.url, authorization: request.headers.get("authorization") });
+      return xai({ say: "Hello from the key." });
+    },
+    roots: {
+      secrets: {
+        describe: async (path) => {
+          described.push(path);
+          return { set: set.has(path) };
+        },
+      },
+    },
+  });
+  await agent.say("hello");
+  // the first key's secret is not set: the second pays, with its own header for the egress
+  assert.deepEqual(seen, [
+    {
+      url: "https://second.example/v1/chat/completions",
+      authorization: 'Bearer getSecret("/secrets/second")',
+    },
+  ]);
+  assert.deepEqual(described, ["/secrets/first", "/secrets/second"]);
+  const [started] = agent.durable("events.iterate.com/llm-request/attempt-started");
+  assert.equal(started.payload?.transport, "direct");
+  // the answer is kept for a minute: the next request reads no secret again
+  await agent.say("hello again");
+  assert.equal(seen.length, 2);
+  assert.deepEqual(described, ["/secrets/first", "/secrets/second"]);
+  assert.deepEqual(agent.invalidFacts(), []);
+});
+
+test("what pays: with no secret set the provider's own way pays, and a read of the secrets that fails counts as not set", async () => {
+  const seen = [];
+  const reads = [];
+  const agent = agentOnALog({
+    config: {
+      llm: { model: "other/llama-5" },
+      llmProviders: {
+        other: {
+          api: "chat-completions",
+          keys: [
+            { secret: "/secrets/broken", baseUrl: "https://broken.example/v1", headers: {} },
+            { secret: "/secrets/unset", baseUrl: "https://unset.example/v1", headers: {} },
+          ],
+        },
+      },
+    },
+    model: (call) => {
+      seen.push(call.model);
+      return xai({ say: "Hello from the gateway." });
+    },
+    fetch: () => assert.fail("no key pays"),
+    roots: {
+      secrets: {
+        describe: async (path) => {
+          reads.push(path);
+          if (path === "/secrets/broken") throw new Error("the vault did not answer");
+          return { set: false };
+        },
+      },
+    },
+  });
+  await agent.say("hello");
+  assert.deepEqual(seen, ["other/llama-5"]);
+  // a failed read is not kept: the next request reads that secret again, and no other
+  await agent.say("hello again");
+  assert.deepEqual(reads, ["/secrets/broken", "/secrets/unset", "/secrets/broken"]);
+  assert.deepEqual(
+    agent.reports.filter((report) => report.event === "llm-api.secret-read-failed").length,
+    2,
+  );
 });
 
 test("a fetcher by expression: the requests to a `baseUrl` go through its `fetch`, not the facet's own", async () => {

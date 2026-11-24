@@ -169,6 +169,24 @@ export const AgentConfig = z.object({
          *  only where the request leaves through the mind's egress. */
         fetcher: ItxExpressionText.nullable().default(null),
         headers: z.record(z.string(), z.string()).default({}),
+        /** WHAT PAYS, IN ORDER. Each entry is a way straight to the provider's API that is taken
+         *  when its `secret` is set in the mind: an owner's own key, a plan. A request takes the
+         *  FIRST entry whose secret is set. With none set, and with no entry, it takes the
+         *  provider's own way above: its `baseUrl`, or its AI binding. So a mind whose owner
+         *  connected nothing pays with its AI Gateway, and a key that the owner connects later
+         *  pays from the next request on. A request that fails does not try the next entry. */
+        keys: z
+          .array(
+            z.object({
+              /** A secret of the mind, by its path: `/secrets/openai`. */
+              secret: z.string().min(1),
+              baseUrl: z.string().min(1),
+              /** They leave through the facet's own `fetch`, the mind's egress, which makes a
+               *  `getSecret("…")` in a header the secret. */
+              headers: z.record(z.string(), z.string()),
+            }),
+          )
+          .default([]),
         /** `openai-responses` only: a WebSocket that stays open between requests. */
         webSocket: z
           .object({ url: z.string().min(1), authorization: z.string().min(1) })

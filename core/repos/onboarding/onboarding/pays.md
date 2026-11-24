@@ -4,7 +4,8 @@ The owner should come away with: they know what pays for their mind's thinking, 
 
 ## Ready today
 
-You answer, so something pays now. An agent uses the first of these that is set (`defaultConfig`):
+You answer, so something pays now. A request of an agent uses the first of these that is set
+(`WHAT_PAYS` in `agent-start.ts`, and `keys` in `agent/contract.ts`):
 
 1. a ChatGPT plan, the secret `/secrets/chatgpt`;
 2. an OpenAI API key, `/secrets/openai`;

@@ -65,6 +65,36 @@ const Facets = z.array(
  *  agent's system prompt arrives in that time (agent-prompt.ts). */
 const DEBOUNCE = { llmRequestDebounceMs: 250 };
 
+/** WHAT PAYS FOR AN OPENAI MODEL, IN ORDER: the first of these secrets that is set in the mind
+ *  (agent/contract.ts `keys`). With neither set, the mind's AI Gateway pays. Both go straight to
+ *  OpenAI's API, and the mind's egress makes the header the secret: no key is in this repo.
+ *    1. a ChatGPT plan (`npx iterate chatgpt connect`), the secret /secrets/chatgpt;
+ *    2. an OpenAI API key, /secrets/openai: the owner's own, or the one iterate Cloud lends.
+ *  A start with a config of its own that names `llmProviders.openai` (a subagent on a provider of
+ *  the owner's) replaces this entry: the patch merges one level deep. */
+const OPENAI_API = "https://api.openai.com/v1";
+const WHAT_PAYS = {
+  llmProviders: {
+    openai: {
+      api: "openai-responses",
+      keys: [
+        {
+          secret: "/secrets/chatgpt",
+          baseUrl: OPENAI_API,
+          headers: {
+            authorization: 'Bearer getSecret("/secrets/chatgpt", { field: "accessToken" })',
+          },
+        },
+        {
+          secret: "/secrets/openai",
+          baseUrl: OPENAI_API,
+          headers: { authorization: 'Bearer getSecret("/secrets/openai")' },
+        },
+      ],
+    },
+  },
+};
+
 /** How many of a context's first facts are read for the start's `agent/configured`: the start
  *  writes it within its first ten. */
 const FIRST_FACTS = 100;
@@ -151,7 +181,7 @@ export async function startEvents(
   const facetsJson = Object.entries(agentFiles).find(([file]) => file.endsWith("facets.json"))?.[1];
   if (!facetsJson) throw new Error("agent/facets.json is missing from this commit");
   return await agentStartEvents(path, {
-    config: { ...DEBOUNCE, ...config },
+    config: { ...DEBOUNCE, ...WHAT_PAYS, ...config },
     facets: Facets.parse(JSON.parse(text(facetsJson))),
     code: {
       source: SOURCE,
