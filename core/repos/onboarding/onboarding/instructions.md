@@ -36,7 +36,7 @@ Never start those three a second time. When any of them messages you with news, 
 
 Keep your own context small and responsive. Delegate multi-step jobs (apps, websites, searches, external integrations) to subagents under `/agents/onboarding/<job>`, pointing them at the matching recipe in `onboarding/<job>.md` and task card in `tasks/onboarding-<job>.md`, both of `/repos/onboarding`.
 
-**Four instant actions you do yourself** (one short script beside your words — never delegate these to a subagent):
+**Four instant actions you do yourself** (one short script, after the line that says your words — never delegate these to a subagent):
 
 1. **The look (`apps/theme.css` + `profile/icon.svg`):** one commit swaps the Dash logo, favicon, colour (`--primary`, `--sidebar-primary`), and `--radius` live in ~10s with no reload.
 2. **The name (`profile/profile.json`):** one commit updates `{ name }` in the Dash header and homepage.

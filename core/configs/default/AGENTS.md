@@ -138,13 +138,15 @@ locally with `npm install && npx tsc`; the loader strips types but never checks 
 
 ## Agents
 
-The agents' runtime is `iterate/agents`, which comes from the platform like the rest of
-`iterate/*`: the mind runs the deployment's own build, and a platform deploy upgrades it.
-`agents.ts` re-exports its two classes and sets what a new agent pays with: a ChatGPT plan, else
-an OpenAI API key, else the deployment's AI Gateway credit ([agent-kinds.md](agent-kinds.md)).
+The agent is this repo's own code: `agent/` holds its processor and one request maker for each
+LLM API. `itx.agents` is the platform's (`iterate/agents`): the list on `/agents`, `create`,
+`message`, `recent` and `delete`. `agents.ts` tells it which agent `create` starts
+([agent-kinds.md](agent-kinds.md)). So `await itx.agents.create(path)` starts this repo's agent
+at any path, and a commit that changes `agent/` reaches an agent at its next message.
 
-An agent at `/agents/<name>` reads `<name>.md` before each request, after `AGENTS.md`, when this
-repo has one. `/agents/onboarding` is the agent where a new owner starts. Its guides are in the
+An agent is told `AGENTS.md` when it starts (`agent-prompt.ts`), and an agent at `/agents/<name>`
+is told `<name>.md` after it, when this repo has one. `/agents/onboarding` is the agent where a
+new owner starts. Its guides are in the
 repo `/repos/onboarding`, which a new mind starts with: `onboarding/instructions.md` is what it is
 told (the onboarding app appends it as an event when AI is proven working,
 `apps/onboarding/launch.ts`), `onboarding.md` is its long guide, and `onboarding/` holds one file
@@ -153,7 +155,7 @@ that came through iterate Cloud the handover writes its first message and starts
 subagents (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
 first opens its chat (`openers` in `apps/dash/public/app.js`).
 
-Every agent also reads `mind.md`, after `AGENTS.md`, when the repo has one (`agents.ts` names it):
+Every agent is also told `mind.md`, after `AGENTS.md`, when the repo has one (`agent-prompt.ts`):
 who this mind is, with its name, its voice, what it is for and how it reaches its people. The
 onboarding agent writes it with the owner. Keep it short: it is in every request.
 
@@ -161,21 +163,18 @@ onboarding agent writes it with the owner. Keep it short: it is in every request
 
 A person who wrote to you looks at an empty space until you answer. Make that short.
 
-- **Answer first, work second.** Write your words beside the script, in the same answer, or make
-  `await sendMessage("…")` the script's first line: "On it: the page turns green in a moment."
-  Never put a result there: the result does not exist yet.
+- **Say first, work second.** Your script's first words to the person come before its work: "On
+  it: the page turns green in a moment." Never put a result there: it does not exist yet.
 - **Start things together.** Steps that do not depend on each other run in ONE script with
   `Promise.all`, never one after the other.
-- **Say each piece of news when it arrives**, as a short message of its own (`sendMessage`
-  between the steps of a script, or your next answer). Three short messages over a minute are
-  better than one long message at the end.
-- **Give anything that is not small to a subagent**, under your own path, and keep talking:
-  `await itx.agents.create("<your path>/<job>")`, then
-  `await itx.agents.get("<your path>/<job>").message(brief)`. The subagent cannot see your
-  conversation, so the brief holds everything, and it says how to report:
-  `await itx.agents.get("<your path>").message("<one or two plain sentences>")`. Use the same
-  subagent for a later change of the same job. Your own context stays small: do not read the
-  mind's code into it for a job that a subagent can do.
+- **Say each piece of news when it arrives**, as a short message of its own, between the steps
+  of a script or in your next answer. Three short messages over a minute are better than one
+  long message at the end.
+- **Give anything that is not small to a subagent**, under your own path, and keep talking. Your
+  own context stays small: do not read the mind's code into it for a job that a subagent can do.
+
+How you say words to a person, and how you start a subagent, is in your instructions: each is
+one fact that your script appends.
 
 ## Tone and format
 

@@ -67,6 +67,28 @@ test("another kind's log: its words in are `message-received`, and a missing typ
   });
 });
 
+test("a mind's own agent: its script is the answer's `<codemode>` block, and its words out are `agent-ui/message-sent`", () => {
+  const answer = (text: string) => ({ llmRequestOffset: 2, result: { status: "succeeded", text } });
+  const log = [
+    event(41, "agent/message-received", { message: "Count the files" }),
+    event(41, "agent/context-added", { role: "user", content: "Count the files\n\n— Web UI" }),
+    event(41, "llm-request/settled", answer("<codemode>\nconst n = 3\nreturn n\n</codemode>")),
+    event(41, "itx/run-requested", { code: "wrapped" }, ownRun),
+    event(42, "agent-ui/message-sent", { message: "There are 3 files." }),
+    // an answer with no block is no script, and the run after it is not the agent's answer's
+    event(43, "llm-request/settled", answer("")),
+    event(43, "itx/run-requested", { code: "wrapped" }, ownRun),
+  ];
+  expect(agentRecent(log, { since: at(40), limit: 30, iterate: true })).toEqual({
+    did: [
+      { at: at(41), what: "message-in", text: "Count the files — Web UI" },
+      { at: at(41), what: "script", text: "const n = 3" },
+      { at: at(42), what: "message-out", text: "There are 3 files." },
+    ],
+    lastScript: { at: at(41), status: "", script: "const n = 3\nreturn n" },
+  });
+});
+
 const PATH = "/agents/a";
 const at = (minute: number) => `2026-11-16T10:${String(minute).padStart(2, "0")}:00.000Z`;
 let offset = 0;

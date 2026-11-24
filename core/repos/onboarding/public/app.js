@@ -70,21 +70,20 @@ async function ask(path, method = "GET") {
   return body;
 }
 
-/** True only when the model itself has produced a visible reply: either prose carrying
- *  `llmRequestOffset`, or a script-written message after a model-authored assistant turn.
- *  Code-written notices like credit-spent carry no `llmRequestOffset` and precede any model turn. */
+/** True only when the model itself has produced a visible reply: words that the agent's script
+ *  sent (`agent-ui/message-sent`) after a request of the model that succeeded. Code-written
+ *  notices like the greeting and credit-spent are the same fact, and they precede any answer. */
 const hasModelReply = (events) => {
   const firstModelOffset = events.find(
     (event) =>
-      event.type === "events.iterate.com/agent/context-added" &&
-      event.payload?.role === "assistant" &&
-      event.payload?.llmRequestOffset !== undefined,
+      event.type === "events.iterate.com/llm-request/settled" &&
+      event.payload?.result?.status === "succeeded",
   )?.offset;
   return events.some(
     (event) =>
-      event.type === "events.iterate.com/agent/web-message-sent" &&
-      (event.payload?.llmRequestOffset !== undefined ||
-        (firstModelOffset !== undefined && event.offset > firstModelOffset)),
+      event.type === "events.iterate.com/agent-ui/message-sent" &&
+      firstModelOffset !== undefined &&
+      event.offset > firstModelOffset,
   );
 };
 
@@ -162,11 +161,11 @@ function App() {
   const agent = useContextStub(() => itx.cd(AGENT), []);
   const agentContext = useIterateContext(agent.stub, {
     consumes: [
-      "events.iterate.com/agent/web-message-sent",
+      "events.iterate.com/agent-ui/message-sent",
       "events.iterate.com/agent/context-added",
       "events.iterate.com/agent/message-received",
-      "events.iterate.com/agent/llm-request-started",
-      "events.iterate.com/agent/llm-request-settled",
+      "events.iterate.com/llm-request/requested",
+      "events.iterate.com/llm-request/settled",
     ],
   });
 
@@ -869,7 +868,7 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
       const failedAfterWake = events.find(
         (event) =>
           event.offset > wakeStartOffsetRef.current &&
-          event.type === "events.iterate.com/agent/llm-request-settled" &&
+          event.type === "events.iterate.com/llm-request/settled" &&
           event.payload?.result?.status &&
           event.payload.result.status !== "succeeded",
       );
@@ -901,10 +900,10 @@ function VerifyStep({ agent, agentContext, onBackToAi, onDone }) {
         if (!lastTrigger) return;
         const lastSettled = [...events]
           .reverse()
-          .find((event) => event.type === "events.iterate.com/agent/llm-request-settled");
+          .find((event) => event.type === "events.iterate.com/llm-request/settled");
         const lastStarted = [...events]
           .reverse()
-          .find((event) => event.type === "events.iterate.com/agent/llm-request-started");
+          .find((event) => event.type === "events.iterate.com/llm-request/requested");
         const pendingOrInFlight =
           !lastSettled ||
           lastSettled.offset < lastTrigger.offset ||

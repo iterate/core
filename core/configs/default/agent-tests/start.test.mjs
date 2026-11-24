@@ -125,6 +125,29 @@ test("the same input gives the same keys; a change gives a new key for its event
   );
 });
 
+test("the parent link is written by the start that gives birth: a later start writes none, and one that names another parent is refused", async () => {
+  // a start with no parent: every fact but the link, under the same keys
+  const born = await agentStartEvents(PATH, options());
+  const later = await agentStartEvents(PATH, options({ parent: undefined }));
+  assert.deepEqual(later, born.slice(1));
+  // a subagent is linked to the agent that asked for it
+  const [link] = await agentStartEvents(`${PATH}/job`, options({ parent: PATH }));
+  assert.deepEqual(link.payload, { match: "itx", target: 'itx.cd("/agents/ada")' });
+  assert.equal(link.idempotencyKey, `agent-parent:${PATH}/job`);
+  // the key holds no hash of the body: on the log the first link stands, and a start that names
+  // another parent writes nothing at all
+  const log = memoryStream(PATH);
+  await log.stream.append(...born);
+  await assert.rejects(
+    async () =>
+      log.stream.append(...(await agentStartEvents(PATH, options({ parent: "/jails/x" })))),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  assert.equal(log.events.length, born.length);
+  await log.stream.append(...later);
+  assert.equal(log.events.length, born.length);
+});
+
 test("a path that is not a context path is refused", async () => {
   for (const path of ["", "agents/ada", "/", "/agents/", "/agents/ada smith", "/-x", "/a//b"])
     await assert.rejects(agentStartEvents(path, options()), /an agent runs on a context/);

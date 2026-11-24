@@ -5,7 +5,7 @@
 import { z } from "zod";
 import type { IterateContextApi } from "../api.ts";
 import { codedError } from "../lib.ts";
-import type { StreamEvent } from "../stream/processor.ts";
+import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import type { AgentMessageInput, AgentMessageOptions } from "./api.ts";
 import type { AgentState, FileAttachment, Speaker } from "./contract.ts";
 
@@ -53,6 +53,10 @@ export async function appendMessage(
   input: AgentMessageInput,
   from: string | undefined,
   options: AgentMessageOptions | undefined,
+  /** Facts that go into the same append, before the message: the start facts of a mind's own
+   *  agent (collection.ts `ownStart`). The log refuses the whole append when one of their keys
+   *  comes back with another body, so the words never land without them. */
+  first: StreamEventInput[] = [],
 ): Promise<StreamEvent> {
   const { message, files = [] } = typeof input === "string" ? { message: input } : input;
   // The options crossed RPC unchecked. A key that is no string, an empty one and a longer one
@@ -88,7 +92,7 @@ export async function appendMessage(
     });
   }
   using itx = getItx();
-  const appended = await target(itx).append({
+  const appended = await target(itx).append(...first, {
     type: "events.iterate.com/agent/message-received",
     ...(key && { idempotencyKey: `agent-message:${key}` }),
     payload: {
@@ -101,7 +105,8 @@ export async function appendMessage(
   });
   // Over the loopback stub the append's answer types as an RPC result, not the array the context
   // declares (`append(...events): Promise<StreamEvent[]>`, context/built-ins.ts); the wire copied it.
-  return (appended as unknown as StreamEvent[])[0]!;
+  // The message is the last event of the append: the facts in `first` stand before it.
+  return (appended as unknown as StreamEvent[]).at(-1)!;
 }
 
 /** WHO SAID AN EVENT'S WORDS, by the platform's stamp alone. Nothing of the payload is read.

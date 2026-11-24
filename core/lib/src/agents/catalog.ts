@@ -12,7 +12,7 @@ import { errorCode, reportIssue } from "../lib.ts";
 import { StreamProcessorDurableObject } from "../sdk/index.ts";
 import type { AgentHandleApi, AgentsRootApi } from "./api.ts";
 import { AgentContract } from "./contract.ts";
-import { AgentCollectionRpcTarget } from "./collection.ts";
+import { AgentCollectionRpcTarget, type OwnAgent } from "./collection.ts";
 import { AGENTS_MODULE, AGENTS_PATH } from "./install.ts";
 
 /** The core's announcement that a context exists below this one
@@ -354,6 +354,11 @@ export class AgentCollectionDurableObject
    *  `AgentDurableObject`: each agent's facet is started from it. A config that keeps them in
    *  another module sets it there, beside the export. */
   static module = AGENTS_MODULE;
+  /** THE MIND'S OWN AGENT, whose code is in the mind's config repo: the kind its start writes on
+   *  `/agents`, and the facts that make a context run it (collection.ts `OwnAgent`). A config sets
+   *  it beside the export, and then `create` starts that agent and hosts no `AgentDurableObject`.
+   *  None: `create` starts the platform's agent. */
+  static agent: OwnAgent | undefined;
 
   processor = new AgentCatalogProcessor(() => this.getItx());
   at(base: string) {
@@ -369,6 +374,7 @@ export class AgentCollectionDurableObject
       },
       base,
       (this.constructor as typeof AgentCollectionDurableObject).module,
+      (this.constructor as typeof AgentCollectionDurableObject).agent,
     );
   }
   #collection = this.at("/");

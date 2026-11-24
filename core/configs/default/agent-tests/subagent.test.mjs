@@ -91,8 +91,9 @@ async function answer(world, parent, request) {
         },
       ]
     : [];
+  // the child is linked to the agent that asked for it (agent-start.ts `startSubagent`)
   const start = await agentStartEvents(path, {
-    parent: "/",
+    parent: request.path,
     config,
     facets: FACETS,
     code: CODE,

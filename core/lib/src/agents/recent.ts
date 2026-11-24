@@ -8,6 +8,10 @@ import type { AgentDidKind, AgentRecent } from "./api.ts";
 /** A `did` line is cut to this many characters. */
 const DID_CHARS = 300;
 
+/** The script of an answer of a mind's own agent: everything between the first line, `<codemode>`,
+ *  and the last `</codemode>` line. */
+const CODEMODE_BLOCK = /^\s*<codemode>[ \t]*\n([\s\S]*)\n[ \t]*<\/codemode>\s*$/;
+
 /** The window's lines and newest script, from `events` in offset order. `iterate` says which
  *  event is the words in: an iterate agent's own `context-added` (a person's words, mail, a
  *  schedule's input, all one type), or, for another kind, the `message-received` it is sent. */
@@ -67,9 +71,17 @@ export function agentRecent(
             `${text("from") ? `[from ${text("from")}] ` : ""}${text("message")}`,
           );
         break;
+      // words out: the platform's agent's, and a mind's own agent's words in the web or mobile UI
       case "events.iterate.com/agent/web-message-sent":
+      case "events.iterate.com/agent-ui/message-sent":
         add(event.createdAt, "message-out", text("message"));
         break;
+      // a mind's own agent answers with one `<codemode>` block, which the next run it requests runs
+      case "events.iterate.com/llm-request/settled": {
+        const script = CODEMODE_BLOCK.exec(textOf(fields(payload.result), "text"))?.[1];
+        if (script?.trim()) call = { status: "", script };
+        break;
+      }
       // the loop's own run (the engine stamps it with the processor) runs the newest answer's call
       case "events.iterate.com/itx/run-requested": {
         if (textOf(fields(fields(event.source).processor), "slug") !== "agent" || !call) break;

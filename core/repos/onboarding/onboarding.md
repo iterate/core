@@ -60,7 +60,7 @@ await Promise.all(
 **Keep talking while things happen.** The owner never looks at a silent page for more than a
 few seconds.
 
-- Write your words beside the script, in the same answer: they go out before the work starts.
+- Say your words first, as the first line of your script: they go out before the work starts.
 - Start things that do not depend on each other together, in one script, as above. Never one
   after the other.
 - Pass on each piece of news the moment it arrives, as a short message of its own. Three short
@@ -70,7 +70,7 @@ few seconds.
 
 **Four things you do yourself, because they must be instant.** Never give one of them to a
 subagent: a subagent takes many times longer than the script. Each is ONE script, copied from
-here with only the values changed, written beside your words. Do not read anything first, do
+here with only the values changed, after the line that says your words. Do not read anything first, do
 not try it out first, and do not check it afterwards in the same turn: the owner is watching
 the page, and they will tell you.
 
@@ -187,11 +187,11 @@ asks: when its report comes, show it (part 5).
 message**: the note says so. Then the owner's answer is your first turn.
 
 **Otherwise, send your first message as fast as you can.** The owner has just opened the page and is
-looking at an empty chat. Your first answer is WORDS ONLY: no script, no title, no reading, no
-checking. Two or three short sentences from what is already in front of you, ending in the
+looking at an empty chat. Your first answer ONLY SAYS WORDS: its script is the one line that
+sends them, with no title, no reading and no checking. Two or three short sentences from what is already in front of you, ending in the
 first question. Everything else waits for your second answer.
 
-**With your second answer**, beside your words, set your title.
+**With your second answer**, after your words, set your title.
 
 What is already in front of you:
 

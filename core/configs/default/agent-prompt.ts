@@ -22,15 +22,22 @@ import type { RewriteRuleListEntry } from "iterate/api";
 import { errorCode, reportIssue } from "iterate/lib";
 import { z } from "zod";
 import { AGENT_MESSAGES, SUBAGENTS } from "./agent/fragments.ts";
-import { PEOPLE, type Itx } from "./agent-start.ts";
+import type { Itx } from "./agent-start.ts";
 import { WEB_MESSAGES } from "./agent-ui.ts";
 
 const T = "events.iterate.com/";
 /** A standing file longer than this is cut, with a line that says so (production's limit). */
 const FILE_MAX_CHARS = 100_000;
 
-/** The files every agent reads, as the template's agents.ts names them. */
+/** The files every agent reads: the mind's guide, and who the mind is. */
 const FILES = ["AGENTS.md", "mind.md"];
+
+/** The file of an agent's own role: `<name>.md` for the agent at `/agents/<name>`, when the repo
+ *  has one. An agent deeper in the tree (a thread, a subagent, a person's chat) has none. */
+function roleFileOf(path: string): string[] {
+  const name = /^\/agents\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(path)?.[1];
+  return name ? [`${name}.md`] : [];
+}
 
 /** What the line under a person's words in the Dash is (agent-ui.ts, the transcription). */
 const WEB_UI_LINES = [
@@ -40,9 +47,9 @@ const WEB_UI_LINES = [
   "on the raw event, and the line says where that event is.",
 ].join("\n");
 
-/** The section of AGENTS.md that this file replaces: it teaches the platform's own agents
- *  (`sendMessage`, words beside a script, `itx.agents.create`), which the template's onboarding
- *  agent still is. */
+/** The section of AGENTS.md that an older template wrote for the platform's own agent
+ *  (`sendMessage`, words beside a script). A mind that keeps its own AGENTS.md can still hold it:
+ *  this agent reads the section below in its place. */
 const WAITING_HEADING = "## While a person waits";
 const WAITING = [
   WAITING_HEADING,
@@ -100,7 +107,7 @@ async function promptOf(itx: Itx, path: string): Promise<string> {
   const repo = itx.repos.get("/repos/config");
   const [files, tree, identity] = await Promise.all([
     Promise.all(
-      FILES.map(async (file) => {
+      [...FILES, ...roleFileOf(path)].map(async (file) => {
         const read = await repo.readFile(file).catch(() => null);
         if (!read) return null;
         const text = forThisAgent(file, read);
@@ -166,7 +173,7 @@ export async function agentPrompt(
   itx: Itx,
   event: { type: string; path: string; payload?: unknown },
 ) {
-  if (event.type !== `${T}agent/configured` || !event.path.startsWith(PEOPLE)) return;
+  if (event.type !== `${T}agent/configured`) return;
   if (!StartWithoutInstructions.safeParse(event.payload).success) return;
   try {
     const instructions = await promptOf(itx, event.path);

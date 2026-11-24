@@ -1,10 +1,10 @@
 // agent-kinds/agent.ts — THE AGENT AS A KIND (agent-kinds.md). Its server half is the facets of
 // agent/, which agent-start.ts enables on each agent's context. Its chat is iterate's AgentChat.
 //
-// A person's new chat in the Dash is this agent: the kind says `newAgent: { default: true }`, so
-// the Dash's New agent appends `agent-ui/agent-requested` and then the person's first words to
-// `/agents/people/<person>/agent/<moment>`, as that member. Every other agent of the mind is the
-// platform's.
+// EVERY AGENT OF THE MIND IS THIS AGENT. A person's new chat in the Dash is one: the kind says
+// `newAgent: { default: true }`, so the Dash's New agent appends `agent-ui/agent-requested` and
+// then the person's first words to `/agents/people/<person>/agent/<moment>`, as that member. Every
+// other agent is one that `itx.agents.create(path)` started (agents.ts, agent-start.ts).
 //
 // THE MIND'S SIDE OF THE AGENT (`processEvent`). The agent has one input, `agent/context-added`,
 // and knows no channel. This kind acts on four facts, each in ONE append to a context:
@@ -18,11 +18,10 @@
 //   agent/subagent-requested    the agent's script: the child's start, and the answer and its note
 //                               to the parent (agent-start.ts `startSubagent`).
 //
-// THE GUARD. The platform's agents run in the same mind and read some of the same facts. So this
-// kind acts only on a context under `/agents/people/`, a person's own chats and their subagents,
-// and there only on a context that runs this agent: one of its first facts is the start's
-// `agent/configured` with `kind: "agent"` (agent/start.ts), or the Dash's request for one
-// (agent-start.ts `runsTheAgent`). On every other context it does nothing.
+// THE GUARD. Other kinds of agent run in the same mind and read some of the same facts (a Claude
+// Code session reads `agent/message-received` too). So this kind acts only on a context that runs
+// this agent: its start facts are in its log, or the Dash asked for one there (agent-start.ts
+// `runsTheAgent`). On every other context it does nothing.
 //
 // THE CHAT (`view`) is iterate's AgentChat as it is. It reads this agent's facts itself
 // (packages/ui agent-chat/agent-facts.ts): a person's bubble from the raw fact and its stamp, a
@@ -33,7 +32,7 @@
 // A view runs in the Dash's frame, where every import of this file is a stub that throws when
 // used (packages/ui agent-kind-view/load.ts). So a view uses nothing that this file imports.
 import type { AgentKind } from "@iterate-com/ui/agent-kind-view";
-import { PEOPLE, runsTheAgent, startSubagent, toAgent } from "../agent-start.ts";
+import { runsTheAgent, startSubagent, toAgent } from "../agent-start.ts";
 import {
   agentsApiContext,
   agentUiContext,
@@ -50,11 +49,11 @@ const SUBAGENT_REQUESTED = `${T}agent/subagent-requested`;
 
 /** THE MIND'S SIDE OF THE AGENT: each fact of the four becomes ONE append (the header). */
 async function processEvent({ event, itx }: Parameters<NonNullable<AgentKind["processEvent"]>>[0]) {
-  if (!event.path.startsWith(PEOPLE)) return;
   switch (event.type) {
     case UI_AGENT_REQUESTED: {
+      // the Dash gives birth to an agent: its `itx` is linked to the mind's root
       const config = agentUiStartConfig(event);
-      if (config) await toAgent(itx, event.path, [], { config });
+      if (config) await toAgent(itx, event.path, [], { config, parent: "/" });
       return;
     }
     case SUBAGENT_REQUESTED:
@@ -62,12 +61,18 @@ async function processEvent({ event, itx }: Parameters<NonNullable<AgentKind["pr
       return;
     case UI_MESSAGE:
     case API_MESSAGE: {
-      if (!(await runsTheAgent(itx, event.path))) return;
+      const runs = await runsTheAgent(itx, event.path);
+      if (!runs) return;
       const input = (event.type === UI_MESSAGE ? agentUiContext : agentsApiContext)(event);
       if (!input) return; // a payload the schema refuses
-      await toAgent(itx, event.path, [
-        { type: CONTEXT_ADDED, idempotencyKey: transcriptionKey(event), payload: input },
-      ]);
+      // Words that are handled before the Dash's request give birth to the agent themselves.
+      // Any other start names no parent: the link of the agent's birth stands.
+      await toAgent(
+        itx,
+        event.path,
+        [{ type: CONTEXT_ADDED, idempotencyKey: transcriptionKey(event), payload: input }],
+        runs === "asked" ? { parent: "/" } : {},
+      );
     }
   }
 }
@@ -78,8 +83,7 @@ export default {
   // THE MIND'S DEFAULT KIND: the Dash's New agent starts this one. The Dash appends the fact of
   // `start` and then the person's first words (`agent-ui/message-received`) to the new agent's
   // path, AS THE MEMBER WHO TYPED: no method of the mind stands between, so each fact carries that
-  // person's own stamp. The Dash knows this file in a new mind only (agent-kinds/index.ts
-  // `newChatsAreTheAgent`): in a mind that existed before this kind, New agent is iterate's own.
+  // person's own stamp.
   newAgent: {
     default: true,
     choices: [{ id: "agent", label: "Agent", byPerson: true }],

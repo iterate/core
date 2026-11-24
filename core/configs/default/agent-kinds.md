@@ -3,12 +3,12 @@
 What a kind of agent is, how to write one, and where an agent that a member starts on the Dash is
 born: `agent-kinds/`, the `agentKinds` list in `agent-kinds/index.ts`, `agents.ts` and `iterate/agents/kinds`.
 
-`installAgents(itx)` in the init case (`init.ts`)
-finds the agents' two classes in `agents.ts` by its name. Every agent runs from that file's own bundle, so a commit that
-changes only `worker.ts` or a page leaves the agents running.
+`installAgents(itx)` in the init case (`init.ts`) installs `itx.agents`, the platform's collection
+on `/agents`, and finds its class in `agents.ts` by its name. `agents.ts` tells it which agent
+`itx.agents.create(path)` starts: this repo's own, the kind `agent` below.
 
-Any context under `/agents` is an agent, and its kind is what the catalog lists it as: `iterate` for
-iterate's own, `claude` for a Claude Code session, or one of your own. A kind is one file
+Any context under `/agents` is an agent, and its kind is what the catalog lists it as: `agent` for
+the mind's own, `claude` for a Claude Code session, or one of your own. A kind is one file
 (`agent-kinds/<kind>.ts` by convention) whose default export `satisfies AgentKind`, named in
 `agent-kinds/index.ts`. `iterate/agents/kinds` has `makeAgentKind` and `AgentKind`;
 `@iterate-com/ui/agent-kind-view`'s `AgentKind` is the same with the view typed:
@@ -18,7 +18,7 @@ iterate's own, `claude` for a Claude Code session, or one of your own. A kind is
 import { makeAgentKind } from "iterate/agents/kinds";
 
 export const agentKinds = [
-  makeAgentKind(import.meta, () => import("./iterate.ts")),
+  makeAgentKind(import.meta, () => import("./agent.ts")),
   makeAgentKind(import.meta, () => import("./grok.ts")),
 ];
 
@@ -68,32 +68,46 @@ the same local part at two domains share one folder. `people` is a name that no 
 
 ## The kind `agent`
 
-`agent` is the mind's own agent: its code is in this repo, not in the platform. A person's new chat
-in the Dash is one, because the kind's file says `newAgent: { default: true, … }`. The Dash's New
-agent appends two facts to the new path, `/agents/people/<person>/agent/<moment>`, as the member
-who typed: the kind's start fact, `agent-ui/agent-requested`, then the person's first words,
-`agent-ui/message-received`. The kind answers the first with the agent's start facts. No method and
-no rewrite rule stands between: `itx.agents.create` is iterate's own, so the onboarding agent, its
-subagents and the agents of mail, X, Meet and Slack stay iterate's own. The kind acts only under
-`/agents/people/`.
+`agent` is the mind's own agent, and every agent that this mind starts is one. Its code is in this
+repo, not in the platform.
+
+- **`itx.agents.create(path)` starts one at any path**: the onboarding agent, a mail, Slack or X
+  thread, a meeting, a job of your own. The platform's collection appends the agent's start facts
+  to that context, in one append (`agents.ts` hands it `startEvents` of `agent-start.ts`). Every
+  fact has a key, so a second `create` writes nothing.
+- **A person's new chat in the Dash is one**, because the kind's file says
+  `newAgent: { default: true, … }`. The Dash's New agent appends two facts to the new path,
+  `/agents/people/<person>/agent/<moment>`, as the member who typed: the kind's start fact,
+  `agent-ui/agent-requested`, then the person's first words, `agent-ui/message-received`. The kind
+  answers the first with the agent's start facts. No method stands between, so each fact carries
+  that person's own stamp.
+- **An agent starts a subagent** with one fact, `agent/subagent-requested`, under its own path.
+- **Words reach an agent** as its one input, `agent/context-added`. A person's words in the Dash
+  (`agent-ui/message-received`) and words sent with `itx.agents.get(path).message(…)`
+  (`agent/message-received`) are transcribed into it by the kind, with a line that says who sent
+  them. An integration appends the input itself.
+- **A commit that changes `agent/` reaches an agent at its next message**: `message` sends the
+  start facts with the words, and a facet row of another code version starts the new code.
+- **The parent link is written once**, by the start that gives birth to an agent: to the mind's
+  root, or to the agent that asked for a subagent. No later start changes it.
+
+The files:
 
 - `agent/`: the agent itself, its facets (`facets.ts`, `facets.json`), which run on the agent's
-  context. `agent-start.ts` starts it with one append of keyed facts.
-- `agent-kinds/agent.ts`: the kind. Its `processEvent` turns a person's words
-  (`agent-ui/message-received`, `agent/message-received`) into the agent's one input,
-  `agent/context-added`, and starts a subagent on `agent/subagent-requested`. Its view is
-  iterate's chat.
-- `agent-ui.ts`: the Dash's chat as a channel. `agent-prompt.ts`: what the agent is told.
+  context. `agent-start.ts` makes its start facts.
+- `agent-kinds/agent.ts`: the kind. Its `processEvent` transcribes a person's words and starts a
+  subagent. Its view is iterate's chat.
+- `agent-ui.ts`: the Dash's chat as a channel. `agent-prompt.ts`: what the agent is told
+  (`AGENTS.md`, `mind.md`, `<name>.md` for the agent at `/agents/<name>`, its capability tree).
 - `agent-tests/`: the agent's unit tests, and `agent-kinds/agent.test.mjs`: the kind's. Run them
   from the repo's root with `node --test "agent-tests/*.test.mjs" agent-kinds/agent.test.mjs`. They
   are not in `agent/`, because every file of that folder is the facets' code.
 - A model: `config.llm.model`, `<provider>/<model>` as the AI Gateway names it.
 
-NEW MINDS ONLY. The Dash starts the kind where it knows the kind's file, and `init.ts` tells it of
-the file only where new chats are this agent (`agent-kinds/index.ts`). That choice is made once, at the first publish that
-has this code, and kept in the mind's KV (`config:new-chats-are-the-agent`, `yes` or `no`): a mind
-at its first publish gets `yes`, and a mind that existed before this kind gets `no` and keeps
-iterate's own agent for its new chats.
+## A mind that is older than its own agent
 
-To change it, write the choice yourself: `await itx.kv.put("config:new-chats-are-the-agent", "yes")`
-(or `"no"`). The next publish tells the Dash. The chats that a kind started stay what they are.
+Its earlier agents ran the platform's agent, and the catalog lists them as the kind `iterate`.
+Each is taken over in place: at its next `create` or message the collection appends the own
+agent's start facts to the same context. The conversation starts anew, and the old log stays
+readable in the Dash. Every publish takes over the old agents that worked in the last 30 days, 20
+at a time, the newest first (`init.ts`).

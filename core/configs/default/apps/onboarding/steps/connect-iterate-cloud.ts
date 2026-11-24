@@ -801,7 +801,8 @@ async function changed(
     context,
     `${key}:shown`,
     { message: text },
-    "events.iterate.com/agent/web-message-sent",
+    // the words a person reads in the chat (agent-ui.ts)
+    "events.iterate.com/agent-ui/message-sent",
   );
   const signer = (await meldOf(context)).signer;
   if (!signer) return;

@@ -158,7 +158,8 @@ async function firstMessage(itx: HandoverItx, handover: string, person: string) 
   if (greeted)
     await add(
       ONBOARDING_AGENT,
-      "events.iterate.com/agent/web-message-sent",
+      // the words a person reads in the chat (agent-ui.ts): the agent's own way to say them
+      "events.iterate.com/agent-ui/message-sent",
       `cloud-handover:${handover}:greeting-shown`,
       {
         message: greeting,

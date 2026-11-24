@@ -14,7 +14,7 @@
 // context, which its own subscription delivers to whatever runs it, and its death is the
 // certificate on `/agents` alone.
 import { RpcTarget } from "cloudflare:workers";
-import type { StreamEvent } from "../stream/processor.ts";
+import type { StreamEvent, StreamEventInput } from "../stream/processor.ts";
 import { codedError, errorCode, resolveContextPath } from "../lib.ts";
 import type { FacetSpec, IterateContextApi } from "../api.ts";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
@@ -95,6 +95,24 @@ export const CATALOG_ROWS = [
   },
 ] satisfies Parameters<IterateContextApi["subscribe"]>[0][];
 
+/** THE MIND'S OWN AGENT (catalog.ts `AgentCollectionDurableObject.agent`). Its code is in the
+ *  mind's config repo, and the platform runs none of it: the collection only appends its facts.
+ *  - `kind`: what the agent's own start writes on `/agents` as its kind.
+ *  - `startEvents(path, { parent })`: the facts that make the context at `path` run the agent, each
+ *    with an idempotency key, so appending them again writes nothing. With `parent`, they hold the
+ *    link from the context's `itx` to that context; without, they hold none. */
+export type OwnAgent = {
+  kind: string;
+  startEvents(
+    path: string,
+    options: { parent?: string },
+  ): Promise<StreamEventInput[]> | StreamEventInput[];
+};
+
+/** The kind of the platform's agent (`CATALOG_ROWS`). In a mind with an agent of its own, the
+ *  context of such an agent is taken over by the mind's own at its next `create` or message. */
+const PLATFORM_KIND = "iterate";
+
 /** How long `create` and `delete` wait for the agent's certificate in all. */
 const CERTIFICATE_WAIT_MS = 30_000;
 /** How long ONE call on the agent's context waits before it is asked again on a fresh call, so an
@@ -116,18 +134,21 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   private readonly catalogRead: CatalogRead;
   private readonly base: string;
   private readonly module: string;
+  private readonly own: OwnAgent | undefined;
 
   constructor(
     getItx: () => IterateContextApi & Disposable,
     catalog: CatalogRead,
     base = "/",
     module = AGENTS_MODULE,
+    own?: OwnAgent,
   ) {
     super();
     this.getItx = getItx;
     this.catalogRead = catalog;
     this.base = base;
     this.module = module;
+    this.own = own;
   }
 
   private async catalog() {
@@ -137,7 +158,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   get(path: string) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.getItx, path, () => this.catalog(), this.base);
+    return new AgentReference(this.getItx, path, () => this.catalog(), this.base, this.own);
   }
 
   /** Every agent, by path: every context under `/agents`, with what a list shows about it. It reads
@@ -211,6 +232,15 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     const dead = new Error(`agent ${path}: deleted — not re-creatable`);
     if ((await this.catalog()).deleted[path]) throw dead;
     const context = itx.cd(path);
+    if (this.own) {
+      // THE MIND'S OWN AGENT: its start facts and this collection's row for it, in ONE append.
+      // Every fact has a key, so a second create writes nothing. No certificate is waited for:
+      // the agent runs once its facts are in the log.
+      const kind = (await this.catalog()).agents[path]?.kind || null;
+      await context.append(...(await ownStart(this.own, path, kind, creator)));
+      await this.#untilListed(path);
+      return { path };
+    }
     const spec = agentsFacetSpec("AgentDurableObject", this.module);
     // The facet is this app's AgentDurableObject and `snapshot()` the engine's
     // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
@@ -306,8 +336,18 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     const row = catalog.agents[path];
     if (!catalog.deleted[path] && !row && path.startsWith(`${AGENTS_PATH}/`))
       throw codedError("NOT_CREATED", `agent ${path}: not created — nothing to delete`, { path });
-    if (row?.kind && row.kind !== "iterate") return await this.#certifyDeath(path);
     const rows = async () => (await context.processors.list()) as unknown as { name: string }[];
+    if (this.own && (!row?.kind || row.kind === this.own.kind || row.kind === PLATFORM_KIND)) {
+      // THE MIND'S OWN AGENT, or one of the platform's that it would take over. Its death goes on
+      // `/agents` first, so a verb that follows refuses. Then every row that its start enables
+      // goes, and each facet with its storage. A second delete finds the rows that are left.
+      if (!catalog.deleted[path]) await this.#certifyDeath(path);
+      const started = new Set((await this.own.startEvents(path, {})).flatMap(rowNameOf));
+      for (const hosted of await rows())
+        if (started.has(hosted.name)) await context.processors.disable(hosted.name);
+      return { path };
+    }
+    if (row?.kind && row.kind !== PLATFORM_KIND) return await this.#certifyDeath(path);
     if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
       return { path };
     let state: AgentState;
@@ -365,6 +405,49 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     });
     return { path };
   }
+}
+
+/** THE FACTS THAT START THE MIND'S OWN AGENT at `path`, whose row on `/agents` says `kind`, with
+ *  this collection's own row for it: `itx.agents` as that agent sees it, so a message it sends
+ *  names it as the sender.
+ *  - A path with no kind is a birth: the facts hold the link from its `itx` to `parent`.
+ *  - A path with the mind's own kind, or the platform's (a take-over), has its link since its
+ *    birth. None is written, so no later call links an agent to another parent.
+ *  - A path where another kind of agent runs is refused. */
+async function ownStart(
+  own: OwnAgent,
+  path: string,
+  kind: string | null,
+  parent?: string,
+): Promise<StreamEventInput[]> {
+  if (kind && kind !== own.kind && kind !== PLATFORM_KIND)
+    throw codedError("FORBIDDEN", `agent ${path}: an agent of the kind ${kind} runs there`, {
+      path,
+    });
+  return [
+    // A TAKE-OVER: the platform's agent ran here, and its four copy rows have other names than the
+    // own agent's. They go, or each summary and each first word would be copied to `/agents` twice.
+    ...(kind === PLATFORM_KIND
+      ? CATALOG_ROWS.map((row) => ({
+          type: "events.iterate.com/itx/subscription-configured",
+          idempotencyKey: `agent-row-off:${row.name}:${path}`,
+          payload: { name: row.name, target: null },
+        }))
+      : []),
+    ...(await own.startEvents(path, kind ? {} : { parent })),
+    {
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      idempotencyKey: `agent-collection:${path}`,
+      payload: { match: "itx.agents", target: `itx.cd('/').agents.at(${JSON.stringify(path)})` },
+    },
+  ];
+}
+
+/** The name of the row that a start fact configures, if it configures one. */
+function rowNameOf(event: StreamEventInput): string[] {
+  if (event.type !== "events.iterate.com/itx/subscription-configured") return [];
+  const name = (event.payload as { name?: unknown } | undefined)?.name;
+  return typeof name === "string" ? [name] : [];
 }
 
 /** `recent()`'s window: 5 minutes by default, at most a day. */
@@ -430,18 +513,21 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
   private readonly path: string;
   private readonly catalog: () => Promise<AgentCatalogState>;
   private readonly base: string;
+  private readonly own: OwnAgent | undefined;
 
   constructor(
     getItx: () => IterateContextApi & Disposable,
     path: string,
     catalog: () => Promise<AgentCatalogState>,
     base: string,
+    own?: OwnAgent,
   ) {
     super();
     this.getItx = getItx;
     this.path = path;
     this.catalog = catalog;
     this.base = base;
+    this.own = own;
   }
 
   /** A person's words: a dead agent refuses from the catalog (the header: its facet is never hosted
@@ -473,7 +559,27 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     const row = catalog.agents[path];
     if (!row && path.startsWith(`${AGENTS_PATH}/`)) throw notCreated();
     const from = this.base === "/" ? undefined : this.base;
-    if (row?.kind && row.kind !== "iterate")
+    if (this.own) {
+      // IN A MIND WITH AN AGENT OF ITS OWN no facet is called: the words are appended to the
+      // agent's context, as for every kind. The mind's own agent gets its start facts in the same
+      // append, before the words. So an agent of the platform's is taken over here, and a publish
+      // of new agent code reaches an agent at its next message.
+      const kind = row?.kind;
+      const start =
+        kind === this.own.kind || kind === PLATFORM_KIND
+          ? await ownStart(this.own, path, kind)
+          : [];
+      return await appendMessage(
+        this.getItx,
+        path,
+        (itx) => itx.cd(path),
+        input,
+        from,
+        options,
+        start,
+      );
+    }
+    if (row?.kind && row.kind !== PLATFORM_KIND)
       return await appendMessage(this.getItx, path, (itx) => itx.cd(path), input, from, options);
     // The facet is this app's AgentDurableObject, whose `message` answers the event it appended
     // (durable-object.ts: `message(input, from, options)`) — ours, so asserted.
@@ -539,7 +645,8 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
       ...agentRecent(events, {
         since: new Date(Date.now() - minutes * 60_000).toISOString(),
         limit,
-        iterate: row?.kind === "iterate",
+        // the platform's agent and the mind's own both read their words in as `context-added`
+        iterate: row?.kind === PLATFORM_KIND || (!!this.own && row?.kind === this.own.kind),
       }),
     };
   }

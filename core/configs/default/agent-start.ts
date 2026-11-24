@@ -4,13 +4,23 @@
 // Every fact has an idempotency key, so starting twice writes once: the kind sends the start facts
 // with every input and asks nothing first.
 //
+//   startEvents(path, options)               the start facts: `itx.agents.create(path)` appends
+//                                            them, and sends them with each message (agents.ts)
 //   toAgent(itx, path, events, options)      the start facts and `events` in one append
 //                                            (agent-kinds/agent.ts)
 //   startSubagent(itx, request)              the answer to `agent/subagent-requested`
 //
+// EVERY AGENT OF THE MIND STARTS HERE, AT ANY PATH: the onboarding agent, a mail, Slack or X
+// thread, a meeting, a subagent. Each of them is `itx.agents.create(path)`, and the platform's
+// collection appends `startEvents` (agents.ts hands it the function).
+//
 // A PERSON STARTS AN AGENT WITH NO METHOD OF THIS FILE: the Dash's New agent appends the kind's own
 // start fact, `agent-ui/agent-requested`, as that member (agent-kinds/agent.ts `newAgent`), and the
-// kind answers it with `toAgent`. The Dash does that in a new mind only (agent-kinds/index.ts).
+// kind answers it with `toAgent`.
+//
+// THE PARENT LINK IS WRITTEN ONCE, BY THE START THAT GIVES BIRTH TO AN AGENT (agent/start.ts): to
+// the mind's root, or to the agent that asked for a subagent, so a child reaches what its parent
+// reaches and no more. Every later start names no parent.
 //
 // WHAT AN AGENT IS TOLD is not part of its start. every-event.ts sees the start's
 // `agent/configured` and appends the agent's system prompt (agent-prompt.ts). The agent waits
@@ -29,9 +39,6 @@ import { agentStartEvents, CONTEXT_PATH, contextCopiedEvents } from "./agent/sta
 const T = "events.iterate.com/";
 const AGENTS = "/agents";
 
-/** Where this agent runs: a person's own chats and their subagents. The kind acts on no other
- *  context (agent-kinds/agent.ts), and no start facts go to any other. */
-export const PEOPLE = `${AGENTS}/people/`;
 /** The mind's root, as worker.ts hands it to every hook. */
 export type Itx = IterateContextApi;
 type Event = { type: string; idempotencyKey?: string; payload?: Record<string, unknown> };
@@ -135,12 +142,15 @@ async function versionOf(): Promise<string> {
 }
 
 /** THE FACTS THAT START AN AGENT at `path`, or give a running one a new config or new code. It
- *  reads nothing of the mind: the caller appends them to the context, in one append. */
-async function startEvents(path: string, config: Record<string, unknown> = {}) {
+ *  reads nothing of the mind: the caller appends them to the context, in one append. `parent` is
+ *  for the start that gives birth to the agent (the header). */
+export async function startEvents(
+  path: string,
+  { parent, config = {} }: { parent?: string; config?: Record<string, unknown> } = {},
+) {
   const facetsJson = Object.entries(agentFiles).find(([file]) => file.endsWith("facets.json"))?.[1];
   if (!facetsJson) throw new Error("agent/facets.json is missing from this commit");
   return await agentStartEvents(path, {
-    parent: "/",
     config: { ...DEBOUNCE, ...config },
     facets: Facets.parse(JSON.parse(text(facetsJson))),
     code: {
@@ -149,6 +159,7 @@ async function startEvents(path: string, config: Record<string, unknown> = {}) {
       cacheKey: `agent:${await (version ||= versionOf())}`,
     },
     rows: path.startsWith(`${AGENTS}/`) ? CATALOG_ROWS : [],
+    parent,
   });
 }
 
@@ -157,35 +168,58 @@ const firstStands = (error: unknown) => {
   if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
 };
 
-/** THE START FACTS AND `events` IN ONE APPEND to the agent at `path`, a context under `PEOPLE`. */
+/** THE START FACTS AND `events` IN ONE APPEND to the agent at `path`. */
 export async function toAgent(
   itx: Itx,
   path: string,
   events: Event[],
-  options: { config?: Record<string, unknown> } = {},
+  options: { parent?: string; config?: Record<string, unknown> } = {},
 ) {
-  if (!path.startsWith(PEOPLE))
-    throw new Error(`this agent runs under ${PEOPLE} alone, not at ${JSON.stringify(path)}`);
-  const start = await startEvents(path, options.config);
-  await itx
-    .cd(path)
-    .append(...start, ...events)
-    .catch(firstStands);
+  const context = itx.cd(path);
+  try {
+    await context.append(...(await startEvents(path, options)), ...events);
+  } catch (error) {
+    firstStands(error);
+    // The log refused the whole append, `events` too. When the start named a parent, the context
+    // can have a link to another parent since its birth: that link stands. The start goes again
+    // without one, so the input is not lost with the link.
+    if (options.parent)
+      await context
+        .append(...(await startEvents(path, { config: options.config })), ...events)
+        .catch(firstStands);
+  }
 }
 
-/** The context runs this agent, or a person asked for one here: among its first facts is the
- *  start's `agent/configured`, or the Dash's request, `agent-ui/agent-requested`. Events reach a
- *  kind in no order (iterate/sdk `Integration.processEvent`), so a person's first words can be
- *  handled before the request that the Dash appended ahead of them. The words' own append then
- *  brings the start facts, and the request's handling writes the same keyed facts. */
-export async function runsTheAgent(itx: Itx, path: string): Promise<boolean> {
-  const { events } = await itx.cd(path).readEvents(0, FIRST_FACTS);
-  return events.some(
-    (event) =>
-      event.type === `${T}agent-ui/agent-requested` ||
-      (event.type === `${T}agent/configured` && StartConfigured.safeParse(event.payload).success),
-  );
+/** WHETHER THE CONTEXT RUNS THIS AGENT, and how it came to:
+ *  - "asked": the Dash asked for one here, with `agent-ui/agent-requested` among the context's
+ *    first facts. Events reach a kind in no order (iterate/sdk `Integration.processEvent`), so a
+ *    person's first words can be handled before the request that the Dash appended ahead of
+ *    them. The words' own append then gives birth to the agent, and the request's handling
+ *    writes the same keyed facts.
+ *  - "started": its start facts are in the log. They stand among the first facts of a context
+ *    that was born as an agent, and at the END of the log of a context that the platform's old
+ *    agent ran before (`itx.agents` takes such a context over). So the second look is at the
+ *    rows: the processor `agent` is this agent's facet.
+ *  - null: neither. */
+export async function runsTheAgent(itx: Itx, path: string): Promise<"asked" | "started" | null> {
+  const context = itx.cd(path);
+  const { events } = await context.readEvents(0, FIRST_FACTS);
+  if (events.some((event) => event.type === `${T}agent-ui/agent-requested`)) return "asked";
+  if (
+    events.some(
+      (event) =>
+        event.type === `${T}agent/configured` && StartConfigured.safeParse(event.payload).success,
+    )
+  )
+    return "started";
+  const rows = await context.processors.list();
+  return rows.some((row) => row.name === "agent" && row.hostedFacet?.className === AGENT_FACET)
+    ? "started"
+    : null;
 }
+
+/** The class of the agent's own facet (agent/facets.json), as its row names it. */
+const AGENT_FACET = "AgentFacet";
 
 /** The start's `agent/configured` (agent/start.ts): the one that says the context runs this agent. */
 const StartConfigured = z.object({ kind: z.literal("agent") });
@@ -268,7 +302,8 @@ export async function startSubagent(
         },
       },
     ];
-    await toAgent(itx, child, [...copied, ...briefed], { config });
+    // the child is linked to its parent, not to the root: it reaches what its parent reaches
+    await toAgent(itx, child, [...copied, ...briefed], { config, parent: request.path });
     answer = {
       type: `${T}agent/subagent-started`,
       payload: { requestOffset: request.offset, path: child, copiedItems },

@@ -1049,7 +1049,7 @@ test("the credit used: iterate's proxy is switched off once, the card says what 
     "Your $10 of iterate credit is used.\nYour mind's requests no longer go to iterate.\nYour agents go on with your ChatGPT plan if you connected one, else with your Cloudflare account. Voice calls need a key of your own.\nWeb research needs a key of your own.\nChoose what pays now:",
   );
   const drawn = () =>
-    mind.chat().filter((event) => event.type === "events.iterate.com/agent/web-message-sent");
+    mind.chat().filter((event) => event.type === "events.iterate.com/agent-ui/message-sent");
   expect(drawn()).toHaveLength(1);
   expect(mind).toMatchObject({
     mailed: [{ from: "onboarding@example.com", to: "owner@example.org" }],
@@ -2165,7 +2165,8 @@ test("onboarding page is a centered no-AI wizard with no AgentChat, the optional
   expect(pageJs).toContain("/verify-ai");
   expect(pageJs).toContain("https://dash.${zone}/agents${AGENT}");
   expect(pageJs).toContain("approves each mind");
-  expect(pageJs).toContain("llmRequestOffset");
+  expect(pageJs).toContain("events.iterate.com/llm-request/settled");
+  expect(pageJs).toContain("events.iterate.com/agent-ui/message-sent");
   expect(pageJs).toContain('status === "disconnecting"');
   expect(pageJs).toContain("Done: your mind is set up");
   expect(pageJs).toContain('data-action="open-dash"');
@@ -2555,7 +2556,7 @@ test("the credit-used mail goes once for each grant: two checks at the same mome
   expect(mind.mailed).toHaveLength(1);
   const drawn = mind
     .chat()
-    .filter((event) => event.type === "events.iterate.com/agent/web-message-sent");
+    .filter((event) => event.type === "events.iterate.com/agent-ui/message-sent");
   expect(drawn).toHaveLength(1);
 });
 

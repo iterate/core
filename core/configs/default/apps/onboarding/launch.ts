@@ -319,7 +319,7 @@ export async function launchOnboardingAgent(
       role: "developer",
       actor: { type: "agent" },
       content:
-        "The owner has just verified their AI connection and opened onboarding for the first time. Send your first message now: words only, no script (follow the onboarding instructions and tasks overview above).",
+        "The owner has just verified their AI connection and opened onboarding for the first time. Send your first message now (follow the onboarding instructions and tasks overview above).",
     },
   });
 

@@ -12,5 +12,6 @@ export type {
   AgentsApi,
   AgentsRootApi,
 } from "./api.ts";
+export type { OwnAgent } from "./collection.ts";
 export type { AgentInputGate } from "./message.ts";
 export type { AgentConfigPatch } from "./processor.ts";

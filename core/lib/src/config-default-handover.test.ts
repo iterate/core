@@ -69,7 +69,7 @@ test("the handover writes the first message and starts the first subagents, once
   });
   expect(rows[2]).toEqual({
     path: "/agents/onboarding",
-    type: "web-message-sent",
+    type: "message-sent",
     key: ":greeting-shown",
     payload: { message: greeting },
   });
