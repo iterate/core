@@ -91,6 +91,19 @@ export async function cloudHandoverEvent(itx: HandoverItx, event: HandoverEvent)
   if (destination !== new URL(await itx.url()).hostname) return;
   const { person, notes } = partsOf(summary);
   await itx.agents.create(ONBOARDING_AGENT);
+  await itx
+    .cd(ONBOARDING_AGENT)
+    .append({
+      type: "events.iterate.com/itx/described",
+      idempotencyKey: "onboarding:pin-in-dash",
+      payload: {
+        description: "Your main conversation.",
+        metadata: { title: "Main conversation", tags: ["pinned-in-dash"] },
+      },
+    })
+    .catch((error: unknown) => {
+      if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+    });
   const append = (idempotencyKey: string, payload: Record<string, unknown>) =>
     itx
       .cd(ONBOARDING_AGENT)

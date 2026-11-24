@@ -59,34 +59,44 @@ test("the handover writes the first message and starts the first subagents, once
   });
   const greeting =
     "Hey Ada. This is your mind now, and everything in it is yours to change, including the page you are looking at.\n\nLet's prove that first. Your mind needs a logo: name a letter or a sign (★, ◆, ☾, anything) and a colour, and watch the top of this page.";
+  // first event pins /agents/main in the Dash sidebar via context catalog tags
+  expect(rows[0]).toEqual({
+    path: "/agents/main",
+    type: "described",
+    key: "onboarding:pin-in-dash",
+    payload: {
+      description: "Your main conversation.",
+      metadata: { title: "Main conversation", tags: ["pinned-in-dash"] },
+    },
+  });
   // the assistant's item starts no turn by its role, and with it in the log the Dash's opener
   // stays silent: it must carry no policy that would make the chat count as empty
-  expect(rows[1]).toEqual({
+  expect(rows[2]).toEqual({
     path: "/agents/main",
     type: "context-added",
     key: "opener:/agents/main",
     payload: { role: "assistant", content: greeting },
   });
-  expect(rows[2]).toEqual({
+  expect(rows[3]).toEqual({
     path: "/agents/main",
     type: "message-sent",
     key: ":greeting-shown",
     payload: { message: greeting },
   });
-  expect(rows.slice(3).map(({ path, key, payload }) => [path, key, payload.role])).toEqual([
+  expect(rows.slice(4).map(({ path, key, payload }) => [path, key, payload.role])).toEqual([
     ["/agents/main/researcher", "onboarding:helper:researcher", "user"],
     ["/agents/main/sandbox", "onboarding:helper:sandbox", "user"],
     ["/agents/main", "onboarding:helpers-started", "developer"],
   ]);
   // a subagent's brief starts its turn, and names its guide and its card in /repos/onboarding, how
   // to read them, and the way to report
-  expect(rows[3]!.payload).not.toHaveProperty("llmRequestPolicy");
-  expect(rows[3]!.payload).toMatchObject({
+  expect(rows[4]!.payload).not.toHaveProperty("llmRequestPolicy");
+  expect(rows[4]!.payload).toMatchObject({
     content: expect.stringMatching(
       /Read onboarding\/research\.md of \/repos\/onboarding \(await itx\.repos\.get\("\/repos\/onboarding"\)\.readFile\("onboarding\/research\.md"\)\)[\s\S]*tasks\/onboarding-research\.md of \/repos\/onboarding[\s\S]*profile\/icon\.svg[\s\S]*\/agents\/main\/website[\s\S]*itx\.agents\.get\("\/agents\/main"\)\.message\(/,
     ),
   });
-  expect(rows[5]!.payload).toMatchObject({
+  expect(rows[6]!.payload).toMatchObject({
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
   expect(root).toMatchObject({
@@ -109,6 +119,7 @@ test("an owner who reached the chat before the handover is greeted once: the ope
   const keys = root.appended.map(({ event }) => event.idempotencyKey.replace(KEY, ""));
   expect(keys).toEqual([
     "opener:/agents/main",
+    "onboarding:pin-in-dash",
     "",
     "onboarding:helper:researcher",
     "onboarding:helper:sandbox",
@@ -147,7 +158,7 @@ test("the Cloud's notes after its line reach the agent as its own word, once, af
   await run(root, event);
   await run(root, event);
   expect(
-    root.appended.slice(0, 2).map(({ event }) => {
+    root.appended.slice(1, 3).map(({ event }) => {
       const { idempotencyKey, payload } = event as unknown as {
         idempotencyKey: string;
         payload: { role: string; content: string };
@@ -173,7 +184,9 @@ test("the Cloud's notes after its line reach the agent as its own word, once, af
 test("a summary longer than the Cloud's cap is cut to it again", async () => {
   const root = rootOf("https://example.com/");
   await run(root, { ...HANDOVER, payload: { ...HANDOVER.payload, summary: "a".repeat(9_000) } });
-  const [only] = root.appended as unknown as { event: { payload: { content: string } } }[];
+  const only = root.appended.find(({ event }) => event.idempotencyKey === KEY) as unknown as
+    | { event: { payload: { content: string } } }
+    | undefined;
   expect(only?.event.payload.content.endsWith(`> ${"a".repeat(8_000)}`)).toBe(true);
 });
 

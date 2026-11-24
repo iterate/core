@@ -273,7 +273,6 @@ function MindDash() {
     mind,
     pages,
     links,
-    mainAgent: "/agents/main",
     foot,
     accountLinks,
     sidebarDefaultOpen,

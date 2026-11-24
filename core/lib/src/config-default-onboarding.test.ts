@@ -2245,30 +2245,38 @@ test("launchOnboardingAgent creates /agents/main with bespoke instructions, task
   expect(created).toEqual([ONBOARDING_AGENT, "/agents/main/researcher", "/agents/main/sandbox"]);
   const onboardingEvents = mind.chat();
   expect(onboardingEvents.map((event) => event.idempotencyKey)).toEqual([
+    "onboarding:pin-in-dash",
     "onboarding:init:instructions",
     "onboarding:init:tasks-overview",
     "onboarding:init:owner",
     `opener:${ONBOARDING_AGENT}`,
     "onboarding:helpers-started",
   ]);
-  expect(JSON.stringify(onboardingEvents[0]?.payload)).toContain("Main agent instructions");
-  expect(onboardingEvents[0]?.payload).toMatchObject({
+  expect(onboardingEvents[0]).toMatchObject({
+    type: "events.iterate.com/itx/described",
+    payload: {
+      description: "Your main conversation.",
+      metadata: { title: "Main conversation", tags: ["pinned-in-dash"] },
+    },
+  });
+  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain("Main agent instructions");
+  expect(onboardingEvents[1]?.payload).toMatchObject({
     role: "developer",
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
-  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
+  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain(
     "https://tasks.example.com/?tag=onboarding",
   );
-  expect(JSON.stringify(onboardingEvents[1]?.payload)).toContain(
+  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain(
     "Depends on: tasks/onboarding-website.md (in-progress)",
   );
-  expect(JSON.stringify(onboardingEvents[2]?.payload)).toContain("ada@example.com");
-  expect(onboardingEvents[2]?.payload).toMatchObject({
+  expect(JSON.stringify(onboardingEvents[3]?.payload)).toContain("ada@example.com");
+  expect(onboardingEvents[3]?.payload).toMatchObject({
     role: "developer",
     llmRequestPolicy: { behaviour: "dont-trigger-request" },
   });
-  expect(onboardingEvents[3]?.payload).toMatchObject({ role: "developer" });
-  expect(onboardingEvents[3]?.payload).not.toHaveProperty("llmRequestPolicy");
+  expect(onboardingEvents[4]?.payload).toMatchObject({ role: "developer" });
+  expect(onboardingEvents[4]?.payload).not.toHaveProperty("llmRequestPolicy");
   // Background `researcher` (which hands off to `website` after research + logo) and `sandbox` subagents started immediately,
   // and `researcher` receives the owner's email right in its initial prompt.
   expect(mind.logs.get("/agents/main/researcher")).toHaveLength(1);
@@ -2279,7 +2287,7 @@ test("launchOnboardingAgent creates /agents/main with bespoke instructions, task
 
   // Re-running launch is idempotent and appends nothing twice
   await launchOnboardingAgent(launchItx, { email: "ada@example.com", name: "Ada Lovelace" });
-  expect(mind.chat()).toHaveLength(5);
+  expect(mind.chat()).toHaveLength(6);
   expect(mind.logs.get("/agents/main/researcher")).toHaveLength(1);
   expect(mind.logs.get("/agents/main/sandbox")).toHaveLength(1);
 });
@@ -2302,11 +2310,11 @@ test("launchOnboardingAgent reads the instructions and the cards of /repos/onboa
       "modules /repos/onboarding tasks at c1",
     ],
   });
-  expect(mind.chat()[0]?.payload).toMatchObject({
+  expect(mind.chat()[1]?.payload).toMatchObject({
     content: "# Your instructions\n\nThe board is at https://tasks.example.com/.\n",
   });
   // the overview names the repo the cards are in
-  expect(JSON.stringify(mind.chat()[1]?.payload)).toContain("/repos/onboarding");
+  expect(JSON.stringify(mind.chat()[2]?.payload)).toContain("/repos/onboarding");
 });
 
 test("launchOnboardingAgent launches nothing on a mind with no /repos/onboarding, or none with a commit: there is no guide to give the agent", async () => {
@@ -2390,6 +2398,7 @@ test("POST /verify-ai launches /agents/main on success and does not create it on
   expect(await okRes.json()).toMatchObject({ ok: true, provider: "ai-gateway" });
   expect(createdOk).toEqual([ONBOARDING_AGENT, "/agents/main/researcher", "/agents/main/sandbox"]);
   expect(mindOk.chat().map((event) => event.idempotencyKey)).toEqual([
+    "onboarding:pin-in-dash",
     "onboarding:init:instructions",
     "onboarding:init:tasks-overview",
     `opener:${ONBOARDING_AGENT}`,

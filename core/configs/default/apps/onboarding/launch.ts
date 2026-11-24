@@ -16,6 +16,14 @@ import { ONBOARDING_REPO } from "./app.ts";
 
 export const ONBOARDING_AGENT = "/agents/main";
 const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
+const PIN_MAIN_CONVERSATION_EVENT = {
+  type: "events.iterate.com/itx/described",
+  idempotencyKey: "onboarding:pin-in-dash",
+  payload: {
+    description: "Your main conversation.",
+    metadata: { title: "Main conversation", tags: ["pinned-in-dash"] },
+  },
+};
 
 /** The mind, as the launch uses it: the handover's calls, optional whoami, and reads of `/repos/onboarding`. */
 export type LaunchOnboardingItx = HandoverItx & {
@@ -276,10 +284,12 @@ export async function launchOnboardingAgent(
   };
   const ownerSummary = ownerSummaryOf(resolvedOwner);
 
-  // Append the fat context stack (instructions + generated tasks/dependencies overview + owner
+  // Pin `/agents/main` in the Dash sidebar via its context catalog tag (`pinned-in-dash`), then
+  // append the fat context stack (instructions + generated tasks/dependencies overview + owner
   // identity when known), then the opener that triggers the agent's first reply. Each event
   // carries a stable idempotency key so retries or a prior iterate Cloud handover never duplicate
   // context or greetings.
+  await appendIdempotent(itx, PIN_MAIN_CONVERSATION_EVENT);
   await appendIdempotent(itx, {
     type: CONTEXT_ADDED,
     idempotencyKey: "onboarding:init:instructions",
