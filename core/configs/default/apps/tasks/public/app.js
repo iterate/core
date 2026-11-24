@@ -883,7 +883,14 @@ function Nav({ tasks, dimensions, view }) {
 function RepoSwitcher({ repos }) {
   const { isMobile, setOpenMobile } = useSidebar();
   if (repos.length <= 1) {
-    return html`<${AppShellBrand} app="Tasks" line=${REPO_NAME} logo=${MIND_ICON} href="./" />`;
+    return html`
+      <${AppShellBrand}
+        app="Tasks"
+        line=${html`<span className="font-mono">${REPO}</span>`}
+        logo=${MIND_ICON}
+        href="./"
+      />
+    `;
   }
   return html`
     <${SidebarMenu}>
@@ -894,7 +901,7 @@ function RepoSwitcher({ repos }) {
               <${SidebarMenuButton}
                 size="lg"
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
-                aria-label=${`Repo: ${REPO_NAME}`}
+                aria-label=${`Repo: ${REPO}`}
               >
                 <span
                   className="flex aspect-square size-8 items-center justify-center rounded-md bg-black"
@@ -903,7 +910,7 @@ function RepoSwitcher({ repos }) {
                 </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">Tasks</span>
-                  <span className="truncate text-xs text-muted-foreground">${REPO_NAME}</span>
+                  <span className="truncate font-mono text-xs text-muted-foreground">${REPO}</span>
                 </span>
                 <${ChevronDownIcon} className="ml-auto" />
               <//>
@@ -927,7 +934,7 @@ function RepoSwitcher({ repos }) {
                       showRepo(name);
                     }}
                   >
-                    <span className="truncate">${name}</span>
+                    <span className="truncate font-mono">${`/repos/${name}`}</span>
                     ${name === REPO_NAME ? html`<${CheckIcon} className="ml-auto" />` : null}
                   <//>
                 `,

@@ -222,8 +222,16 @@ function App() {
  *  more than one, or a plain brand when it has one. */
 function RepoSwitcher({ repo, repos }) {
   const { isMobile, setOpenMobile } = useSidebar();
+  const repoPath = `/repos/${repo}`;
   if (repos.length <= 1) {
-    return html`<${AppShellBrand} app="Docs" line=${repo} logo=${MIND_ICON} href="./" />`;
+    return html`
+      <${AppShellBrand}
+        app="Docs"
+        line=${html`<span className="font-mono">${repoPath}</span>`}
+        logo=${MIND_ICON}
+        href="./"
+      />
+    `;
   }
   return html`
     <${SidebarMenu}>
@@ -234,7 +242,7 @@ function RepoSwitcher({ repo, repos }) {
               <${SidebarMenuButton}
                 size="lg"
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
-                aria-label=${`Repo: ${repo}`}
+                aria-label=${`Repo: ${repoPath}`}
               >
                 <span
                   className="flex aspect-square size-8 items-center justify-center rounded-md bg-black"
@@ -243,7 +251,9 @@ function RepoSwitcher({ repo, repos }) {
                 </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">Docs</span>
-                  <span className="truncate text-xs text-muted-foreground">${repo}</span>
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    ${repoPath}
+                  </span>
                 </span>
                 <${ChevronDownIcon} className="ml-auto" />
               <//>
@@ -268,7 +278,7 @@ function RepoSwitcher({ repo, repos }) {
                       if (isMobile) setOpenMobile(false);
                     }}
                   >
-                    <span className="truncate">${name}</span>
+                    <span className="truncate font-mono">${`/repos/${name}`}</span>
                     ${name === repo ? html`<${CheckIcon} className="ml-auto" />` : null}
                   <//>
                 `,
@@ -302,11 +312,11 @@ function Page({ repo, path, commentOnly, list, open }) {
   `;
 }
 
-/** The sidebar: the repo's name and its files as a tree. */
+/** The sidebar: the repo's path and its files as a tree. */
 function Files({ repo, list, path, open }) {
   return html`
     <${SidebarGroup}>
-      <${SidebarGroupLabel}>${repo}<//>
+      <${SidebarGroupLabel} className="font-mono">${`/repos/${repo}`}<//>
       <${SidebarGroupContent}>
         <${DocTree} list=${list} openPath=${path} onOpen=${open} author=${author} />
       <//>
