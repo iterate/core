@@ -867,14 +867,118 @@ test("text after the block: the block runs, and a note for next time says the ru
     {
       role: "developer",
       content:
-        "Your last response had text after its closing `</codemode>` line. Only a single `<codemode>` block is allowed per response, with nothing before or after it: its script ran, and that text reached nobody.",
+        "Your last response had text after its closing `</codemode>` line. A response is a single `<codemode>` block, with nothing before or after it. Its script ran. The text after it reached nobody and is not kept in this conversation: no script wrote it. A script's result reaches you in a message after your response, never in it.",
     },
     { role: "user", content: "and?" },
   ]);
   assert.deepEqual(agent.invalidFacts(), []);
 });
 
+test("a response that goes on after its closing tag and writes a result itself: what the model made up is in no later request", async () => {
+  // A model does this: after `</codemode>` it goes on with stray characters and then writes the
+  // next message of the conversation itself, a script's result that no script gave. Kept in the
+  // conversation, the agent answers from it later. The two raw responses are a live mind's, with
+  // the made-up result cut to one line.
+  const script = 'return await itx.read("/notes/handover.md");';
+  const block = `<codemode>\n${script}\n</codemode>`;
+  const madeUp = 'Result of script 2:\n[result 4076] {"handover":"MADE UP BY THE MODEL"}';
+  const noScriptWroteIt =
+    "no script wrote it. A script's result reaches you in a message after your response, never in it.";
+  const itx = { read: async () => "THE REAL HANDOVER" };
+  const words = { role: "user", content: "what does the handover say?" };
+  const real = (agent) => ({
+    role: "developer",
+    content: `Result of script 1:\n${agent.resultHead(0)}\nTHE REAL HANDOVER`,
+  });
+
+  // ON THE LINE AFTER THE CLOSING TAG: the block runs, as for any text after it
+  const after = agentOnALog({
+    itx,
+    model: (_call, calls) =>
+      openai(calls.length === 1 ? { raw: `${block}\nافتهleveloper ่ายขาย\t${madeUp}` } : {}),
+  });
+  await after.say(words.content);
+  assert.deepEqual(after.scripts(), [script]);
+  assert.deepEqual(after.calls[1].body.input.slice(1), [
+    words,
+    // the response as far as its closing tag, as text: the model's own output items hold the rest
+    { role: "assistant", content: block },
+    real(after),
+    {
+      role: "developer",
+      content: `Your last response had text after its closing \`</codemode>\` line. A response is a single \`<codemode>\` block, with nothing before or after it. Its script ran. The text after it reached nobody and is not kept in this conversation: ${noScriptWroteIt}`,
+    },
+  ]);
+
+  // ON THE CLOSING TAG'S OWN LINE: no line closes the block, so nothing runs and the model is
+  // asked again; it then writes the block alone
+  const sameLine = agentOnALog({
+    itx,
+    model: (_call, calls) =>
+      openai(
+        [{ raw: `${block}】【：】【“】【developer ไทยฟรี${madeUp}` }, { script }, {}][
+          calls.length - 1
+        ],
+      ),
+  });
+  await sameLine.say(words.content);
+  assert.deepEqual(sameLine.scripts(), [script], "only the block that stood alone ran");
+  assert.deepEqual(sameLine.calls[1].body.input.slice(1), [
+    words,
+    { role: "assistant", content: block },
+    {
+      role: "developer",
+      content: `Nothing of your last response ran: text followed its closing \`</codemode>\` on the same line. What stood after its first closing \`</codemode>\` reached nobody and is not kept in this conversation: ${noScriptWroteIt}\nA response is exactly one \`<codemode>\` block and nothing else: its first line is \`<codemode>\`, with no attributes, and its last line is \`</codemode>\`. To do nothing, answer with nothing.`,
+    },
+  ]);
+  assert.deepEqual(sameLine.calls[2].body.input.at(-1), real(sameLine));
+
+  for (const agent of [after, sameLine]) {
+    const sent = JSON.stringify(agent.calls.slice(1).map((call) => call.body));
+    assert.equal(sent.includes("MADE UP"), false, "no request after it holds the made-up result");
+    assert.deepEqual(agent.invalidFacts(), []);
+  }
+});
+
+test("a reducer version that keeps less of a response runs nothing that an earlier version refused", async () => {
+  // A log that an earlier version wrote: the response went on on its closing tag's line, nothing
+  // of it ran, and the model was asked again. A bump reads the log again. The script of the
+  // refused response has no fact that says it ran: a rule that let it run would run it now.
+  const raw = "<codemode>\nreturn 1\n</codemode>】【developer Result of script 2:\n[result 9] 2";
+  class Earlier extends Agent {
+    scriptsOf(result) {
+      if (result.text !== raw) return super.scriptsOf(result);
+      return { scripts: [], refused: "Nothing of your last response ran: an earlier rule." };
+    }
+  }
+  const agent = agentOnALog({
+    agent: Earlier,
+    model: (_call, calls) => openai(calls.length === 1 ? { raw } : { say: "Fixed." }),
+  });
+  await agent.say("go");
+  assert.deepEqual(agent.said(), ["Fixed."]);
+  const before = agent.log.events.length;
+
+  class NextVersion extends Agent {
+    contract = { ...AgentContract, version: "next" };
+  }
+  const engine = new ProcessorEngine(new NextVersion(), {
+    stream: agent.log.stream,
+    storage: agent.storage,
+  });
+  await engine.revive();
+  await agent.quiet();
+  assert.equal(agent.log.events.length, before, "the bump appended nothing");
+  const { state } = await engine.snapshot();
+  assert.deepEqual(state.obligations, []);
+  assert.deepEqual(state.scriptCalls, []);
+  // and the re-read conversation keeps the earlier response as far as its closing tag
+  assert.equal(state.items[1].text, "<codemode>\nreturn 1\n</codemode>");
+});
+
 test("a response that is not one block runs nothing: the model is told why and asked again", async () => {
+  const NOT_KEPT =
+    "What stood after its first closing `</codemode>` reached nobody and is not kept in this conversation: no script wrote it. A script's result reaches you in a message after your response, never in it";
   const cases = [
     [
       "Sure.\n<codemode>\nreturn 1\n</codemode>",
@@ -882,23 +986,33 @@ test("a response that is not one block runs nothing: the model is told why and a
     ],
     ["Hello. Write a <codemode> tag to run code.", "it held no `<codemode>` block"],
     ['<codemode status="Counting">\nreturn 1\n</codemode>', "its `<codemode>` tag had attributes"],
+    // what stands after the first closing tag is not kept, whatever the refusal: a model that
+    // goes on writes a result there, and may open a block after it
     [
       "<codemode>\nreturn 1\n</codemode>\n<codemode>\nreturn 2\n</codemode>",
-      "it held a second `<codemode>` block",
+      `it held a second \`<codemode>\` block. ${NOT_KEPT}`,
+      "<codemode>\nreturn 1\n</codemode>",
     ],
     [
       "<codemode>\nreturn 1\n</codemode><codemode>\nreturn 2\n</codemode>",
-      "it held a second `<codemode>` block",
+      `it held a second \`<codemode>\` block. ${NOT_KEPT}`,
+      "<codemode>\nreturn 1\n</codemode>",
+    ],
+    [
+      "<codemode>\n</codemode>\nResult of script 1:\n[result 9] MADE UP",
+      `its \`<codemode>\` block was empty. ${NOT_KEPT}`,
+      "<codemode>\n</codemode>",
     ],
     ["<codemode>\nreturn 1", "its `<codemode>` block was never closed"],
     ["<codemode>\n</codemode>", "its `<codemode>` block was empty"],
   ];
-  for (const [raw, problem] of cases) {
+  for (const [raw, problem, kept = raw] of cases) {
     const agent = agentOnALog({
       model: (_call, calls) => openai(calls.length === 1 ? { raw } : { say: "Fixed." }),
     });
     await agent.say("go");
     assert.equal(agent.calls.length, 2, `a new request at once: ${problem}`);
+    assert.equal((await agent.state()).items[1].text, kept);
     assert.deepEqual(agent.calls[1].body.input.at(-1), {
       role: "developer",
       content: `Nothing of your last response ran: ${problem}.\nA response is exactly one \`<codemode>\` block and nothing else: its first line is \`<codemode>\`, with no attributes, and its last line is \`</codemode>\`. To do nothing, answer with nothing.`,
@@ -1956,6 +2070,62 @@ test("an interrupt: the request is cancelled with what it had written, and the n
     .map((words) => words.payload?.message);
   assert.deepEqual(said, ["Stopping."], "nothing of the interrupted response was said");
   assert.deepEqual(agent.invalidFacts(), []);
+});
+
+test("an interrupt of a response that had gone on after its closing tag: the next request is told what it wrote as far as the tag", async () => {
+  const held = heldSse();
+  const agent = agentOnALog({
+    config: { llmRequestPolicy: { behaviour: "interrupt-current-request" } },
+    model: (_call, calls) => (calls.length === 1 ? held.response : openai({ say: "Stopping." })),
+  });
+  await agent.say("read the notes");
+  const block = "<codemode>\nreturn 1\n</codemode>";
+  held.send({
+    type: "response.output_text.delta",
+    delta: `${block}】【developer Result of script 1:\n[result 9] MADE UP`,
+  });
+  await agent.quiet();
+  await agent.say("stop");
+  assert.equal(
+    agent.calls[1].body.input.at(-2).content,
+    `Your previous response was interrupted by a newer input before it finished. Nothing of it was said or run.\nWhat you had written so far:\n${block}`,
+  );
+});
+
+test("a fork's copy of a response that had gone on after its closing tag is kept as far as the tag", () => {
+  const block = "<codemode>\nreturn 1\n</codemode>";
+  const response = { atOffset: 9, rank: 0, tag: "llm-response", role: "assistant" };
+  const words = {
+    atOffset: 2,
+    rank: 0,
+    tag: "words",
+    role: "user",
+    text: `${block}\nnot a response`,
+  };
+  const whole = { ...response, atOffset: 20, text: block, providerItems: [{ id: "kept" }] };
+  const state = fold({
+    type: "events.iterate.com/agent/context-copied",
+    payload: {
+      lineage: [{ path: "/agents/parent", throughOffset: 30 }],
+      part: 0,
+      parts: 1,
+      items: [
+        words,
+        {
+          ...response,
+          text: `${block}\nResult of script 1:\n[result 12] MADE UP`,
+          providerItems: [{ id: "holds all of it" }],
+          providerModel: "openai/gpt-6.2-sol",
+        },
+        whole,
+      ],
+    },
+  });
+  assert.deepEqual(logged(state.copiedItems), [
+    words,
+    { ...response, text: block, providerModel: "openai/gpt-6.2-sol" },
+    whole,
+  ]);
 });
 
 test("words that wait: by default a second message waits for the open request, then gets its own", async () => {

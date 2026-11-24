@@ -85,7 +85,7 @@ import {
  *  and counted its versions "1", "2", …. A facet keeps its checkpoint under the slug, and the engine
  *  takes a checkpoint of its own version as its own state. An equal number here would make that
  *  agent's state this one's. */
-const AGENT_VERSION = "config-4";
+const AGENT_VERSION = "config-5";
 
 /** What an input does to the agent's requests. */
 export const LlmRequestPolicy = z.object({
