@@ -16,7 +16,12 @@ import { RpcTarget } from "capnweb";
 import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
 import { addressOf, connectMind, discoveredMind, openForSignIn, signInToMind } from "../node.ts";
-import { mindApiUrlOf, mindMcpUrlOf, mindProvideConnectResourceOf } from "../mind-api.ts";
+import {
+  mindApiUrlOf,
+  mindMcpNameOf,
+  mindMcpUrlOf,
+  mindProvideConnectResourceOf,
+} from "../mind-api.ts";
 import { connectChatgpt } from "./chatgpt.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
@@ -229,6 +234,10 @@ const launcherProcedures = {
           .describe("The mind's domain: a zone of the account, or one to buy or bring"),
         account: z.string().optional().describe("The Cloudflare account, by id or name"),
         newAccount: z.boolean().optional().describe("Make a new Cloudflare account for the mind"),
+        newSignIn: z
+          .boolean()
+          .optional()
+          .describe("Drop the kept Cloudflare sign-in and start a new one"),
         owner: z
           .string()
           .optional()
@@ -306,6 +315,7 @@ const launcherProcedures = {
     .input(
       z.object({
         domain: z.string().describe("A domain of the mind"),
+        account: z.string().optional().describe("The Cloudflare account, by id"),
         owner: z.string().describe("The email address of the owner who has no passkey left"),
         yes: z.boolean().optional().describe("Revoke and make the link without a question"),
       }),
@@ -876,15 +886,16 @@ export const runCli = async () => {
   });
 };
 
-/** Claude Code's arguments that add one HTTP MCP server named `iterate` at `mcpUrl`
- *  (https://code.claude.com/docs/en/mcp). It signs in itself: the server's protected-resource
- *  metadata names the mind's issuer. */
+/** Claude Code's arguments that add one HTTP MCP server at `mcpUrl`
+ *  (https://code.claude.com/docs/en/mcp), named after its host (`mindMcpNameOf`) so two minds on
+ *  one computer do not collide. It signs in itself: the server's protected-resource metadata names
+ *  the mind's issuer. */
 export const claudeMcpAddArgs = (mcpUrl: string) => [
   "mcp",
   "add",
   "--transport",
   "http",
-  "iterate",
+  mindMcpNameOf(new URL(mcpUrl).hostname),
   mcpUrl,
 ];
 

@@ -95,9 +95,54 @@ test("a process whose lock another one took over leaves that one's lock in place
   expect(readFileSync(lock, "utf8")).toBe("another process");
 });
 
+test.for([
+  ["invalid_grant", 400, { error: "invalid_grant", error_description: "Token revoked" }],
+  ["invalid_client", 401, { error: "invalid_client", error_description: "Client not found" }],
+] as const)("a renewal refused with %s clears the stored sign-in", async ([code, status, body]) => {
+  const resource = await signInAgainst(() => ({ status, body }));
+
+  await expect(tokenFor(resource)).rejects.toThrow(code);
+  expect(readSession(resource)).toBeNull();
+});
+
+test("a transient 5xx on renewal keeps the stored sign-in", async () => {
+  const resource = await signInAgainst(() => ({
+    status: 503,
+    body: { error: "temporarily_unavailable" },
+  }));
+
+  await expect(tokenFor(resource)).rejects.toThrow();
+  expect(readSession(resource)).toMatchObject({ token: "access-0", refreshToken: "refresh-0" });
+});
+
 /** The bearer for `resource`, as a script asks for it: no sign-in when it cannot be renewed. */
 const tokenFor = (resource: string) =>
   mindToken({ address: "iterate.example.com", resource, signIn: false });
+
+/** A stored sign-in that ends in 30 seconds against a token endpoint that answers `reply`. */
+async function signInAgainst(reply: () => { status: number; body: unknown }) {
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      const { status, body } = reply();
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  onTestFinished(() => void server.close());
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const resource = `${url}/api`;
+  writeSession(resource, {
+    issuer: url,
+    tokenEndpoint: `${url}/token`,
+    clientId: "cli",
+    token: "access-0",
+    refreshToken: "refresh-0",
+    expiresAt: new Date(Date.now() + 30_000).toISOString(),
+  });
+  return resource;
+}
 
 /** A stored sign-in that ends in 30 seconds, at an issuer of its own. */
 async function signInAboutToEnd() {

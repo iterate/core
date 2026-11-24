@@ -51,6 +51,7 @@ import {
   cloudflare,
   cloudflareAccess,
   DEPLOY_SCOPES,
+  dropKeptAccess,
   endAccess,
   SIGN_IN_ENDED_EXIT,
   SIGN_IN_FILE,
@@ -76,6 +77,7 @@ export type DeployInput = {
   domain?: string;
   account?: string;
   newAccount?: boolean;
+  newSignIn?: boolean;
   owner?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
@@ -1988,7 +1990,19 @@ export async function deployMind(input: DeployInput) {
         // a kept sign-in (`iterate cloudflare sign-in`) is a sign-in too: the same checks
         process.env[SIGN_IN_FILE]?.trim() || undefined,
       );
-    let access = await signIn();
+    if (input.newSignIn) {
+      // a new sign-in is the device flow's: a token from the environment would still be used
+      if (process.env.CLOUDFLARE_API_TOKEN?.trim() || process.env[SIGN_IN_FILE]?.trim())
+        throw new Error(
+          `--new-sign-in starts a new sign-in at Cloudflare, but CLOUDFLARE_API_TOKEN or ${SIGN_IN_FILE} is set and would be used instead. Unset it, or leave out --new-sign-in.`,
+        );
+      const notRevoked = await dropKeptAccess();
+      if (notRevoked)
+        p.log.warn(
+          `Cloudflare did not revoke the earlier sign-in (${notRevoked}). It ends by itself within the hour.`,
+        );
+    }
+    let access = await signIn(Boolean(input.newSignIn));
     // THE ACCESS ENDS WITHIN THE HOUR, and a wait for a card or a domain can be longer. So each
     // call takes the access anew: the kept one, or a new sign-in once it has too little left
     // (cloudflare-access.ts). One sign-in at a time, whatever calls wait for it.
@@ -2044,7 +2058,12 @@ export async function deployMind(input: DeployInput) {
         `Cloudflare refused the kept access (${user.status}). Run the command again to sign in.`,
       );
     }
-    p.log.info(`Signed in to Cloudflare${login ? ` as ${login}` : ""}.`);
+    const signedIn = `Signed in to Cloudflare${login ? ` as ${login}` : ""}.`;
+    p.log.info(
+      access.from === "sign-in" && !access.keptIn
+        ? `${signedIn}\nWrong Cloudflare login? Run again with --new-sign-in.`
+        : signedIn,
+    );
     // THE OWNER OF A NEW MIND: `--owner`, else the Cloudflare login, else a question. Asked for
     // only where it is needed: a mind that is there already keeps its owners.
     let asked: string | undefined;

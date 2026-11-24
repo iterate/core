@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "vitest";
 import { deployedMind, mindConfigIn } from "./deploy.ts";
-import { newTicket, recoveryStatements } from "./recover.ts";
+import { newTicket, recoveryStatements, zoneForRecovery } from "./recover.ts";
 
 test("a ticket is 32 random bytes, and what goes into the database is its SHA-256 in hex", () => {
   const { ticket, hash } = newTicket();
@@ -131,4 +131,28 @@ test("a recovery keeps the mind's identity: it writes no config, its statements 
   });
   for (const { sql } of statements)
     for (const table of identityTables) expect(sql).not.toContain(table);
+});
+
+test("zoneForRecovery narrows the zone query with --account and names --account when more than one zone matches", async () => {
+  const asked: string[] = [];
+  const cfWith = (zones: { id: string; account: { id: string } }[]) =>
+    (async (method: string, path: string) => {
+      asked.push(`${method} ${path}`);
+      return { status: 200, result: zones, total: zones.length, error: "" };
+    }) as Parameters<typeof zoneForRecovery>[0];
+
+  const zoneA = { id: "z-a", account: { id: "acc-a" } };
+  const zoneB = { id: "z-b", account: { id: "acc-b" } };
+
+  await expect(zoneForRecovery(cfWith([zoneA, zoneB]), "ada-labs.com")).rejects.toThrow(
+    /2 domains named ada-labs\.com \(accounts acc-a, acc-b\): pass --account <id> to choose one\./,
+  );
+  expect(asked.at(-1)).toBe("GET /zones?name=ada-labs.com");
+
+  expect(await zoneForRecovery(cfWith([zoneB]), "ada-labs.com", "acc-b")).toEqual(zoneB);
+  expect(asked.at(-1)).toBe("GET /zones?name=ada-labs.com&account.id=acc-b");
+
+  await expect(zoneForRecovery(cfWith([]), "ada-labs.com", "acc-c")).rejects.toThrow(
+    /no domain named ada-labs\.com in account acc-c/,
+  );
 });

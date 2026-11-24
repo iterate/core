@@ -76,7 +76,8 @@ What it does, in order:
 1. **Cloudflare.** You approve a code on Cloudflare's page (the device flow, with the `cf` CLI's
    public client: no secret, no server of iterate's). The access lives about an hour and is not
    renewed. It is kept in the CLI's config folder until a deploy works, then revoked, so a second
-   run asks for no second approval. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
+   run asks for no second approval. Pass `--new-sign-in` to drop it and sign in with another
+   Cloudflare login. `CLOUDFLARE_API_TOKEN` replaces the sign-in.
    - The sign-in asks for what one deploy of the stack needs and for nothing more (never "Account
      API Token Provisioning"): `STACK_SCOPES` in [cloudflare-access.ts](cloudflare-access.ts) says
      which resource needs each scope.
@@ -339,8 +340,9 @@ mind. So the proof is the mind's Cloudflare account, as it is for a deploy. Its 
 
 The command signs in to Cloudflare as `iterate deploy` does, and asks for much less: it reads the
 domain, its routes and the boundary Worker's settings, and it writes to D1. It finds the mind by
-its domain, checks that the address is one of the mind's owners, asks for a yes (`--yes`), and
-then runs two statements on the auth Worker's database, `iterate-<stage>-auth-db`:
+its domain (pass `--account <id>` when the domain is in more than one account), checks that the
+address is one of the mind's owners, asks for a yes (`--yes`), and then runs two statements on the
+auth Worker's database, `iterate-<stage>-auth-db`:
 
 1. It revokes every passkey of that owner. A link opens nothing while one is live.
 2. It adds one sign-in link, of which the database holds only the SHA-256 of its random ticket.

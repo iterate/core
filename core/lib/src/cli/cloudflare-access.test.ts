@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   DEPLOY_SCOPES,
   describeNetworkError,
+  dropKeptAccess,
   KeptSignIn,
   keptSignInStep,
   lockHeld,
@@ -103,6 +104,29 @@ test("a command refuses a kept sign-in whose lock a live process holds", () => {
   }
 });
 
+test("dropKeptAccess still removes the file when the revoke fails, and answers why", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "kept-access-"));
+  const file = join(folder, "cloudflare-access.json");
+  const fetcher = (async () => {
+    throw new Error("network down");
+  }) as unknown as typeof fetch;
+  try {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        token: "cf-kept-token",
+        expiresAt: now + 3600_000,
+        scopes: DEPLOY_SCOPES.join(" "),
+        lacks: [],
+      }),
+    );
+    expect(await dropKeptAccess({ file, fetcher })).toContain("network down");
+    expect(existsSync(file)).toBe(false);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
 test("describeNetworkError unwraps Node fetch cause and gives actionable hints for TLS and IPv6/timeout failures", () => {
   const certErr = new TypeError("fetch failed", {
     cause: Object.assign(new Error("unable to verify the first certificate"), {
@@ -156,4 +180,36 @@ test("resilientFetch retries transient network errors and 503 responses, then su
       },
     ),
   ).rejects.toThrow(/dash\.cloudflare\.com.*ENETUNREACH.*ipv4first/);
+});
+
+test("dropKeptAccess removes the kept access file and revokes its token, and is a no-op when absent", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "kept-access-"));
+  const file = join(folder, "cloudflare-access.json");
+  const calls: { url: string; body: string }[] = [];
+  const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({ url: String(url), body: String(init?.body || "") });
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  try {
+    // absent file: no request, no throw
+    await dropKeptAccess({ file, fetcher });
+    expect(calls).toEqual([]);
+
+    writeFileSync(
+      file,
+      JSON.stringify({
+        token: "cf-kept-token",
+        expiresAt: now + 3600_000,
+        scopes: DEPLOY_SCOPES.join(" "),
+        lacks: [],
+      }),
+    );
+    expect(await dropKeptAccess({ file, fetcher })).toBeUndefined();
+    expect(existsSync(file)).toBe(false);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ url: "https://dash.cloudflare.com/oauth2/revoke" });
+    expect(new URLSearchParams(calls[0]!.body).get("token")).toBe("cf-kept-token");
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });
