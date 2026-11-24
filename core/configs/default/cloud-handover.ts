@@ -11,8 +11,8 @@
 // another shape, does nothing and throws nothing.
 //
 // IT ARRIVES AT LEAST ONCE. The handover's id keys the agent's event, so a replay adds nothing.
-// The words raise no turn: the Dash's opener (apps/dash/public/app.js, `openers`) starts the
-// agent's greeting when the owner first opens its chat, with the handover already in its context.
+// The handover summary items raise no turn: `firstMessage` writes the opening greeting by code
+// (sharing the `opener:/agents/main` idempotency key with `apps/onboarding/launch.ts`).
 //
 // THE FIRST SUBAGENTS START ON EVERY MIND, by code (`startFirstSubagents`): at the handover from
 // iterate Cloud (`cloudHandoverEvent`), or when the onboarding app proves AI working and launches
@@ -126,11 +126,12 @@ export async function cloudHandoverEvent(itx: HandoverItx, event: HandoverEvent)
  *  The greeting is two events: the assistant's item, which the model reads as its own words and
  *  which starts no turn (an assistant's item never does), and the message the chat draws.
  *
- *  ONE FIRST MESSAGE, WHOEVER IS FIRST. The assistant's item has the key of the Dash's opener
- *  (`opener:<path>`, packages/ui dash-agents.tsx), so only one of the two lands. A greeting that
- *  is there keeps the opener out twice: the chat is no longer empty, and the key is taken. An
- *  opener that is there (the owner reached the chat before the handover) keeps the greeting out:
- *  the model greets, and the handover adds only the subagents and their note.
+ *  ONE FIRST MESSAGE, WHOEVER IS FIRST. The assistant's item uses the same idempotency key
+ *  (`opener:<path>`) as `apps/onboarding/launch.ts` (and `packages/ui`'s optional Dash opener), so
+ *  only one of the two lands. A greeting that is there keeps another opener out twice: the chat is
+ *  no longer empty, and the key is taken. If the onboarding app already launched `/agents/main`
+ *  before the handover arrived, the key is taken and the handover adds only the subagents and their
+ *  note.
  *
  *  Each subagent's brief is one item on the subagent's own context, which starts its turn. Every
  *  other event is keyed by the handover: a replay adds nothing. */
@@ -172,8 +173,9 @@ const CONTEXT_ADDED = "events.iterate.com/agent/context-added";
 
 /** THE FIRST SUBAGENTS, started once in the mind's life: each subagent's brief is one item on its own
  *  context, which starts its turn in the background, then one note to the onboarding agent that
- *  they run. Keyed by the mind alone (`onboarding:`), so the handover and the opener, whichever is
- *  first, start them once. The keys say "helper", the word of the minds that hold them already:
+ *  they run. Keyed by the mind alone (`onboarding:`), so the handover and
+ *  `apps/onboarding/launch.ts`, whichever is first, start them once. The keys say "helper", the
+ *  word of the minds that hold them already:
  *  another key would start the subagents of such a mind a second time. `person`: the sign-up record's part about the person, or "".
  *  `greeted`: the code sent the first message, and the note says so. */
 export async function startFirstSubagents(itx: HandoverItx, person: string, greeted: boolean) {

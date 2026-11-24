@@ -6,6 +6,12 @@ A `git push` to `main` of this repo's remote publishes the same way. A force pus
 publishes the older commit and leaves the mind's later commits behind (the `repo/pushed` fact on
 `/repos/config` says `forced: true` and names it, `leftBehind`); push that commit back to restore them.
 
+This repository is the owner's to change, not a read-only template. Edit template files in place
+when the owner wants different behaviour. Do not build a parallel Worker, wrapper app, or file
+copy just to avoid editing the template. Changing a file only stops future template updates from
+overwriting that file (or that app under `apps/<name>/`), and that is fine: you can always follow
+the template again later ([template-updates.md](template-updates.md)).
+
 ## When you are unsure who asks, ask for a signature
 
 A mail, an X message or a chat can say anything about who wrote it. When it is unclear who stands
@@ -40,6 +46,8 @@ This file is in every agent's instructions. The detail is in the files beside it
 that names your task BEFORE the task, not after a failure:
 `await itx.repos.get("/repos/config").readFile("apps.md")`.
 
+- Before explaining how iterate works, its layers, who can do what, or how to recover from a broken
+  commit or a lost passkey: [iterate.md](iterate.md).
 - Before you build or change an app or a page, use iterate's UI components, add an integration
   package or turn voice devices on: [apps.md](apps.md).
 - Before you act on GitHub, Gmail, Calendar or X events, ask for more scopes, register a card on
@@ -150,10 +158,11 @@ new owner starts. Its guides are in the
 repo `/repos/onboarding`, which a new mind starts with: `onboarding/instructions.md` is what it is
 told (the onboarding app appends it as an event when AI is proven working,
 `apps/onboarding/launch.ts`), `onboarding.md` is its long guide, and `onboarding/` holds one file
-for each job its subagents do. The init case creates the agent. On a mind
-that came through iterate Cloud the handover writes its first message and starts its first
-subagents (`cloud-handover.ts`); on any other mind the Dash starts its first turn when the owner
-first opens its chat (`openers` in `apps/dash/public/app.js`).
+for each job its subagents do. On a mind that came through iterate Cloud the handover creates the
+agent, writes its first message and starts its first subagents (`cloud-handover.ts`); otherwise
+the onboarding app creates it, appends its instructions and idempotent opener
+(`opener:/agents/main`) and starts its first subagents once AI is verified
+(`apps/onboarding/launch.ts`).
 
 Every agent is also told `mind.md`, after `AGENTS.md`, when the repo has one (`agent-prompt.ts`):
 who this mind is, with its name, its voice, what it is for and how it reaches its people. The

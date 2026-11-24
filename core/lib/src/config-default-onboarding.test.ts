@@ -271,9 +271,15 @@ test("Connect: one link to sign the rule, and nothing at iterate or in the secre
         label: "Try a voice call",
         href: "https://dash.example.com/agents/agents/main",
       },
+      { label: "Add my OpenAI key", action: "add-openai-key", opens: true },
       OPEN_LINK,
       { label: "Disconnect", action: "disconnect", opens: true },
     ],
+  });
+  // an owner can switch to their own OpenAI key at any time from the connected card
+  expect(await runStep(context, STEP, "add-openai-key")).toMatchObject({
+    status: "connected",
+    link: "https://mind.example.com/secrets/collect/1",
   });
   const [note] = mind.chat();
   expect(note).toMatchObject({
@@ -523,7 +529,7 @@ test("OpenAI set by proxy, then Exa's set throws: the card says what stands, and
   const half = await runStep(context, STEP, "connect");
   expect(half).toMatchObject({ status: "connected" });
   expect(half.words).toMatch(
-    /Buttons: Try again · Try a voice call · Open iterate Cloud · Disconnect/,
+    /Buttons: Try again · Try a voice call · Add my OpenAI key · Open iterate Cloud · Disconnect/,
   );
   expect(half.words).toMatch(
     /The connect stopped before it finished\. iterate's credit already pays for OpenAI\. Try again sets up the rest\./,
@@ -1360,7 +1366,9 @@ test("GET /open-cloud for a member: a 303 to this mind's own /sign-in/open, on t
   const fake = fakeCredit();
   const context = contextOf(mind, fake.credit);
   const connected = await runStep(context, STEP, "connect");
-  expect(connected.words).toMatch(/Buttons: Try a voice call · Open iterate Cloud · Disconnect/);
+  expect(connected.words).toMatch(
+    /Buttons: Try a voice call · Add my OpenAI key · Open iterate Cloud · Disconnect/,
+  );
   const [card] = await onboardingCards(context);
   // a plain link to the app's own route
   expect(card?.buttons).toContainEqual(OPEN_LINK);

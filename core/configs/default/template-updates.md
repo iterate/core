@@ -1,11 +1,14 @@
 # When the template moves on
 
-What a deploy of newer platform code does to this repo, and how to follow the template again
+This repo is yours to change: edit template files in place whenever the mind needs something
+different. What a deploy of newer platform code does to files you kept versus files you changed,
+and how to follow the template again
 (`core/mind-worker/src/mind/template-update.ts` in https://github.com/iterate/core).
 
 A deploy of newer platform code compares this repo with the template it brings, and commits what
 is newer (`template: core/configs/<name>`). It writes a file only when the file is still what the
-platform wrote there; a file you changed or deleted is yours, and stays.
+platform wrote there; a file you changed or deleted is left untouched so a deploy never overwrites
+your work, and that is fine.
 
 - **An app follows whole or not at all.** If one file under `apps/<name>/` is yours, the app
   stays at the version it has. The root's event `mind/template-applied` names it (`appsLeftOld`). A

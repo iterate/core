@@ -11,6 +11,7 @@ import { MindConfig } from "iterate/mind-config";
 import { Log, LogLevel, Miniflare, Response } from "miniflare";
 import { serveRepos } from "./repos/server.ts";
 import { sweepSidecars } from "./sandbox-sidecars.ts";
+import { seedReposEnv } from "./seed-repos.ts";
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -242,7 +243,12 @@ function sandboxEngine(): { socket: string; image: string } | { off: string } {
 }
 
 async function mindBundle() {
-  const built = spawnSync("node", ["scripts/build.ts"], { cwd: mindDir, stdio: "inherit" });
+  const coreDir = path.resolve(import.meta.dirname, "../..");
+  const built = spawnSync("node", ["scripts/build.ts"], {
+    cwd: mindDir,
+    stdio: "inherit",
+    env: { ...process.env, ...seedReposEnv(coreDir) },
+  });
   if (built.status !== 0) throw new Error("core/mind-worker's build failed");
   return bundle(`${mindDir}/src/worker.ts`);
 }

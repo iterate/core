@@ -110,8 +110,9 @@ active last. Its sidebar lists the agents active last above the foot rows (`Appr
 `Settings`, which opens `/settings` listing the mind's pages, access pages and apps); the account
 popover holds `Your sessions` and `Sign out`, and clicking the mind header returns Home.
 `apps/dash/public/app.js` is its contents, and it is yours to change: the list
-of pages (pages with `row: false` stay routable and appear on Settings), the apps and access pages
-it links to, and what the mind says first in an agent's empty chat (`openers`). `Dash` and its
+of pages (pages with `row: false` stay routable and appear on Settings) and the apps and access
+pages it links to (an optional `openers` map on the `agents` row can also seed an empty agent's
+first turn, though the default config does not set one). `Dash` and its
 pages are components of `@iterate-com/ui` (`components/dash`); a row can name a component of your
 own instead, and the file's header says how.
 

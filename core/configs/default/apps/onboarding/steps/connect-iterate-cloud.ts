@@ -330,6 +330,7 @@ function words(state: StepState, context: StepContext): Card {
           href: dashLinks(context.zone).agent("/agents/main"),
           ...(!half && { primary: true }),
         },
+        { label: "Add my OpenAI key", action: "add-openai-key" },
         openCloud(context),
         { label: "Disconnect", action: "disconnect" },
       ],
