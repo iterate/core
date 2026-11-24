@@ -130,7 +130,8 @@ export function agentOnALog(options) {
         api,
         getItx: () => itx,
         fetch,
-        now: () => 0,
+        // a request maker's own clock (`now`): what it keeps for a time, it keeps by this
+        now: options.now ?? (() => 0),
         report,
         readEvents: (after, limit) => log.stream.read(after, limit),
       });

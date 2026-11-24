@@ -174,7 +174,11 @@ export const AgentConfig = z.object({
          *  FIRST entry whose secret is set. With none set, and with no entry, it takes the
          *  provider's own way above: its `baseUrl`, or its AI binding. So a mind whose owner
          *  connected nothing pays with its AI Gateway, and a key that the owner connects later
-         *  pays from the next request on. A request that fails does not try the next entry. */
+         *  pays from the next request on. A request that fails does not try the next entry
+         *  itself. But an entry whose server answers that the credential cannot pay now (HTTP
+         *  401, 402, 403, 429) is passed over for ten minutes when another way can pay: the
+         *  agent's retry of that failed request takes the next entry, or the provider's own way
+         *  (llm-api.ts `passedOver`). */
         keys: z
           .array(
             z.object({
@@ -187,6 +191,10 @@ export const AgentConfig = z.object({
             }),
           )
           .default([]),
+        /** ONLY THE KEYS PAY. With true, a request never takes the provider's own way: a mind
+         *  whose owner pays with a plan or a key, and with nothing else, spends no credit of its AI
+         *  Gateway. When no key is set the request is refused, and its words name the secrets. */
+        onlyKeysPay: z.boolean().default(false),
         /** `openai-responses` only: a WebSocket that stays open between requests. */
         webSocket: z
           .object({ url: z.string().min(1), authorization: z.string().min(1) })

@@ -470,6 +470,7 @@ test("a provider's `cloudflareAiBinding` and `fetcher` are itx expressions: a pa
     fetcher: 'itx.minds.get("llm.example")',
     headers: {},
     keys: [],
+    onlyKeysPay: false,
     webSocket: null,
   });
   // a provider that names neither: the mind's AI Gateway, and the facet's own `fetch`
@@ -1386,6 +1387,194 @@ test("what pays: with no secret set the provider's own way pays, and a read of t
     agent.reports.filter((report) => report.event === "llm-api.secret-read-failed").length,
     2,
   );
+});
+
+test("what pays: a key that cannot pay now is passed over for ten minutes: the failed request stays on the log, the agent's retry takes the next key, and then the key is tried again", async () => {
+  const seen = [];
+  let clock = 0;
+  let firstAnswers = () =>
+    new Response('{"error":{"type":"usage_limit_reached"}}', { status: 429 });
+  const key = (name) => ({
+    secret: `/secrets/${name}`,
+    baseUrl: `https://${name}.example/v1`,
+    headers: { authorization: `Bearer getSecret("/secrets/${name}")` },
+  });
+  const agent = agentOnALog({
+    now: () => clock,
+    config: {
+      llm: { model: "other/llama-5" },
+      llmProviders: {
+        other: { api: "chat-completions", keys: [key("first"), key("second")] },
+      },
+    },
+    model: () => {
+      seen.push("the provider's own way");
+      return xai({ say: "From the gateway." });
+    },
+    fetch: async (request) => {
+      const name = new URL(request.url).hostname.split(".")[0];
+      seen.push(name);
+      return name === "first" ? firstAnswers() : xai({ say: "From the second key." });
+    },
+    roots: { secrets: { describe: async () => ({ set: true }) } },
+  });
+
+  // the first key's request fails. Its answer is on the log, as a failure that is tried again,
+  // and it says which key is passed over
+  await agent.say("hello");
+  assert.deepEqual(seen, ["first"]);
+  const [failed] = agent.durable("events.iterate.com/llm-request/settled");
+  assert.deepEqual(failed.payload?.result, {
+    status: "failed",
+    failureKind: "provider",
+    errorMessage:
+      'HTTP 429: {"error":{"type":"usage_limit_reached"}} [the key /secrets/first cannot pay now: for 10 minutes a request takes the next way]',
+  });
+  assert.equal(agent.durable("events.iterate.com/agent/paused").length, 0);
+
+  // the agent's own retry, after its back-off: the second key pays
+  await agent.fire("agent/timer");
+  assert.deepEqual(seen, ["first", "second"]);
+  assert.deepEqual(agent.said(), ["From the second key."]);
+
+  // within the ten minutes the first key gets no request
+  clock = 9 * 60_000;
+  await agent.say("again");
+  assert.deepEqual(seen, ["first", "second", "second"]);
+
+  // after them it is tried again, and it pays when it can
+  clock = 11 * 60_000;
+  firstAnswers = () => xai({ say: "From the first key." });
+  await agent.say("once more");
+  assert.deepEqual(seen, ["first", "second", "second", "first"]);
+  assert.equal(agent.said().at(-1), "From the first key.");
+  assert.deepEqual(agent.invalidFacts(), []);
+});
+
+test("what pays: each answer that means the credential cannot pay passes the key over, to the provider's own way when no other key is set; a server that is down passes no key over", async () => {
+  const only = {
+    secret: "/secrets/only",
+    baseUrl: "https://only.example/v1",
+    headers: { authorization: 'Bearer getSecret("/secrets/only")' },
+  };
+  const hosted = (seen, answer) =>
+    agentOnALog({
+      config: {
+        llm: { model: "other/llama-5" },
+        llmProviders: { other: { api: "chat-completions", keys: [only] } },
+      },
+      model: () => {
+        seen.push("the provider's own way");
+        return xai({ say: "From the gateway." });
+      },
+      fetch: async () => {
+        seen.push("the key");
+        return answer(seen);
+      },
+      roots: { secrets: { describe: async () => ({ set: true }) } },
+    });
+  for (const status of [401, 402, 403, 429]) {
+    const seen = [];
+    const agent = hosted(seen, () => new Response("no", { status }));
+    await agent.say("hello");
+    await agent.fire("agent/timer");
+    assert.deepEqual(seen, ["the key", "the provider's own way"], `HTTP ${status}`);
+    assert.deepEqual(agent.said(), ["From the gateway."]);
+    assert.equal(agent.durable("events.iterate.com/agent/paused").length, 0);
+  }
+
+  // a server that is down says nothing about the key: the retry takes the same key
+  const seen = [];
+  const agent = hosted(seen, (sent) =>
+    sent.length === 1 ? new Response("down", { status: 500 }) : xai({ say: "From the key." }),
+  );
+  await agent.say("hello");
+  await agent.fire("agent/timer");
+  assert.deepEqual(seen, ["the key", "the key"]);
+  const [failed] = agent.durable("events.iterate.com/llm-request/settled");
+  assert.deepEqual(failed.payload?.result, {
+    status: "failed",
+    failureKind: "provider",
+    errorMessage: "HTTP 500: down",
+  });
+  assert.deepEqual(agent.said(), ["From the key."]);
+});
+
+test("only the keys pay: with no key set the request is refused with the secrets to set, a key with no other way behind it is not passed over, and a key with another key behind it is", async () => {
+  const key = (name) => ({
+    secret: `/secrets/${name}`,
+    baseUrl: `https://${name}.example/v1`,
+    headers: { authorization: `Bearer getSecret("/secrets/${name}")` },
+  });
+  const hosted = ({ keys, set, seen, answer }) =>
+    agentOnALog({
+      config: {
+        llm: { model: "other/llama-5" },
+        llmProviders: { other: { api: "chat-completions", onlyKeysPay: true, keys } },
+      },
+      model: () => {
+        seen.push("the provider's own way");
+        return xai({ say: "From the gateway." });
+      },
+      fetch: async (request) => {
+        const name = new URL(request.url).hostname.split(".")[0];
+        seen.push(name);
+        return answer(name, seen);
+      },
+      roots: { secrets: { describe: async (path) => ({ set: set.includes(path) }) } },
+    });
+  const resultsOf = (agent) =>
+    agent.durable("events.iterate.com/llm-request/settled").map((fact) => fact.payload?.result);
+
+  // no key is set: nothing is sent, and the agent pauses with the words that say what to set
+  const none = [];
+  const unset = hosted({ keys: [key("plan"), key("own")], set: [], seen: none });
+  await unset.say("hello");
+  assert.deepEqual(none, []);
+  assert.deepEqual(resultsOf(unset), [
+    {
+      status: "failed",
+      failureKind: "refused",
+      errorMessage:
+        "no key of the provider other can pay, and only its keys pay (`onlyKeysPay`): set one of its secrets: /secrets/plan, /secrets/own",
+    },
+  ]);
+  assert.equal(unset.durable("events.iterate.com/agent/paused").length, 1);
+
+  // one key, at its limit: no other way can pay, so it is not passed over. The failure is the
+  // server's own, and the retry takes the same key
+  const one = [];
+  const alone = hosted({
+    keys: [key("plan"), key("own")],
+    set: ["/secrets/plan"],
+    seen: one,
+    answer: (_name, sent) =>
+      sent.length === 1 ? new Response("slow down", { status: 429 }) : xai({ say: "Here." }),
+  });
+  await alone.say("hello");
+  assert.deepEqual(resultsOf(alone)[0], {
+    status: "failed",
+    failureKind: "provider",
+    errorMessage: "HTTP 429: slow down",
+  });
+  await alone.fire("agent/timer");
+  assert.deepEqual(one, ["plan", "plan"]);
+  assert.deepEqual(alone.said(), ["Here."]);
+
+  // two keys set, and the first is refused: the second pays, and never the provider's own way
+  const two = [];
+  const both = hosted({
+    keys: [key("plan"), key("own")],
+    set: ["/secrets/plan", "/secrets/own"],
+    seen: two,
+    answer: (name) =>
+      name === "plan" ? new Response("no", { status: 401 }) : xai({ say: "From my own key." }),
+  });
+  await both.say("hello");
+  await both.fire("agent/timer");
+  assert.deepEqual(two, ["plan", "own"]);
+  assert.deepEqual(both.said(), ["From my own key."]);
+  assert.match(resultsOf(both)[0].errorMessage, /\[the key \/secrets\/plan cannot pay now/);
 });
 
 test("a fetcher by expression: the requests to a `baseUrl` go through its `fetch`, not the facet's own", async () => {
