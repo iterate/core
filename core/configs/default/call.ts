@@ -43,25 +43,54 @@ import {
 const ROW_SET = "events.iterate.com/itx/subscription-configured";
 /** A row un-set: its name, and no target. */
 const RowUnset = z.object({ name: z.string(), target: z.null() });
-/** The agent's message: the answer to the voice agent's request, when it is one. */
+/** The agent's message: the answer to the voice agent's request, when it is one. ANY AGENT'S
+ *  CONTEXT CAN BE A CALL, so the call reads the words of both agents a context can run. The
+ *  platform's agent (iterate/agents) writes `agent/web-message-sent`, which may name its request.
+ *  The mind's own agent (agent/) has a script append `agent-ui/message-sent`, which names none:
+ *  the script that began last says whose turn the words are (call/rules.ts `agentSaid`). */
 const AGENT_SAID = "events.iterate.com/agent/web-message-sent";
 const AgentSaid = z.object({
   message: z.string(),
   llmRequestOffset: z.number().optional(),
   besideScript: z.boolean().optional(),
 });
+const OWN_AGENT_SAID = "events.iterate.com/agent-ui/message-sent";
+const OwnAgentSaid = z.object({ message: z.string() });
 /** An LLM request settled: fail a waiting delegation immediately on terminal failure. */
 const LLM_SETTLED = "events.iterate.com/agent/llm-request-settled";
 const LlmSettled = z.object({
   requestOffset: z.number(),
   result: z.object({ status: z.string() }),
 });
+/** The same fact of the mind's own agent (agent/llm-request.ts). */
+const OWN_LLM_SETTLED = "events.iterate.com/llm-request/settled";
+const OwnLlmSettled = z.object({
+  llmRequestOffset: z.number(),
+  result: z.object({ status: z.string(), reason: z.string().optional() }),
+});
+
+/** How a request of the mind's own agent ended, in the words the call's rules know (call/rules.ts
+ *  `llmSettled`), or null when the end is no end of the turn: a request that an input interrupted,
+ *  or that another response answered first, is followed by one that reads the same inputs. */
+function ownAgentRequestEnd(result: { status: string; reason?: string }): string | null {
+  if (result.status !== "cancelled") return result.status;
+  return result.reason === "expired" ? "expired" : null;
+}
 /** A script run started: used to correlate script `sendMessage()` with an open delegation. */
 const RUN_REQUESTED = "events.iterate.com/itx/run-requested";
 
 /** How a page turns the call on for an agent: `itx.cd(agent).processors.enable("call", CALL_FACET)`.
  *  The class is this file, in the mind's published config. */
-const CONSUMES = [...SHARE_EVENTS, ROW_SET, CALL_DUE, AGENT_SAID, LLM_SETTLED, RUN_REQUESTED];
+const CONSUMES = [
+  ...SHARE_EVENTS,
+  ROW_SET,
+  CALL_DUE,
+  AGENT_SAID,
+  LLM_SETTLED,
+  RUN_REQUESTED,
+  OWN_AGENT_SAID,
+  OWN_LLM_SETTLED,
+];
 export const CALL_FACET = {
   className: "CallDurableObject",
   mainModule: "call.ts",
@@ -133,6 +162,17 @@ export class CallProcessor extends StreamProcessor<State> {
             besideScript: said.data.besideScript,
           }),
         );
+    }
+    if (event?.type === OWN_LLM_SETTLED) {
+      const settled = OwnLlmSettled.safeParse(event.payload);
+      const end = settled.success ? ownAgentRequestEnd(settled.data.result) : null;
+      if (settled.success && end)
+        runInBackground(() => this.#call.llmSettled(settled.data.llmRequestOffset, end));
+    }
+    if (event?.type === OWN_AGENT_SAID) {
+      const said = OwnAgentSaid.safeParse(event.payload);
+      const offset = event.offset;
+      if (said.success) runInBackground(() => this.#call.agentSaid(said.data.message, offset));
     }
     const unset = event?.type === ROW_SET ? RowUnset.safeParse(event.payload) : null;
     if (unset?.success) {

@@ -1277,6 +1277,64 @@ test("a delegation's answer is the first message of a script that began after it
   });
 });
 
+test("the mind's own agent answers a delegation: the words its script appends are the answer, a request that failed or expired ends it at once, and one that was interrupted does not", async () => {
+  const room = fakeCall();
+  room.held.set("page-owner", "user_owner");
+  await room.call.join(owner, "page-owner");
+  room.openai = { status: 201, body: { transport: { sdp: "answer" }, session: { id: "sess_a" } } };
+  await room.call.voiceAgent(owner, "page-owner", { start: "offer" });
+  const processor = new CallProcessor(room.call);
+  // one fact of the agent's log, as the call's row is pushed it, and all that follows from it
+  const pushed = async (kind: string, offset: number, payload: Record<string, unknown>) => {
+    const background: (() => Promise<unknown>)[] = [];
+    processor.processEvent({
+      event: { type: `events.iterate.com/${kind}`, offset, payload },
+      state: room.share,
+      delivery: { caughtUp: false },
+      runInBackground: (work: () => Promise<unknown>) => void background.push(work),
+    } as never);
+    for (const work of background) await work();
+  };
+  const settled = (offset: number, llmRequestOffset: number, result: Record<string, unknown>) =>
+    pushed("llm-request/settled", offset, { llmRequestOffset, result });
+  const request = { delegation: "del_1", transcript: "room: what time is it?" };
+
+  // the delegation is the fact at offset 101. Words of a script that began before it are not its
+  // answer; the words of the script that began after it are
+  await room.call.delegate(owner, "page-owner", request);
+  await pushed("itx/run-requested", 100, { code: "…" });
+  await pushed("agent-ui/message-sent", 102, { message: "From an earlier script." });
+  expect(room.call.live().delegation).toMatchObject({ status: "waiting" });
+  await settled(104, 103, { status: "succeeded", text: "<codemode>…</codemode>" });
+  await pushed("itx/run-requested", 105, { code: "…" });
+  await pushed("agent-ui/message-sent", 106, { message: "It is three." });
+  expect(room.call.live().delegation).toMatchObject({ status: "answered", answer: "It is three." });
+
+  // the next delegation is at 102. A request that an input interrupted, or that another response
+  // answered first, has a successor: the delegation waits on
+  await room.call.delegate(owner, "page-owner", { ...request, delegation: "del_2" });
+  await settled(111, 110, { status: "cancelled", reason: "interrupted-by-user-input" });
+  await settled(113, 112, { status: "cancelled", reason: "superseded" });
+  expect(room.call.live().delegation).toMatchObject({ id: "del_2", status: "waiting" });
+  // a request from before the delegation that failed is not its turn
+  await settled(114, 101, { status: "failed", failureKind: "provider", error: "x" });
+  expect(room.call.live().delegation).toMatchObject({ id: "del_2", status: "waiting" });
+  await settled(116, 115, { status: "cancelled", reason: "expired" });
+  expect(room.call.live().delegation).toMatchObject({
+    id: "del_2",
+    status: "failed",
+    reason: "the agent request expired",
+  });
+
+  await room.call.delegate(owner, "page-owner", { ...request, delegation: "del_3" });
+  await settled(121, 120, { status: "failed", failureKind: "provider", error: "x" });
+  expect(room.call.live().delegation).toMatchObject({
+    id: "del_3",
+    status: "failed",
+    reason: "the agent request failed",
+  });
+});
+
 test("live captions: an ephemeral frame for each speaker, the voice agent's from its host alone, within bounds", async () => {
   const room = fakeCall();
   room.held.set("page-owner", "user_owner");
@@ -1635,7 +1693,8 @@ test("the call's class is in a module that a publication offers a facet's class 
     expect(CallDurableObject.personMethods).not.toContain(method);
   }
   // the row is pushed the share events, a page's row un-set, its own look, the agent's messages,
-  // its settled requests and its scripts' starts, alone
+  // its settled requests and its scripts' starts, alone: the last two are those of the mind's own
+  // agent, which a context can run in place of the platform's
   expect(CALL_FACET).toMatchObject({
     consumes: [
       "share/link-made",
@@ -1646,6 +1705,8 @@ test("the call's class is in a module that a publication offers a facet's class 
       "events.iterate.com/agent/web-message-sent",
       "events.iterate.com/agent/llm-request-settled",
       "events.iterate.com/itx/run-requested",
+      "events.iterate.com/agent-ui/message-sent",
+      "events.iterate.com/llm-request/settled",
     ],
   });
 });
