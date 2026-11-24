@@ -23,6 +23,7 @@ test("the agent's and the kind agent's node tests pass", () => {
     "agent-tests/files.test.mjs",
     "agent-tests/processor.test.mjs",
     "agent-tests/script-envelope.test.mjs",
+    "agent-tests/start-boundary.test.mjs",
     "agent-tests/start.test.mjs",
     "agent-tests/subagent.test.mjs",
   ]);

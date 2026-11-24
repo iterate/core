@@ -138,8 +138,12 @@ test("words to another agent are ONE append of its input on its path, not awaite
   assert.equal(agent.durable("events.iterate.com/agent/context-added").length, 1);
   assert.equal(agent.calls.length, 1, "the script returned nothing: no further request");
 
-  // the agent at `/agents/planner` reads the words after the sender's path
-  const planner = reduceProcessor(new Agent(), [{ ...landed[0].event, path: "/agents/planner" }]);
+  // the agent at `/agents/planner`, once it has started, reads the words after the sender's path
+  const start = { kind: "agent", config: {} };
+  const planner = reduceProcessor(new Agent(), [
+    { type: "events.iterate.com/agent/configured", payload: start, path: "/agents/planner" },
+    { ...landed[0].event, path: "/agents/planner" },
+  ]);
   assert.deepEqual(
     planner.items.map((item) => item.text),
     ["[from /agents/test]\nPlan it."],

@@ -140,6 +140,7 @@ async function startEvents(path: string, config: Record<string, unknown> = {}) {
   const facetsJson = Object.entries(agentFiles).find(([file]) => file.endsWith("facets.json"))?.[1];
   if (!facetsJson) throw new Error("agent/facets.json is missing from this commit");
   return await agentStartEvents(path, {
+    parent: "/",
     config: { ...DEBOUNCE, ...config },
     facets: Facets.parse(JSON.parse(text(facetsJson))),
     code: {

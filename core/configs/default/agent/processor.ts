@@ -49,6 +49,7 @@ import {
 import {
   AgentContract,
   mergedConfig,
+  startsTheAgent,
   type AgentEventInput,
   type AgentState,
   type LlmRequestBehaviour,
@@ -78,15 +79,23 @@ export class Agent extends StreamProcessor<AgentState, AgentEvent> {
 
   /** THE FOLD. Each case is one fact; the last line is the convention: the state says what is owed. */
   override reduce({ event, state: previous }: ReduceArgs<AgentState, AgentEvent>): AgentState {
+    // NOTHING BEFORE THE START FACT IS THE AGENT'S (contract.ts): another agent's log can stand there
+    if (previous.startedAtOffset === null && !startsTheAgent(event)) return previous;
     const nowMs = Math.max(previous.nowMs, Date.parse(event.createdAt));
-    let state: AgentState = { ...previous, path: event.path, nowMs };
+    const startedAtOffset = previous.startedAtOffset || event.offset;
+    let state: AgentState = { ...previous, startedAtOffset, path: event.path, nowMs };
     switch (event.type) {
       case "events.iterate.com/agent/configured":
         state = { ...state, config: mergedConfig(state.config, event.payload.config) };
         break;
       case "events.iterate.com/agent/context-added": {
-        const { llmRequestPolicy } = event.payload;
-        const behaviour = llmRequestPolicy?.behaviour || state.config.llmRequestPolicy.behaviour;
+        const { role, llmRequestPolicy } = event.payload;
+        // what was said in the agent's name, and the system's words, start nothing by themselves
+        const ofRole =
+          role === "user" || role === "developer"
+            ? state.config.llmRequestPolicy.behaviour
+            : "dont-trigger-request";
+        const behaviour = llmRequestPolicy?.behaviour || ofRole;
         state = contextAdded(state, event);
         if (behaviour !== "dont-trigger-request")
           state = this.inputStarts(state, event.offset, behaviour);
@@ -262,22 +271,24 @@ export class Agent extends StreamProcessor<AgentState, AgentEvent> {
 
 type ContextAdded = Extract<AgentEvent, { type: "events.iterate.com/agent/context-added" }>;
 
+/** HOW AN INPUT OF EACH ROLE STANDS IN THE CONVERSATION. `tag` is the bucket its size is counted
+ *  in: a person's words and other context are counted apart in every request's `inputChars`. What
+ *  was said in the agent's name stands as a response, so every API shape writes it as the
+ *  assistant's (an API shape sends no file of a response). The system's words are developer context. */
+const ITEM_OF_ROLE = {
+  user: { role: "user", tag: "words" },
+  developer: { role: "developer", tag: "context" },
+  system: { role: "developer", tag: "context" },
+  assistant: { role: "assistant", tag: "llm-response" },
+} as const;
+
 /** THE INPUT enters the conversation at its own offset, with the files it names. What it starts is
  *  decided apart from this (`Agent.inputStarts`). */
 function contextAdded(state: AgentState, event: ContextAdded): AgentState {
   const { role, content, files } = event.payload;
-  // a person's words and other context are counted apart in every request's `inputChars`
-  const tag = role === "user" ? "words" : "context";
   const from = role === "user" ? senderOf(event) : null;
   const text = from ? `[from ${from}]\n${content}` : content;
-  const item = {
-    atOffset: event.offset,
-    rank: 0,
-    tag,
-    role,
-    text,
-    files,
-  } as const;
+  const item = { atOffset: event.offset, rank: 0, ...ITEM_OF_ROLE[role], text, files };
   return fromOutside(withItem(state, item), event);
 }
 

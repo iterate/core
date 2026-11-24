@@ -58,6 +58,14 @@ export function agentOnALog(options) {
   let incarnation = 0;
   let commits = 0;
   let engine;
+  // WHAT STOOD ON THE CONTEXT BEFORE THIS AGENT (`before`): the facts of another agent that ran
+  // there, heard by no host, and that agent's checkpoint in the storage of the facet `agent`.
+  if (options.before) {
+    log.stream.append(...options.before.events);
+    const { version, state } = options.before.checkpoint;
+    const cursor = { reducerVersion: version, reducedThroughOffset: log.events.length };
+    storage.write(AgentContract.slug, cursor, state, true);
+  }
 
   /** One commit to the log, by the test or by a host. The commit after which the host is to die is
    *  heard by no engine: a new host reads it from the log. */
@@ -138,8 +146,15 @@ export function agentOnALog(options) {
     return engine;
   }
   wake();
-  if (options.config)
-    commit([{ type: "events.iterate.com/agent/configured", payload: { config: options.config } }]);
+  // THE START FACT: the agent folds nothing before it (agent/contract.ts). A test of a log that has
+  // none, or that holds another agent's facts first, says `start: false` and writes its own.
+  if (options.start !== false)
+    commit([
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { kind: "agent", config: options.config ?? {} },
+      },
+    ]);
 
   const durable = (type) => log.events.filter((event) => event.type === type);
 
@@ -187,6 +202,9 @@ export function agentOnALog(options) {
    *  module's strict code, and a result that is JSON. A script that does not load, or throws, has
    *  failed. Its settlement is written when it ends, however long that takes. */
   const started = new Set();
+  // a script that the agent before this one asked for ran in its time
+  if (options.before)
+    for (const run of durable("events.iterate.com/itx/run-requested")) started.add(run.offset);
   const startRuns = () => {
     const open = durable("events.iterate.com/itx/run-requested").filter(
       (run) => !started.has(run.offset),

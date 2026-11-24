@@ -39,7 +39,8 @@ import {
   xai,
 } from "./test-support.mjs";
 
-// ── the rules, by the pure fold: fact n is at offset n, n seconds after the epoch ──
+// ── the rules, by the pure fold: the agent's start fact is at offset 1, and a test's fact n is at
+// offset n + 1, n + 1 seconds after the epoch ──
 
 test("an input owes one append: the request, its deadline, and its wait for a request maker", () => {
   const state = fold({
@@ -55,19 +56,19 @@ test("an input owes one append: the request, its deadline, and its wait for a re
   assert.match(String(instructions), /^You are an agent on the iterate platform/);
   assert.deepEqual(asked, {
     extends: null,
-    itemsAdded: [{ atOffset: 1, rank: 0, tag: "words", role: "user", text: "hello" }],
+    itemsAdded: [{ atOffset: 2, rank: 0, tag: "words", role: "user", text: "hello" }],
     // the agent's path (the fold's facts are on `/`)
     promptCacheKey: "/",
     reasoningEffort: null,
     maxOutputTokens: null,
     model: "openai/gpt-6.2-sol",
-    expiresAtMs: 601_000,
+    expiresAtMs: 602_000,
     purpose: "answer",
-    triggerOffset: 1,
+    triggerOffset: 2,
   });
   assert.deepEqual(deadline.payload, {
     key: "llm-request/requested:answer/1/deadline",
-    when: { at: "1970-01-01T00:10:01.000Z" },
+    when: { at: "1970-01-01T00:10:02.000Z" },
     events: [
       {
         type: "events.iterate.com/llm-request/deadline-passed",
@@ -100,8 +101,8 @@ test("context that does not trigger is read by the next request and owes nothing
   assert.deepEqual(
     state.items.map((item) => [item.atOffset, item.tag, item.role, item.text]),
     [
-      [1, "words", "user", "fyi"],
-      [2, "context", "developer", "a relay's line"],
+      [2, "words", "user", "fyi"],
+      [3, "context", "developer", "a relay's line"],
     ],
   );
 });
@@ -141,7 +142,7 @@ test("an input names files: the request's item names both, and its text holds th
   const [request] = state.obligations[0].events;
   const [item] = request.payload.itemsAdded;
   assert.deepEqual(item, {
-    atOffset: 1,
+    atOffset: 2,
     rank: 0,
     tag: "words",
     role: "user",
@@ -163,24 +164,24 @@ test("the debounce: the request waits for a timer, counted from the first input,
   const waiting = fold(configured, first);
   assert.deepEqual(owes(waiting), ["agent/timer-set + itx/schedule-set"]);
   const [timer] = waiting.obligations;
-  // the first input came at 2 s: the request is due at 5 s
-  assert.deepEqual(timer.events[0].payload, { atMs: 5_000 });
+  // the first input came at 3 s: the request is due at 6 s
+  assert.deepEqual(timer.events[0].payload, { atMs: 6_000 });
   assert.deepEqual(timer.events[1].payload, {
     key: "agent/timer",
-    when: { at: "1970-01-01T00:00:05.000Z" },
-    events: [{ type: "events.iterate.com/agent/timer-fired", payload: { atMs: 5_000 } }],
+    when: { at: "1970-01-01T00:00:06.000Z" },
+    events: [{ type: "events.iterate.com/agent/timer-fired", payload: { atMs: 6_000 } }],
   });
-  const set = { type: "events.iterate.com/agent/timer-set", payload: { atMs: 5_000 } };
+  const set = { type: "events.iterate.com/agent/timer-set", payload: { atMs: 6_000 } };
   const second = input("two");
   assert.deepEqual(
     owes(fold(configured, first, set, second)),
     [],
     "the timer is set: nothing more is owed",
   );
-  const fired = { type: "events.iterate.com/agent/timer-fired", payload: { atMs: 5_000 } };
+  const fired = { type: "events.iterate.com/agent/timer-fired", payload: { atMs: 6_000 } };
   const due = fold(configured, first, set, second, fired);
   assert.deepEqual(owes(due), ["llm-request/requested + itx/schedule-set + itx/schedule-set"]);
-  assert.deepEqual(due.pendingTriggerOffsets, [2, 4]);
+  assert.deepEqual(due.pendingTriggerOffsets, [3, 5]);
 });
 
 // ── the trigger fact: "make a request NOW", and why ──
@@ -191,7 +192,7 @@ const contextOnly = (content) => ({
 });
 const triggerNow = {
   type: "events.iterate.com/agent/llm-request-triggered",
-  payload: { reason: "the person asked a direct question", inputOffset: 2 },
+  payload: { reason: "the person asked a direct question", inputOffset: 3 },
 };
 
 test("the trigger after context only: a request at once, through a debounce, and it names the trigger", () => {
@@ -205,7 +206,7 @@ test("the trigger after context only: a request at once, through a debounce, and
   assert.deepEqual(owes(state), ["llm-request/requested + itx/schedule-set + itx/schedule-set"]);
   const payload = state.obligations[0].events[0].payload;
   // the request names the trigger: from it, a reader finds the reason in one step
-  assert.equal(payload.triggerOffset, 3);
+  assert.equal(payload.triggerOffset, 4);
   assert.deepEqual(
     payload.itemsAdded.map((item) => item.text),
     ["is the build green?"],
@@ -223,11 +224,11 @@ test("the trigger while an answer request is open: its cancellation is owed, and
   const [request] = first.obligations[0].events;
   const facts = [
     { type: "events.iterate.com/agent/context-added", payload: { role: "user", content: "one" } },
-    request, // offset 2
+    request, // offset 3
     {
       type: "events.iterate.com/llm-request/attempt-started",
       payload: {
-        llmRequestOffset: 2,
+        llmRequestOffset: 3,
         attempt: 0,
         api: "openai-responses",
         transport: "gateway",
@@ -236,23 +237,23 @@ test("the trigger while an answer request is open: its cancellation is owed, and
         inputFileBytes: 0,
       },
     },
-    contextOnly("two"), // offset 4
-    { ...triggerNow, payload: { reason: "two changes the question", inputOffset: 4 } }, // 5
+    contextOnly("two"), // offset 5
+    { ...triggerNow, payload: { reason: "two changes the question", inputOffset: 5 } }, // 6
   ];
   const interrupted = fold(...facts);
   assert.deepEqual(owes(interrupted), ["llm-request/cancelled + itx/schedule-set"]);
   assert.deepEqual(interrupted.obligations[0].events[0].payload, {
-    llmRequestOffset: 2,
+    llmRequestOffset: 3,
     reason: "interrupted-by-user-input",
   });
   const cancelled = {
     type: "events.iterate.com/llm-request/cancelled",
-    payload: { llmRequestOffset: 2, reason: "interrupted-by-user-input" },
+    payload: { llmRequestOffset: 3, reason: "interrupted-by-user-input" },
   };
   const settled = {
     type: "events.iterate.com/llm-request/settled",
     payload: {
-      llmRequestOffset: 2,
+      llmRequestOffset: 3,
       attempt: 0,
       result: { status: "cancelled", reason: "interrupted-by-user-input" },
     },
@@ -260,9 +261,9 @@ test("the trigger while an answer request is open: its cancellation is owed, and
   const next = fold(...facts, cancelled, settled);
   assert.deepEqual(owes(next), ["llm-request/requested + itx/schedule-set + itx/schedule-set"]);
   const payload = next.obligations[0].events[0].payload;
-  assert.equal(payload.triggerOffset, 5);
+  assert.equal(payload.triggerOffset, 6);
   // it extends the request before it, and adds the note on that one and the context after it
-  assert.deepEqual(payload.extends, { llmRequestOffset: 2, itemCount: 1, response: false });
+  assert.deepEqual(payload.extends, { llmRequestOffset: 3, itemCount: 1, response: false });
   assert.deepEqual(
     payload.itemsAdded.map((item) => item.tag),
     ["interrupted-llm-response", "words"],
@@ -294,7 +295,7 @@ test("a pause of the agent's own that arrives with nothing left to pause for is 
   });
   assert.deepEqual(owes(state), ["agent/resumed"]);
   const [owed] = state.obligations;
-  assert.equal(owed.idempotencyKey, "agent/resumed:1");
+  assert.equal(owed.idempotencyKey, "agent/resumed:2");
 });
 
 test("one input: no source of the agent names the old message fact", () => {
@@ -486,6 +487,8 @@ test("one exchange: the request, its exact bytes, the frames, the settlement, th
   const agent = agentOnALog({ model: () => openai({ say: "Hello there.", usage }) });
   const [input] = await agent.say("hello");
   assert.deepEqual(agent.kinds(), [
+    // THE START FACT: the agent folds nothing before it
+    "agent/configured",
     // THE INPUT: a person's words, the agent's one input
     "agent/context-added",
     // THE AGENT: what it asks, the request's deadline, and its wait for a request maker
@@ -2171,7 +2174,7 @@ test("a base that is no request, and a base with no response when one is asked f
       ["failed", "refused"],
     ],
   );
-  assert.match(String(refusals[0].errorMessage), /at offset 1, is not an LLM request/);
+  assert.match(String(refusals[0].errorMessage), /at offset 2, is not an LLM request/);
   assert.match(String(refusals[1].errorMessage), /has no response: it did not succeed/);
   // neither reached the model: only the first request did
   assert.equal(agent.calls.length, 1);
@@ -2215,6 +2218,11 @@ test("two request makers of one API shape on one log: the second one's attempt i
       ),
   );
   log.engines.push(...makers);
+  // the agent's start fact: a request maker folds nothing before it
+  await log.stream.append({
+    type: "events.iterate.com/agent/configured",
+    payload: { kind: "agent", config: {} },
+  });
   await log.stream.append({
     type: "events.iterate.com/llm-request/requested",
     idempotencyKey: "llm-request/requested:answer/1",
@@ -2243,8 +2251,14 @@ test("two request makers of one API shape on one log: the second one's attempt i
 /** Fold facts through the pure reduce, exactly as the engine does. */
 function fold(...facts) {
   // the agent needs nothing of a host: what is owed follows from the facts alone
-  return reduceProcessor(new Agent(), facts);
+  return reduceProcessor(new Agent(), [START, ...facts]);
 }
+
+/** The agent's start fact: the agent folds nothing before it. */
+const START = {
+  type: "events.iterate.com/agent/configured",
+  payload: { kind: "agent", config: {} },
+};
 
 /** A `side` request off `base`, with its response, then `text`: the small fact a script appends.
  *  What it leaves out is the base's. */

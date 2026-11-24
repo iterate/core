@@ -1,5 +1,6 @@
-// start.test.mjs: the start facts of an agent. Their order and keys, and on the platform's in-memory
-// log, that two starts write each fact once. The copy facts of a forked subagent: parts and lineage.
+// start.test.mjs: the start facts of an agent. Their order and keys, the parent link that is written
+// at the agent's birth alone, and on the platform's in-memory log, that two starts write each fact
+// once. The copy facts of a forked subagent: parts and lineage.
 //
 // Run from the config's root: node --test "agent-tests/*.test.mjs"
 
@@ -14,6 +15,7 @@ const SOURCE = ["itx", ["cd", "/"], "repos", ["get", "/repos/config"], ["modules
 
 function options(change = {}) {
   return {
+    parent: "/",
     config: { llm: { model: "openai/gpt-6.2-sol" } },
     facets: [
       { name: "slack", className: "SlackFacet", consumes: [] },
@@ -40,7 +42,7 @@ test("the events and their order: parent link, rows, config, facets as the calle
     ],
   );
   const [parent, row, configured, first, second] = events;
-  assert.deepEqual(parent.payload, { match: "itx", target: "itx.cd('/')" });
+  assert.deepEqual(parent.payload, { match: "itx", target: 'itx.cd("/")' });
   assert.equal(parent.idempotencyKey, `agent-parent:${PATH}`);
   assert.match(row.idempotencyKey, /^agent-row:catalog-kind:\/agents\/ada:[0-9a-f]{12}$/);
   assert.deepEqual(row.payload, options().rows[0]);
@@ -78,12 +80,31 @@ test("the config is written as given, with the kind that marks the start; with n
   const bare = await agentStartEvents(PATH, { facets: [], code: options().code });
   assert.deepEqual(
     bare.map((event) => event.payload),
-    [
-      { match: "itx", target: "itx.cd('/')" },
-      { kind: "agent", config: {} },
-    ],
+    [{ kind: "agent", config: {} }],
   );
-  assert.match(bare[1].idempotencyKey, /^agent-configured:\/agents\/ada:[0-9a-f]{16}$/);
+  assert.match(bare[0].idempotencyKey, /^agent-configured:\/agents\/ada:[0-9a-f]{16}$/);
+});
+
+test("the parent link: none with no parent, and one fact under the path's key for the root or for another agent", async () => {
+  const linkOf = async (parent) =>
+    (await agentStartEvents(PATH, options({ parent }))).filter(
+      (event) => event.type === `${T}itx/rewrite-rule-configured`,
+    );
+  assert.deepEqual(await linkOf(undefined), [], "a later start names no parent");
+  const [toCreator, ...more] = await linkOf("/agents/people/grace/agent/one");
+  assert.deepEqual(more, []);
+  assert.deepEqual(toCreator.payload, {
+    match: "itx",
+    target: 'itx.cd("/agents/people/grace/agent/one")',
+  });
+  // the key holds the path alone: the first link stands, whatever a later start names
+  assert.equal(toCreator.idempotencyKey, `agent-parent:${PATH}`);
+  assert.equal((await linkOf("/"))[0].idempotencyKey, `agent-parent:${PATH}`);
+  for (const parent of ["agents/ada", "/agents/", "/a b", "itx.cd('/')"])
+    await assert.rejects(
+      agentStartEvents(PATH, options({ parent })),
+      /an agent's parent is a context/,
+    );
 });
 
 test("the same input gives the same keys; a change gives a new key for its event only", async () => {
@@ -119,6 +140,32 @@ test("on the in-memory log, two starts write each fact once", async () => {
   await log.stream.append(...(await agentStartEvents(PATH, options({ config: {} }))));
   assert.equal(log.events.length, events.length + 1);
   assert.equal(log.events.at(-1).type, `${T}agent/configured`);
+});
+
+test("on the in-memory log, a later start with no parent writes no link, and one that names another parent is refused whole", async () => {
+  const log = memoryStream(PATH);
+  const birth = await agentStartEvents(PATH, options({ parent: "/agents/creator" }));
+  await log.stream.append(...birth);
+  const links = () =>
+    log.events.filter((event) => event.type === `${T}itx/rewrite-rule-configured`);
+  assert.equal(links().length, 1);
+
+  // a new version of the code, sent with no parent: its rows are written, and the link stands
+  const later = options({ parent: undefined, code: { ...options().code, cacheKey: "agent:def" } });
+  await log.stream.append(...(await agentStartEvents(PATH, later)));
+  assert.equal(log.events.length, birth.length + 2);
+  assert.equal(links().length, 1);
+
+  // a start that names the root for an agent whose parent is another agent: nothing of it is written
+  const before = log.events.length;
+  const input = { type: `${T}agent/context-added`, payload: { role: "user", content: "hello" } };
+  const relinked = await agentStartEvents(PATH, options({ parent: "/", config: { other: 1 } }));
+  await assert.rejects(
+    async () => await log.stream.append(...relinked, input),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT",
+  );
+  assert.equal(log.events.length, before);
+  assert.deepEqual(links()[0].payload, { match: "itx", target: 'itx.cd("/agents/creator")' });
 });
 
 test("the copy of a conversation: its parts in order, each under the limit, the lineage after the parent's, and keys that name the request", () => {

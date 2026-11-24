@@ -23,6 +23,14 @@
 // ANY CONTEXT CAN RUN AN AGENT: enable the processor `agent` (facet.ts) on it. `/agents/<name>` is
 // where `itx.agents.create` puts one, not the only place.
 //
+// THE AGENT BEGINS AT ITS START FACT: the first `agent/configured` that says `kind: "agent"`
+// (start.ts writes it; `startsTheAgent` below reads it). The agent and every request maker fold
+// NOTHING that stands before it. A context can hold the log of another agent that ran there first:
+// the platform's own agent wrote `agent/configured` and `agent/context-added` too, with another
+// meaning. Without this rule this agent would read that agent's conversation as its own inputs
+// and answer them a second time. So an input that lands before the start fact is not read: send
+// the start facts in the same append as the first input, before it (agent-start.ts does).
+//
 // THE FACTS OF ONE EXCHANGE, IN THE ORDER THEY HAPPEN (and who writes each)
 //
 //   agent/context-added                THE INPUT. Anyone writes it: a person, a script, a processor
@@ -71,8 +79,13 @@ import {
 
 /** The reducer's version. A bump re-reduces every agent's log from offset 0. That starts nothing a
  *  second time: everything the agent writes has an idempotency key that names its decision point
- *  (request n, the script of request r), and those follow from the log. */
-const AGENT_VERSION = "3";
+ *  (request n, the script of request r), and those follow from the log.
+ *
+ *  THE PREFIX IS NEEDED. The platform's own agent (core/lib/src/agents/contract.ts) has the same
+ *  slug, `agent`, and counts its versions "1", "2", …. A facet keeps its checkpoint under the slug,
+ *  and the engine takes a checkpoint of its own version as its own state. On a context that ran the
+ *  platform's agent first, an equal number here would make that agent's state this one's. */
+const AGENT_VERSION = "config-4";
 
 /** What an input does to the agent's requests. Production's three behaviours. */
 export const LlmRequestPolicy = z.object({
@@ -262,9 +275,15 @@ export const AgentConfig = z.object({
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 
-/** THE AGENT'S ONE INPUT, as a payload: words, a role, the files it names, and what they start. */
+/** THE AGENT'S ONE INPUT, as a payload: words, a role, the files it names, and what they start.
+ *
+ *  THE ROLE says whose words they are. `user` and `developer` start a request unless the policy
+ *  says not to. `assistant` is something that was said in the agent's name (a greeting that the
+ *  mind's code showed a person): the model reads it as its own earlier words. `system` is read as
+ *  `developer` context: the agent's instructions are its config, not an input. Those two start a
+ *  request only when their own `llmRequestPolicy` says so. */
 const ContextAdded = z.object({
-  role: z.enum(["user", "developer"]),
+  role: z.enum(["user", "developer", "assistant", "system"]),
   content: z.string(),
   llmRequestPolicy: LlmRequestPolicy.optional(),
   /** Files in the mind's file store, by reference. The request maker inlines the bytes of the
@@ -285,7 +304,7 @@ const Ancestor = z.object({
 const events = {
   "events.iterate.com/agent/configured": {
     description:
-      "Merges a partial configuration into the agent's config: omitted keys keep their values, and a patch the schema refuses changes nothing. `kind: \"agent\"` marks the fact that the agent's start writes (start.ts): by it the mind's code knows that the context runs this agent.",
+      "Merges a partial configuration into the agent's config: omitted keys keep their values, and a patch the schema refuses changes nothing. `kind: \"agent\"` marks the fact that the agent's start writes (start.ts): the first one is where the agent begins (`startsTheAgent`), and by it the mind's code knows that the context runs this agent.",
     payloadSchema: z.object({
       config: z.record(z.string(), z.unknown()),
       kind: z.literal("agent").optional(),
@@ -293,7 +312,7 @@ const events = {
   },
   "events.iterate.com/agent/context-added": {
     description:
-      "THE AGENT'S ONE INPUT: something the model should know, from anyone, in words. `llmRequestPolicy` says whether it starts a request, interrupts the open one, or is only read by the next; with none, the agent's own `llmRequestPolicy` decides. `files` names files in the mind's file store, by reference. The sender is the platform's stamp `source.origin`: an input of role `user` that another context wrote reads `[from <origin>]` first. An integration writes `source`, the raw fact the words were made from.",
+      "THE AGENT'S ONE INPUT: something the model should know, from anyone, in words. `llmRequestPolicy` says whether it starts a request, interrupts the open one, or is only read by the next; with none, the agent's own `llmRequestPolicy` decides for the roles `user` and `developer`, and the roles `assistant` and `system` start nothing. `files` names files in the mind's file store, by reference. The sender is the platform's stamp `source.origin`: an input of role `user` that another context wrote reads `[from <origin>]` first. An integration writes `source`, the raw fact the words were made from.",
     payloadSchema: ContextAdded,
   },
   "events.iterate.com/agent/context-copied": {
@@ -439,6 +458,9 @@ export const AgentContract = defineProcessorContract({
   description:
     "An agent, in any context: reads inputs from anyone, writes what it asks a model, runs the script of the response, and keeps its history affordable. It appends facts and does nothing else.",
   stateSchema: z.object({
+    /** WHERE THE AGENT BEGINS: the offset of its start fact (`startsTheAgent`), or null on a context
+     *  that no start fact has reached. Nothing before it is folded. */
+    startedAtOffset: z.number().int().positive().nullable().default(null),
     config: AgentConfig.prefault({}),
     /** The agent's context path, from its own events: the prompt cache key of its requests, unless
      *  `config.llm.promptCacheKey` names another. */
@@ -600,7 +622,19 @@ export const AgentContract = defineProcessorContract({
 
 export type AgentState = ProcessorState<typeof AgentContract>;
 
-// ── two pure rules on the vocabulary, which the agent and every request maker share ──
+// ── three pure rules on the vocabulary, which the agent and every request maker share ──
+
+/** THE START FACT: an `agent/configured` that says `kind: "agent"` (start.ts writes it). The first
+ *  one on a context is where this agent begins. It is the ONE definition of "this context runs the
+ *  agent": the agent and the request makers fold nothing before it, and the mind's code reads the
+ *  agent's `startedAtOffset`, or this rule on the context's own facts. */
+export function startsTheAgent(event: { type: string; payload?: unknown }): boolean {
+  return (
+    event.type === "events.iterate.com/agent/configured" &&
+    isRecord(event.payload) &&
+    event.payload.kind === "agent"
+  );
+}
 
 /** A partial config merged into the config, one level deep; a result the schema refuses changes
  *  nothing. Every processor that reads `agent/configured` folds it by this rule. */

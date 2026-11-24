@@ -6,7 +6,9 @@
 // There is no RPC method behind it. The facts are what `processors.enable` and `itx.agents.create`
 // append today (core/itx/src/context/built-ins.ts), written out:
 //
-//   1. the parent link `itx` → `itx.cd('/')`: a new context has no `itx.repos` or `itx.ai` of its own;
+//   1. the parent link `itx` → `itx.cd(<parent>)`, when the caller names a parent: a new context
+//      has no `itx.repos` or `itx.ai` of its own. THE LINK IS WRITTEN ONCE, AT THE AGENT'S BIRTH:
+//      a later start names no parent and writes no link (see `parent` below);
 //   2. the caller's other rows (a catalog's copy rows), as they are;
 //   3. `agent/configured`, with the config as given and `kind: "agent"`: the mind's code knows by
 //      this fact that the context runs this agent, and reads no processor's row;
@@ -16,6 +18,10 @@
 // a key must change when its fact's body changes. The key of a config or of a row holds a hash of
 // its body. The key of a facet's row holds `code.cacheKey` only: THE CALLER'S `cacheKey` MUST CHANGE
 // WITH EVERYTHING ELSE IN THAT ROW (`source`, `mainModule`, the class, `consumes`).
+// THE PARENT LINK'S KEY HOLDS THE PATH ALONE, ON PURPOSE: the first link stands, and a start that
+// names another parent is refused whole. With the body in the key, a later start could link the
+// agent to another parent, and the newer rule would win: an agent that a jailed agent started
+// could be linked to the root.
 // So starting twice writes once, and a processor that writes an input (a Slack integration) can send
 // these facts with every input: no "is it started" check. A new config, a new version of the code or a
 // new row body is a new key for that fact only.
@@ -42,6 +48,10 @@ export const CONTEXT_PATH = /^(\/[A-Za-z0-9][A-Za-z0-9._-]*)+$/;
 export type FacetRow = { name: string; className: string; consumes: string[] };
 
 export type AgentStartOptions = {
+  /** THE CONTEXT THE AGENT'S `itx` LEADS TO: `/`, or the agent that started this one (so that what
+   *  holds that agent holds its child too). Name it at the agent's birth ONLY. With none, the start
+   *  writes no link: the one on the log stands. */
+  parent?: string;
   /** A partial AgentConfig. */
   config?: Record<string, unknown>;
   facets: FacetRow[];
@@ -66,12 +76,20 @@ export async function agentStartEvents(
       `an agent runs on a context: a path such as /agents/<name>, not ${JSON.stringify(path)}`,
     );
   const { code, config = {}, rows = [] } = options;
+  if (options.parent && options.parent !== "/" && !CONTEXT_PATH.test(options.parent))
+    throw new Error(
+      `an agent's parent is a context: "/" or a path such as /agents/<name>, not ${JSON.stringify(options.parent)}`,
+    );
 
-  const parent: AgentStartEvent = {
-    type: `${T}itx/rewrite-rule-configured`,
-    idempotencyKey: `agent-parent:${path}`,
-    payload: { match: "itx", target: "itx.cd('/')" },
-  };
+  const parent: AgentStartEvent[] = options.parent
+    ? [
+        {
+          type: `${T}itx/rewrite-rule-configured`,
+          idempotencyKey: `agent-parent:${path}`,
+          payload: { match: "itx", target: `itx.cd(${JSON.stringify(options.parent)})` },
+        },
+      ]
+    : [];
 
   const rowEvents = await Promise.all(
     rows.map(async (row): Promise<AgentStartEvent> => ({
@@ -111,7 +129,7 @@ export async function agentStartEvents(
     },
   }));
 
-  return [parent, ...rowEvents, configured, ...facetEvents];
+  return [...parent, ...rowEvents, configured, ...facetEvents];
 }
 
 /** THE SIZE OF ONE `agent/context-copied`: the JSON of its items, in characters. The platform's

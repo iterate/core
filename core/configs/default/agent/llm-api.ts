@@ -85,6 +85,7 @@ import {
   costUsd,
   mergedConfig,
   ScheduleEventCatalog,
+  startsTheAgent,
 } from "./contract.ts";
 import {
   ConversationItem,
@@ -219,7 +220,7 @@ export const MAX_INLINE_FILE_BYTES = 7_000_000;
 
 /** The reducer's version. A bump re-reduces the log from offset 0, which starts nothing again:
  *  a request that has its settled fact is not open. */
-const LLM_API_VERSION = "5";
+const LLM_API_VERSION = "6";
 
 const emits = [
   "events.iterate.com/llm-request/attempt-started",
@@ -311,6 +312,9 @@ const llmApiContract = (api: Pick<LlmApi, "name" | "events">) =>
     version: LLM_API_VERSION,
     description: `Makes the agent's LLM requests whose provider speaks ${api.name}, and writes what came back. It owns the facts of the namespace \`${api.name}/\`.`,
     stateSchema: z.object({
+      /** Where the agent begins: the offset of its start fact (contract.ts `startsTheAgent`), or
+       *  null. As the agent does, a request maker folds nothing before it. */
+      startedAtOffset: z.number().int().positive().nullable().default(null),
       /** The agent's config, folded from the same facts the agent folds: the providers, the
        *  gateway, the idle time, the attempts a request gets, the prices. */
       config: AgentConfig.prefault({}),
@@ -430,6 +434,8 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
   /** THE FOLD: the requests whose provider speaks this API, while they have no end. A fact about
    *  any other request changes nothing, so the state is not written again for it. */
   override reduce({ event, state: previous }: ReduceArgs<LlmApiState, LlmApiEvent>): LlmApiState {
+    // nothing before the agent's start fact is this agent's: another agent's config can stand there
+    if (previous.startedAtOffset === null && !startsTheAgent(event)) return previous;
     let state = previous;
     const open = (requestOffset: number) =>
       state.requests.some((request) => request.requestOffset === requestOffset);
@@ -439,7 +445,11 @@ export class LlmApiProcessor extends StreamProcessor<LlmApiState, LlmApiEvent> {
       );
     switch (event.type) {
       case "events.iterate.com/agent/configured":
-        state = { ...state, config: mergedConfig(state.config, event.payload.config) };
+        state = {
+          ...state,
+          startedAtOffset: state.startedAtOffset || event.offset,
+          config: mergedConfig(state.config, event.payload.config),
+        };
         break;
       case "events.iterate.com/llm-request/requested": {
         const provider = state.config.llmProviders[providerNameOf(event.payload.model)];

@@ -29,14 +29,17 @@ const FACETS = [
 const worldOf = () => ({ agents: {}, answered: new Set() });
 
 /** An agent on its own log. A parent is started as start.ts starts one; a child (`child: true`)
- *  is started by the mind's worker. */
+ *  is started by the mind's worker. Either way the start facts are those, and the log has no other. */
 async function started(world, path, model, child = false) {
   const logsOf = Object.fromEntries(
     Object.entries(world.agents).map(([at, other]) => [at, () => other.log.events]),
   );
-  const agent = agentOnALog({ path, model, logsOf });
+  const agent = agentOnALog({ path, model, logsOf, start: false });
   world.agents[path] = agent;
-  if (!child) await agent.append(...(await agentStartEvents(path, { facets: FACETS, code: CODE })));
+  if (!child)
+    await agent.append(
+      ...(await agentStartEvents(path, { parent: "/", facets: FACETS, code: CODE })),
+    );
   return agent;
 }
 
@@ -88,7 +91,12 @@ async function answer(world, parent, request) {
         },
       ]
     : [];
-  const start = await agentStartEvents(path, { config, facets: FACETS, code: CODE });
+  const start = await agentStartEvents(path, {
+    parent: "/",
+    config,
+    facets: FACETS,
+    code: CODE,
+  });
   await child.append(...start, ...copied, ...briefed);
   await parent.append(
     {
