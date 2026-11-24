@@ -30,6 +30,18 @@ platform wrote there; a file you changed or deleted is yours, and stays.
   up, commit the other files of the app yourself, each with the bytes of the template at the
   version the mind runs (`core/configs/default/apps/<name>/` in https://github.com/iterate/core).
   The page's files go together: `index.html` names the modules that `public/` imports.
+- **BEFORE A DEPLOY, IF `agents.ts` IS YOURS: take the template's.** Until 24 November 2026 the
+  platform had an agent of its own, and `agents.ts` imported its class
+  (`import { AgentDurableObject, AI_GATEWAY } from "iterate/agents"`). The platform has no such
+  agent now: the agent is this repo's `agent/` folder, and `iterate/agents` exports neither name.
+  A file that imports a name which is gone does not load, and then NOTHING of this repo runs: no
+  page, no agent. A deploy leaves your own `agents.ts` as it is. So commit the template's
+  `agents.ts` first (three lines: it names the agent that `itx.agents.create` starts), with the
+  template's `agent/`, `agent-start.ts`, `agent-prompt.ts`, `agent-ui.ts` and
+  `agent-kinds/agent.ts` if this repo has none, and then deploy. What you had set on the class
+  has a place of its own: what pays is `WHAT_PAYS` in `agent-start.ts`, and the files an agent
+  is told are in `agent-prompt.ts` ([agent-kinds.md](agent-kinds.md)). To look first:
+  `(await itx.repos.get("/repos/config").readFile("agents.ts")).includes("AgentDurableObject")`.
 - **A case that an older template lacks.** The `events.iterate.com/cloud/installation-handed-over`
   case gives the onboarding agent what the person told iterate Cloud's installation agent
   (`cloud-handover.ts`). A mind made from an older template has no case, and the event stays on
