@@ -17,8 +17,8 @@ The rules:
   those two, write only when you have news.
 - Each mail leads with something the mind did or found since, ends with ONE next step, and
   carries the chat's address (`onboarding/links.md`). Never "you have not finished".
-- "stop" ends it for good: cancel it, have `/agents/main/mind-md` write "No follow-up
-  mails: the owner said stop" into `mind.md`, and never set it again.
+- "stop" ends it for good: cancel it, write "No follow-up mails: the owner said stop" into
+  `mind.md` yourself (the `REMEMBER` script in `onboarding.md`), and never set it again.
 
 In every turn that a message of the owner started while onboarding is not finished, set it again,
 and say nothing about it:

@@ -15,7 +15,7 @@ not.
 
 ## How
 
-In one turn, three things.
+In one turn, four things.
 
 1. Mark it, with one event on `/onboarding`. `by` is `"agent"` when you judged it, `"owner"` when
    they said it is enough; `note` is a few words.
@@ -27,12 +27,19 @@ In one turn, three things.
    });
    ```
 
-2. Add one line to `mind.md`, through `/agents/main/mind-md` (`onboarding/subagents.md`):
+2. Add one line to `mind.md` yourself (the `REMEMBER` script in `onboarding.md`):
    "Onboarding finished on 17 Nov 2026, on the owner's word. Not seen yet: telemetry."
 3. Cancel the reminder:
 
    ```ts
    await itx.cd("/agents/main").schedules.cancel("onboarding-reminder");
+   ```
+
+4. Read this session's commits to `/repos/config` so your closing message lists the real changes
+   this mind made to itself (one line each, what changed):
+
+   ```ts
+   const commits = await itx.repos.get("/repos/config").log({ limit: 30 });
    ```
 
 Whether it is finished already (read it in your first turn, and in any later session):
@@ -47,4 +54,5 @@ still come when they fit. You offer nothing again that `mind.md` says they decli
 
 ## Say
 
-- "That's the start done. I'm still here, whenever you want something."
+- List this session's real commits to `/repos/config` (one bullet each, what changed), then close:
+  "That's the start done. I'm still here, whenever you want something."

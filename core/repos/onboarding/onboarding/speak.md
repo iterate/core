@@ -23,8 +23,8 @@ turn on, and they know what is not ready.
 
 ## How
 
-Ask once, when it fits. Say how in one sentence, with the link to this chat. On a "later", note
-it in `mind.md` through `/agents/main/mind-md`.
+Ask once, when it fits. Say how in one sentence, with the link to this chat. On a "later", write
+one line to `mind.md` yourself (the `REMEMBER` script in `onboarding.md`).
 
 Check that the voice agent can be paid for:
 
