@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { applyPatch, errorCode, type PatchOp } from "../lib.ts";
-import { retryWhileUnavailable, versionStartedBy } from "./new-version.ts";
+import { retryWhileUnavailable, STARTED_OVER_TYPES, versionStartedBy } from "./new-version.ts";
 
 // ── live state store ── THE CLIENT HALF of live state, for browsers and node test clients.
 // A deliberately small store for the platform's live-state wire:
@@ -222,7 +222,7 @@ export async function connectLiveState<S>(
         startOver();
         return;
       }
-      // `itx/version-ended`, which comes first in the kernel's last batch, and a first version's
+      // `itx/started-over`, which comes first in the kernel's last batch, and a first version's
       // `itx/created`: no delta, and no gap
       if (KernelVersionEvent.safeParse(event).success) continue;
       const parsed = LiveStateDeltaEvent.safeParse(event);
@@ -316,7 +316,7 @@ const LiveStateDeltaEvent = z.object({ payload: LiveStateDeltaMessage });
 
 /** The kernel's events of a version's border, which reach every row whatever it consumes. */
 const KernelVersionEvent = z.object({
-  type: z.enum(["events.iterate.com/itx/version-ended", "events.iterate.com/itx/created"]),
+  type: z.enum([...STARTED_OVER_TYPES, "events.iterate.com/itx/created"]),
 });
 
 function disposeRow(row: { [Symbol.dispose](): void } | undefined) {

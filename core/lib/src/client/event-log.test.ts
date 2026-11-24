@@ -493,7 +493,7 @@ function fakeContext(
     newVersion(count: number, deliver = true) {
       const ended = (log.at(-1) ?? 0) + 1;
       const created = ended + 1;
-      kernel.set(ended, { type: "events.iterate.com/itx/version-ended", payload: { version } });
+      kernel.set(ended, { type: "events.iterate.com/itx/started-over", payload: { version } });
       version += 1;
       kernel.set(created, {
         type: "events.iterate.com/itx/created",

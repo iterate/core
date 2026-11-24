@@ -697,6 +697,8 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
 // from anyone else, so no caller can forge who a context is, a halt, or a run's settlement.
 export const STREAM_RECORD_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
+  "events.iterate.com/itx/started-over",
+  // the name of `itx/started-over` in the logs that hold an earlier border: a reader takes it as one
   "events.iterate.com/itx/version-ended",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",

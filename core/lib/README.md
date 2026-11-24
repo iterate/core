@@ -196,11 +196,15 @@ on: an offset names one event of the path for ever.
 
 ```
 K     itx/run-settled   (each open run, `interrupted`)
-K+n   itx/version-ended { version: 1, reason?, callerPath?, app?, held: { schedules, subscriptions, rewriteRules } }
+K+n   itx/started-over { version: 1, reason?, callerPath?, app?, held: { schedules, subscriptions, rewriteRules } }
 K+n+1 itx/created       { path, version: 2 }
       (the object restarts)
 K+n+2 itx/woken, then the host's birth events and its wake events: the version's birth
 ```
+
+A log that took a new version under the event's earlier name holds `itx/version-ended` in the
+place of `itx/started-over`: a reader of the border takes both (`STARTED_OVER_TYPES`,
+`client/new-version.ts`).
 
 The answer waits until no other isolate holds the earlier version's rules (5 s at most). An append
 that arrives between the capstone and the restart is refused as `UNAVAILABLE` and may be sent
@@ -214,7 +218,7 @@ link, and a rule at any other name. Under a jail every rule with a target goes, 
 too: there each is a grant. So the config writes a jail's grants again. A context that
 masks a name takes a new version only from a member's session.
 
-A subscriber whose target is a client's live callback gets the capstone (`itx/version-ended` and
+A subscriber whose target is a client's live callback gets the capstone (`itx/started-over` and
 `itx/created`) as its last batch, whatever it consumes: its row goes with the version. An event
 that its row does not take comes as the bare border, with the version alone. `iterate/client`
 then subscribes again and reads the new version from its start. The limits:

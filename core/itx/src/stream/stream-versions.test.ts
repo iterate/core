@@ -41,12 +41,12 @@ test("a new version empties the core state and keeps the log, every offset as it
   const all = stream.read(0, 500, { allVersions: true }).events;
   expect(all.slice(0, before.length)).toEqual(before);
   expect(all.slice(before.length).map(({ offset, type }) => ({ offset, type }))).toEqual([
-    { offset: ended.offset, type: "events.iterate.com/itx/version-ended" },
+    { offset: ended.offset, type: "events.iterate.com/itx/started-over" },
     { offset: ended.offset + 1, type: "events.iterate.com/itx/created" },
   ]);
 });
 
-test("`version-ended` names the schedules, subscriptions and rules that the version held", () => {
+test("`started-over` names the schedules, subscriptions and rules that the version held", () => {
   const db = new DatabaseSync(":memory:");
   const stream = born(db);
   stream.append(...rowsOfAVersion());
@@ -54,7 +54,7 @@ test("`version-ended` names the schedules, subscriptions and rules that the vers
   const { ended } = stream.startNewVersion({ reason: "start over" }, undefined);
 
   expect(ended).toMatchObject({
-    type: "events.iterate.com/itx/version-ended",
+    type: "events.iterate.com/itx/started-over",
     payload: {
       version: 1,
       reason: "start over",
@@ -131,7 +131,7 @@ test("a read from the start begins at the version; a read from a positive offset
     fromTheStart: [ended.offset + 1, ended.offset + 2],
     pointRead: [said],
     readOn: [
-      "events.iterate.com/itx/version-ended",
+      "events.iterate.com/itx/started-over",
       "events.iterate.com/itx/created",
       "events.iterate.com/itx/woken",
     ],
@@ -279,13 +279,52 @@ test.for([
   );
 });
 
-test("nobody appends `itx/version-ended` by hand", () => {
-  expect(() =>
-    normalizeControlEvent(
-      { type: "events.iterate.com/itx/version-ended", payload: { version: 1 } },
-      "/x",
-    ),
-  ).toThrow("is the platform's own record");
+test.each(["events.iterate.com/itx/started-over", "events.iterate.com/itx/version-ended"])(
+  "nobody appends %s by hand: the border, under its name and its earlier name",
+  (type) => {
+    expect(() => normalizeControlEvent({ type, payload: { version: 1 } }, "/x")).toThrow(
+      "is the platform's own record",
+    );
+  },
+);
+
+test("a log whose border has the earlier name, `itx/version-ended`, replays to its version, and the next version's offsets go on", () => {
+  const db = new DatabaseSync(":memory:");
+  const first = born(db);
+  first.append(...rowsOfAVersion());
+  // the border as the kernel wrote it before the rename
+  const [earlierName, created] = first.append(
+    { type: "events.iterate.com/itx/version-ended", payload: { version: 1, held: {} } },
+    { type: "events.iterate.com/itx/created", payload: { path: "/x", version: 2 } },
+  );
+  const second = woken(db);
+  const [said] = second.append({ type: "events.iterate.com/test/said", payload: {} });
+  db.prepare("UPDATE reduce_checkpoints SET reducer_version = ? WHERE slug = ?").run(
+    "18.0.0",
+    CoreContract.slug,
+  );
+
+  const replayed = open(db);
+  const { version, versionStartedAtOffset, subscriptions, schedules } = replayed.coreReducedState;
+  expect({ version, versionStartedAtOffset, subscriptions, schedules }).toEqual({
+    version: 2,
+    versionStartedAtOffset: created!.offset,
+    subscriptions: {},
+    schedules: {},
+  });
+  expect(replayed.read(0, 500).events[0]).toMatchObject({ offset: created!.offset });
+
+  const next = replayed.startNewVersion({}, undefined);
+  expect(next.ended).toMatchObject({
+    type: "events.iterate.com/itx/started-over",
+    payload: { version: 2 },
+  });
+  expect(next.created).toMatchObject({ offset: next.ended.offset + 1, payload: { version: 3 } });
+  // no offset starts again at a border, under either name
+  const offsets = [earlierName, created, said, next.ended, next.created].map(
+    (event) => event!.offset,
+  );
+  expect(offsets).toEqual([...new Set(offsets)].toSorted((a, b) => a - b));
 });
 
 test("the emptying is owed from the next incarnation until its marker is written, whatever wakes meanwhile", () => {

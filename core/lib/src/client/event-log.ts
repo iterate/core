@@ -206,7 +206,7 @@ export function connectEventLog(
     };
     for (const listener of listeners) listener();
   };
-  // `lastBatchOfTheRow`: the row delivered the `itx/version-ended` of its own version, which the
+  // `lastBatchOfTheRow`: the row delivered the `itx/started-over` of its own version, which the
   // kernel sends only as that row's last batch. The row is gone whatever version the log holds: a
   // connect whose first read already answered the new version would otherwise keep a row of the
   // earlier one.
@@ -217,7 +217,7 @@ export function connectEventLog(
         if (next !== undefined && (next > version || lastBatchOfTheRow))
           startVersion(event.offset, next);
       }
-      // an event of an earlier version (its `itx/version-ended` among them) is never held
+      // an event of an earlier version (its `itx/started-over` among them) is never held
       if (event.offset >= start) pending.push(event);
     }
     schedule();

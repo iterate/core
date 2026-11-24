@@ -142,6 +142,6 @@ A new version ends the path's rules (but its masks), its subscriptions, its sche
 facet with its storage, and a read from the start begins at the new version, so a chat shows the
 new agent's facts alone. The log goes on (`readEvents(…, { allVersions: true })`). The link is a
 rule, so you write it again: `create` writes a link at an agent's birth alone, and never onto a
-path where an agent ran. Set a schedule again if the agent needs it: the `itx/version-ended`
+path where an agent ran. Set a schedule again if the agent needs it: the `itx/started-over`
 event names what the version held. `itx.agents` never starts a path over by itself: a caller that
 may only create or message an agent must not be able to end its schedules and its conversation.

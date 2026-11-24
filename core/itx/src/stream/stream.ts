@@ -230,7 +230,7 @@ export class Stream {
           "the context started a new version before the script's result was recorded; it may have partly or fully run, and it is not run again",
         ),
         {
-          type: "events.iterate.com/itx/version-ended",
+          type: "events.iterate.com/itx/started-over",
           payload: { version, ...ended, held },
           source,
         },

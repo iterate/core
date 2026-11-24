@@ -1753,7 +1753,7 @@ export interface IterateContextApi {
   abort(reason?: string): Promise<StreamEvent>;
   /** START THIS CONTEXT OVER at the same path, in the same Durable Object: it ends the context's
    *  version (a number that starts at 1) and starts the next. Resolves with the
-   *  `events.iterate.com/itx/version-ended { version, reason?, callerPath?, app?, held }` event it
+   *  `events.iterate.com/itx/started-over { version, reason?, callerPath?, app?, held }` event it
    *  recorded, where `held` names the version's schedules, subscriptions and rewrite rules.
    *  `events.iterate.com/itx/created { path, version }` follows it, and the object restarts. The
    *  next incarnation empties what the earlier version left, and its first wake is the version's
@@ -1764,7 +1764,7 @@ export interface IterateContextApi {
    *  EACH CALL THAT RUNS STARTS A VERSION: a second call that reaches the context after the
    *  restart starts another, so call once for a path and do not send it again after an error.
    *  A LIVE CLIENT IS TOLD. A subscriber whose target is a client's live callback gets the capstone
-   *  (`itx/version-ended` and `itx/created`) as its last batch, whatever it consumes, since its row
+   *  (`itx/started-over` and `itx/created`) as its last batch, whatever it consumes, since its row
    *  goes with the version; an event that its row does not take comes as the bare border, with the
    *  version alone. `iterate/client` then subscribes again and reads the new version from its
    *  start. A WebSocket that a client holds through the context to a provider (a fetch upgrade)

@@ -19,12 +19,19 @@ export function versionStartedBy(event: unknown): number | undefined {
   return parsed.success ? parsed.data.payload.version : undefined;
 }
 
+/** The types of the event that ends a version. The kernel appends `itx/started-over`; a log that
+ *  took a new version under the earlier name holds `itx/version-ended`, for ever. */
+export const STARTED_OVER_TYPES = [
+  "events.iterate.com/itx/started-over",
+  "events.iterate.com/itx/version-ended",
+] as const;
+
 const VersionEnded = z.object({
-  type: z.literal("events.iterate.com/itx/version-ended"),
+  type: z.enum(STARTED_OVER_TYPES),
   payload: z.object({ version: z.number() }),
 });
 
-/** The version that `event` ends, when it is an `itx/version-ended`; else undefined. The kernel
+/** The version that `event` ends, when it is an `itx/started-over` (or the earlier `itx/version-ended`); else undefined. The kernel
  *  sends it to a row only as the last batch of a row of that version. */
 export function versionEndedBy(event: unknown): number | undefined {
   const parsed = VersionEnded.safeParse(event);

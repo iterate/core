@@ -179,7 +179,7 @@ test("a patch applyPatch REJECTS heals from a fresh seed instead of escaping the
 
 /** The kernel's last batch to every row when the context starts version 2. */
 const versionTwo = [
-  { type: "events.iterate.com/itx/version-ended", offset: 40, payload: { version: 1 } },
+  { type: "events.iterate.com/itx/started-over", offset: 40, payload: { version: 1 } },
   { type: "events.iterate.com/itx/created", offset: 41, payload: { path: "/", version: 2 } },
 ];
 

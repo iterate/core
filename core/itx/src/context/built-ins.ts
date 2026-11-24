@@ -156,7 +156,7 @@ export interface BuildBuiltInsDeps {
   };
   abortAfterTheAnswer: (message: string) => void;
   /** Ends this context's version and starts the next (the DO's `#startNewVersion`): answers the
-   *  `itx/version-ended` event once no other isolate holds the earlier version's rules, and
+   *  `itx/started-over` event once no other isolate holds the earlier version's rules, and
    *  restarts the object after the answer. `source` is the caller's stamp. */
   startNewVersion: (
     reason: string | undefined,
