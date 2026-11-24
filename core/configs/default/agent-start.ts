@@ -19,8 +19,13 @@
 // kind answers it with `toAgent`.
 //
 // THE PARENT LINK IS WRITTEN ONCE, BY THE START THAT GIVES BIRTH TO AN AGENT (agent/start.ts): to
-// the mind's root, or to the agent that asked for a subagent, so a child reaches what its parent
-// reaches and no more. Every later start names no parent.
+// the mind's root, or to the agent that asked for a subagent. Every later start names no parent.
+//
+// A PARENT LINK IS NOT A JAIL. It says where the child's `itx` names lead. It does not hold the
+// child: a context's own `cd` and roots answer from its own table, whatever its parent masks
+// (core/itx parent-rule-and-child.test.ts). So an agent that something holds gets no subagent
+// here (`startSubagent`): a config that restricts an agent starts its children itself, with the
+// same restriction on each.
 //
 // WHAT AN AGENT IS TOLD is not part of its start. every-event.ts sees the start's
 // `agent/configured` and appends the agent's system prompt (agent-prompt.ts). The agent waits
@@ -99,9 +104,10 @@ const WHAT_PAYS = {
  *  writes it within its first ten. */
 const FIRST_FACTS = 100;
 
-/** The rows that list the agent on /agents: core/lib/src/agents/collection.ts `CATALOG_ROWS`, with
- *  the kind written when the agent is configured (this agent writes no `agent/created`). They stand
- *  before `agent/configured` in the start's append, so the row that copies the kind sees it. */
+/** The rows that list the agent on /agents: each copies a fact of the agent's own log there as
+ *  `agent/listing-updated`, and the platform's catalog folds the copies (iterate/agents). The kind
+ *  is written when the agent is configured. They stand before `agent/configured` in the start's
+ *  append, so the row that copies the kind sees it. */
 const CATALOG_ROWS = [
   {
     name: "agent-catalog-kind",
@@ -127,15 +133,18 @@ const CATALOG_ROWS = [
     },
   },
   {
-    // the first line of a person's words (a transcription puts them first)
+    // the first line of a person's words: a transcription's own first line is the mind's
+    // (agent-ui.ts: it begins with a dash), so it is passed over
     name: "agent-catalog-first-words",
     consumes: [`${T}agent/context-added`],
-    filter: `payload.role = "user"`,
+    // A call's note ("[call] … joined the call": call.ts `noteEvent`, with `callNote`) is an
+    // input of role `user` that nobody wrote: it is no first words, and no title.
+    filter: `payload.role = "user" and $not($exists(payload.callNote))`,
     target: {
       path: AGENTS,
       type: `${T}agent/listing-updated`,
       payload: `{
-        "title": $substring(($split(payload.content, "\\n").$trim($))[$ != ""][0], 0, 120),
+        "title": $substring(($split(payload.content, "\\n").$trim($))[$ != "" and $substring($, 0, 1) != "—"][0], 0, 120),
         "fromWords": true,
         "activity": ""
       }`,
@@ -203,56 +212,90 @@ export async function toAgent(
   itx: Itx,
   path: string,
   events: Event[],
-  options: { parent?: string; config?: Record<string, unknown> } = {},
+  options: {
+    parent?: string;
+    config?: Record<string, unknown>;
+    /** What to do when the context has a link to ANOTHER parent since its birth, so the log
+     *  refuses the whole append. "refuse": throw, and nothing is written (a subagent: its brief
+     *  and its parent's conversation must not land on an agent of another parent). None: the
+     *  first link stands, and the start goes again without a parent, so that a person's words to
+     *  that agent are not lost with the link. */
+    anotherParent?: "refuse";
+  } = {},
 ) {
   const context = itx.cd(path);
+  const { parent, config, anotherParent } = options;
   try {
-    await context.append(...(await startEvents(path, options)), ...events);
+    await context.append(...(await startEvents(path, { parent, config })), ...events);
   } catch (error) {
     firstStands(error);
-    // The log refused the whole append, `events` too. When the start named a parent, the context
-    // can have a link to another parent since its birth: that link stands. The start goes again
-    // without one, so the input is not lost with the link.
-    if (options.parent)
-      await context
-        .append(...(await startEvents(path, { config: options.config })), ...events)
-        .catch(firstStands);
+    if (!parent) return;
+    if (anotherParent === "refuse")
+      throw new Error(`${path} is an agent with another parent: it is not yours to start`, {
+        cause: error,
+      });
+    await context.append(...(await startEvents(path, { config })), ...events).catch(firstStands);
   }
 }
 
-/** WHETHER THE CONTEXT RUNS THIS AGENT, and how it came to:
- *  - "asked": the Dash asked for one here, with `agent-ui/agent-requested` among the context's
+/** THE AGENT AT A CONTEXT, or null where this agent does not run:
+ *  - `asked`: the Dash asked for one here, with `agent-ui/agent-requested` among the context's
  *    first facts. Events reach a kind in no order (iterate/sdk `Integration.processEvent`), so a
  *    person's first words can be handled before the request that the Dash appended ahead of
  *    them. The words' own append then gives birth to the agent, and the request's handling
  *    writes the same keyed facts.
- *  - "started": its start facts are in the log. They stand among the first facts of a context
- *    that was born as an agent, and at the END of the log of a context that the platform's old
- *    agent ran before (`itx.agents` takes such a context over). So the second look is at the
- *    rows: the processor `agent` is this agent's facet.
- *  - null: neither. */
-export async function runsTheAgent(itx: Itx, path: string): Promise<"asked" | "started" | null> {
+ *  - `fork`: its start brought instructions, its parent's (`startSubagent`). A fork keeps them.
+ *  Its start facts stand among the first facts of a context that was born as an agent, and at the
+ *  END of the log of a context that the platform's old agent ran before (`itx.agents` takes such
+ *  a context over). So the second look is at the rows: the processor `agent` is this agent's
+ *  facet. */
+export async function agentAt(
+  itx: Itx,
+  path: string,
+): Promise<{ asked: boolean; fork: boolean } | null> {
   const context = itx.cd(path);
   const { events } = await context.readEvents(0, FIRST_FACTS);
-  if (events.some((event) => event.type === `${T}agent-ui/agent-requested`)) return "asked";
-  if (
-    events.some(
-      (event) =>
-        event.type === `${T}agent/configured` && StartConfigured.safeParse(event.payload).success,
-    )
-  )
-    return "started";
+  const asked = events.some((event) => event.type === `${T}agent-ui/agent-requested`);
+  const starts = events.flatMap((event) => {
+    const start = event.type === `${T}agent/configured` && StartConfigured.safeParse(event.payload);
+    return start && start.success ? [start.data] : [];
+  });
+  const fork = starts.some((start) => typeof start.config?.instructions === "string");
+  if (asked || starts.length > 0) return { asked, fork };
   const rows = await context.processors.list();
   return rows.some((row) => row.name === "agent" && row.hostedFacet?.className === AGENT_FACET)
-    ? "started"
+    ? { asked, fork }
     : null;
 }
 
 /** The class of the agent's own facet (agent/facets.json), as its row names it. */
 const AGENT_FACET = "AgentFacet";
 
+/** A SUBAGENT IS FOR AN AGENT THAT NOTHING HOLDS. This worker answers the request with the
+ *  mind's whole reach, and the child's link to its parent holds nothing (the header). So the
+ *  request is refused where the agent is restricted, by the two signs a restriction leaves:
+ *  - the request was appended by ANOTHER context's code (the platform's stamp, `source.origin`):
+ *    an agent whose scripts run in a jail's context does not write on its own log itself;
+ *  - the agent's own table masks a name (a rule with no target).
+ *  A config that restricts an agent in another way must refuse this fact itself. */
+async function refuseAHeldAgent(itx: Itx, request: { path: string; source?: { origin?: string } }) {
+  if (request.source?.origin !== request.path)
+    throw new Error(
+      "a subagent is asked for by the agent's own script, on its own context: this request was written from elsewhere",
+    );
+  const rules = await itx.cd(request.path).rewriteRules.list();
+  if (rules.some((rule) => rule.context === request.path && !rule.target))
+    throw new Error(
+      "this agent's context masks names, so it is restricted: the mind's own code starts the subagents of a restricted agent",
+    );
+}
+
 /** The start's `agent/configured` (agent/start.ts): the one that says the context runs this agent. */
-const StartConfigured = z.object({ kind: z.literal("agent") });
+const StartConfigured = z.object({
+  kind: z.literal("agent"),
+  // optional: the start of an agent that is no fork has no such key
+  config: z.object({ instructions: z.unknown().optional() }).optional(),
+});
 
 /** The payload of `agent/subagent-requested` (agent/contract.ts). */
 const SubagentRequested = z.object({
@@ -271,7 +314,13 @@ const SubagentRequested = z.object({
  *  call writes nothing new: the first stands. */
 export async function startSubagent(
   itx: Itx,
-  request: { path: string; offset: number; payload?: unknown },
+  request: {
+    path: string;
+    offset: number;
+    payload?: unknown;
+    /** The platform's stamp: `origin` is the context whose code appended the request. */
+    source?: { origin?: string };
+  },
 ) {
   const parsed = SubagentRequested.safeParse(request.payload);
   const child = parsed.success ? parsed.data.path : "";
@@ -282,6 +331,7 @@ export async function startSubagent(
   let behaviour = "dont-trigger-request";
   try {
     if (!parsed.success) throw new Error(`the request is malformed: ${parsed.error.message}`);
+    await refuseAHeldAgent(itx, request);
     const { brief, model, copyContext } = parsed.data;
     if (!child.startsWith(`${request.path}/`) || !CONTEXT_PATH.test(child))
       throw new Error(
@@ -332,8 +382,13 @@ export async function startSubagent(
         },
       },
     ];
-    // the child is linked to its parent, not to the root: it reaches what its parent reaches
-    await toAgent(itx, child, [...copied, ...briefed], { config, parent: request.path });
+    // The child's `itx` is linked to its parent. A path where an agent of ANOTHER parent runs
+    // is refused: the brief and the copied conversation land on no agent but this one's child.
+    await toAgent(itx, child, [...copied, ...briefed], {
+      config,
+      parent: request.path,
+      anotherParent: "refuse",
+    });
     answer = {
       type: `${T}agent/subagent-started`,
       payload: { requestOffset: request.offset, path: child, copiedItems },

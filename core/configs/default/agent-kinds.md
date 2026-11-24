@@ -82,14 +82,23 @@ repo, not in the platform.
   answers the first with the agent's start facts. No method stands between, so each fact carries
   that person's own stamp.
 - **An agent starts a subagent** with one fact, `agent/subagent-requested`, under its own path.
+  The mind's worker answers it with the mind's whole reach, so it refuses an agent that something
+  holds: a request that another context's code wrote (an agent whose scripts run in a jail), an
+  agent whose own table masks a name, and a path where an agent of another parent runs. A config
+  that restricts an agent in another way refuses this fact itself.
 - **Words reach an agent** as its one input, `agent/context-added`. A person's words in the Dash
   (`agent-ui/message-received`) and words sent with `itx.agents.get(path).message(…)`
-  (`agent/message-received`) are transcribed into it by the kind, with a line that says who sent
-  them. An integration appends the input itself.
+  (`agent/message-received`) are transcribed into it by the kind. Its FIRST line is the mind's:
+  who sent the words, whether that person is a member of this mind, and when. Everything after
+  the first line is the sender's text. An integration appends the input itself.
+- **What an agent is told follows its files.** A commit that changes `AGENTS.md`, `mind.md` or an
+  agent's role file reaches an agent at its next input of role `user` (`agent-prompt.ts`). A fork
+  keeps its parent's instructions.
 - **A commit that changes `agent/` reaches an agent at its next message**: `message` sends the
   start facts with the words, and a facet row of another code version starts the new code.
 - **The parent link is written once**, by the start that gives birth to an agent: to the mind's
-  root, or to the agent that asked for a subagent. No later start changes it.
+  root, or to the agent that asked for a subagent. No later start changes it. The link is no
+  jail: it says where the child's `itx` names lead, and it does not hold the child.
 
 The files:
 

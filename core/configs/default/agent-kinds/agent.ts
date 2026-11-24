@@ -21,7 +21,7 @@
 // THE GUARD. Other kinds of agent run in the same mind and read some of the same facts (a Claude
 // Code session reads `agent/message-received` too). So this kind acts only on a context that runs
 // this agent: its start facts are in its log, or the Dash asked for one there (agent-start.ts
-// `runsTheAgent`). On every other context it does nothing.
+// `agentAt`). On every other context it does nothing.
 //
 // THE CHAT (`view`) is iterate's AgentChat as it is. It reads this agent's facts itself
 // (packages/ui agent-chat/agent-facts.ts): a person's bubble from the raw fact and its stamp, a
@@ -32,11 +32,12 @@
 // A view runs in the Dash's frame, where every import of this file is a stub that throws when
 // used (packages/ui agent-kind-view/load.ts). So a view uses nothing that this file imports.
 import type { AgentKind } from "@iterate-com/ui/agent-kind-view";
-import { runsTheAgent, startSubagent, toAgent } from "../agent-start.ts";
+import { agentAt, startSubagent, toAgent } from "../agent-start.ts";
 import {
   agentsApiContext,
   agentUiContext,
   agentUiStartConfig,
+  senderEmail,
   transcriptionKey,
 } from "../agent-ui.ts";
 
@@ -57,13 +58,19 @@ async function processEvent({ event, itx }: Parameters<NonNullable<AgentKind["pr
       return;
     }
     case SUBAGENT_REQUESTED:
-      if (await runsTheAgent(itx, event.path)) await startSubagent(itx, event);
+      if (await agentAt(itx, event.path)) await startSubagent(itx, event);
       return;
     case UI_MESSAGE:
     case API_MESSAGE: {
-      const runs = await runsTheAgent(itx, event.path);
-      if (!runs) return;
-      const input = (event.type === UI_MESSAGE ? agentUiContext : agentsApiContext)(event);
+      const agent = await agentAt(itx, event.path);
+      if (!agent) return;
+      // WHETHER THE SENDER IS A MEMBER, asked once, here: the line under the words says it, so
+      // the model does not spend a request on the same question. A check that fails says nothing.
+      const email = senderEmail(event);
+      const member = email ? await itx.members.has(email).catch(() => undefined) : undefined;
+      const said = { member };
+      const input =
+        event.type === UI_MESSAGE ? agentUiContext(event, said) : agentsApiContext(event, said);
       if (!input) return; // a payload the schema refuses
       // Words that are handled before the Dash's request give birth to the agent themselves.
       // Any other start names no parent: the link of the agent's birth stands.
@@ -71,7 +78,7 @@ async function processEvent({ event, itx }: Parameters<NonNullable<AgentKind["pr
         itx,
         event.path,
         [{ type: CONTEXT_ADDED, idempotencyKey: transcriptionKey(event), payload: input }],
-        runs === "asked" ? { parent: "/" } : {},
+        agent.asked ? { parent: "/" } : {},
       );
     }
   }

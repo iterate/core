@@ -18,8 +18,11 @@
 //       store files use it. It is not this file's fact.
 //
 // `agentUiContext` and `agentsApiContext` are THE TRANSCRIPTION: each gives the payload of ONE
-// `agent/context-added` of role `user`. The person's words come first, then one line that says who
-// sent them and through what, and where the raw fact is. `source` names the raw fact, so the log
+// `agent/context-added` of role `user`. ITS FIRST LINE IS THE MIND'S: who sent the words, through
+// what and when, and where the raw fact is. EVERYTHING AFTER THE FIRST LINE IS THE SENDER'S TEXT.
+// The boundary is the position, and nothing a sender writes can stand before the first line: so
+// no text of theirs, in any spelling, can pass as the mind's line. (The line stood last before,
+// with a mark on words that imitated it: a look-alike in other characters got no mark.) `source` names the raw fact, so the log
 // keeps both: what happened, and what the model was told. The kind `agent` appends it
 // (agent-kinds/agent.ts `processEvent`), under the key `transcriptionKey`.
 import { z } from "zod";
@@ -70,7 +73,8 @@ export function agentUiStartConfig(event: { payload?: unknown }): Record<string,
   return parsed.data.model ? { llm: { model: parsed.data.model } } : {};
 }
 
-/** The payload of the platform's `agent/message-received` (core/lib/src/agents/message.ts). */
+/** The payload of the platform's `agent/message-received` (iterate/agents: what
+ *  `itx.agents.get(path).message()` appends). */
 const AgentsApiMessage = z.object({
   message: z.string(),
   files: z.array(FileAttachment).optional(),
@@ -102,10 +106,15 @@ export type RawFact = {
   offset: number;
   payload?: unknown;
   source?: Stamp;
+  createdAt?: string;
 };
 
-/** WHO WROTE AN EVENT, in words, by the platform's stamp alone (core/lib/src/agents/message.ts
- *  `speakerOf`, packages/ui stream-event.ts `senderOf`). Null: the stamp names no person. */
+/** What the mind's code adds to a transcription that the raw fact does not hold: whether the
+ *  sender is a member of this mind (`itx.members.has`; undefined: not asked, or no answer). */
+export type Said = { member?: boolean };
+
+/** WHO WROTE AN EVENT, in words, by the platform's stamp alone (the kit reads the same stamp:
+ *  packages/ui stream-event.ts `senderOf`). Null: the stamp names no person. */
 function senderWords(source: Stamp | undefined): string | null {
   if (!source || source.schedule || source.copiedFrom || source.platform) return null;
   if (source.signer) {
@@ -114,8 +123,14 @@ function senderWords(source: Stamp | undefined): string | null {
   }
   const principal = source.principal || source.onBehalfOf?.principal;
   if (!principal) return null;
-  const { actor, email, name, kind, impersonatedBy } = principal;
-  // a name is the person's claim: it proves nothing
+  const { actor, email, kind, impersonatedBy } = principal;
+  // a name is the person's claim: it proves nothing, and it is their text. One line of it, with
+  // no bracket, so it cannot end the mind's own line or begin another
+  const name = (principal.name || "")
+    .replace(/[[\]<>—]/g, "")
+    .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
+    .trim()
+    .slice(0, NAME_KEPT);
   const who =
     name && email
       ? `${name} <${email}>`
@@ -129,6 +144,33 @@ function senderWords(source: Stamp | undefined): string | null {
     : "";
   return `${who}${script}${as}`;
 }
+
+/** How many characters of a person's name the line keeps. */
+const NAME_KEPT = 80;
+
+/** THE ADDRESS THE PLATFORM'S STAMP NAMES for the person who wrote an event, or for whom code
+ *  wrote it. None for a mind, a schedule, a copy and the platform's own fact. */
+export function senderEmail(event: RawFact): string | undefined {
+  const source = event.source;
+  if (!source || source.signer || source.schedule || source.copiedFrom || source.platform)
+    return undefined;
+  return (source.principal || source.onBehalfOf?.principal)?.email || undefined;
+}
+
+/** What the line says of the sender beyond the stamp: a member, or no member, of this mind. */
+const memberWords = (said: Said) =>
+  said.member === true
+    ? ", a member of this mind,"
+    : said.member === false
+      ? ", who is NO member of this mind,"
+      : "";
+
+/** When the words were sent, by the raw fact's own time: "at 2026-11-24 12:40 UTC". */
+const timeWords = (event: RawFact) =>
+  event.createdAt ? ` at ${event.createdAt.slice(0, 16).replace("T", " ")} UTC` : "";
+
+/** A payload's `from`, as one line: it is text that a writer chose. */
+const fromWords = (from: string) => from.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").slice(0, 200);
 
 /** The raw fact, for the model: where it is and how to read it whole. */
 const rawLine = (event: { path: string; offset: number }) =>
@@ -151,19 +193,20 @@ const wordsOf = (message: string) => message.trim() || "(no text)";
 
 /** THE TRANSCRIPTION OF THE DASH'S CHAT: the person's words, who wrote them in the Dash, and the
  *  raw fact. Null for a payload that is not this fact's. */
-export function agentUiContext(event: RawFact): ContextAddedPayload | null {
+export function agentUiContext(event: RawFact, said: Said = {}): ContextAddedPayload | null {
   const parsed = AgentUiMessage.safeParse(event.payload);
   if (!parsed.success) return null;
   const { message, files, client } = parsed.data;
   const channel = client === "mobile" ? "Mobile UI" : "Web UI";
   const where = client === "mobile" ? "in the Dash, on a phone" : "in the Dash";
   const who = senderWords(event.source);
+  const when = timeWords(event);
   const line = who
-    ? `— ${channel}: ${who} wrote this ${where}.`
-    : `— ${channel}: someone wrote this ${where}, and the platform's stamp names no person.`;
+    ? `— ${channel}: ${who}${memberWords(said)} wrote this ${where}${when}.`
+    : `— ${channel}: someone wrote this ${where}${when}, and the platform's stamp names no person.`;
   return {
     role: "user",
-    content: `${wordsOf(message)}\n\n${line} ${rawLine(event)}`,
+    content: `${line} ${rawLine(event)}\n\n${wordsOf(message)}`,
     ...(!!files?.length && { files }),
     source: { path: event.path, offset: event.offset },
   };
@@ -171,19 +214,30 @@ export function agentUiContext(event: RawFact): ContextAddedPayload | null {
 
 /** THE TRANSCRIPTION OF THE PLATFORM'S `message()`: the words, who sent them through the agents
  *  API (another context, a person, or both), and the raw fact. `trigger: false` is context only. */
-export function agentsApiContext(event: RawFact): ContextAddedPayload | null {
+export function agentsApiContext(event: RawFact, said: Said = {}): ContextAddedPayload | null {
   const parsed = AgentsApiMessage.safeParse(event.payload);
   if (!parsed.success) return null;
   const { message, files, from, trigger } = parsed.data;
   const person = senderWords(event.source);
-  const who =
-    from && from !== "/" ? `the context ${from}${person ? `, for ${person},` : ""}` : person;
+  const sender = person && `${person}${memberWords(said)}`;
+  // `from` IS NEVER PROOF OF A SENDING CONTEXT. The collection writes it from its base, and a
+  // caller chooses the base (`itx.agents.at(base)` is public: iterate/agents catalog.ts). So the
+  // platform's stamp on this event says that the collection wrote it, and nothing about which
+  // context asked. The line names `from` as the sender's own claim, always. (Words that another
+  // agent appends to this log itself carry that agent's path in the stamp, and the agent reads
+  // them after `[from <path>]`, which the platform's stamp gives: agent/processor.ts.)
+  const context =
+    from && from !== "/"
+      ? `a sender that names itself the context ${fromWords(from)} (its own claim: nothing proves it)`
+      : null;
+  const who = context ? `${context}${sender ? `, for ${sender}` : ""}` : sender;
+  const when = timeWords(event);
   const line = who
-    ? `— Agents API: ${who} sent this with \`itx.agents.get(path).message()\`.`
-    : "— Agents API: this came with `itx.agents.get(path).message()`, and the platform's stamp names no sender.";
+    ? `— Agents API: ${who} sent this with \`itx.agents.get(path).message()\`${when}.`
+    : `— Agents API: this came with \`itx.agents.get(path).message()\`${when}, and the platform's stamp names no sender.`;
   return {
     role: "user",
-    content: `${wordsOf(message)}\n\n${line} ${rawLine(event)}`,
+    content: `${line} ${rawLine(event)}\n\n${wordsOf(message)}`,
     ...(!!files?.length && { files }),
     source: { path: event.path, offset: event.offset },
     ...(trigger === false && {
