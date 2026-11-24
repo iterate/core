@@ -131,13 +131,17 @@ function senderWords(source: Stamp | undefined): string | null {
     .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
     .trim()
     .slice(0, NAME_KEPT);
+  // A GUEST IS LABELLED BY THE STAMP'S KIND, never by what is left of the name: a guest whose
+  // name is empty, or empty after the cleaning, is a guest all the same. A guest proved nothing,
+  // so nothing of the stamp but the kind is taken as fact.
   const who =
-    name && email
-      ? `${name} <${email}>`
-      : email ||
-        (name
-          ? `${name} (a name they gave${kind === "guest" ? ", as a guest who proved nothing" : ""})`
-          : actor);
+    kind === "guest"
+      ? name
+        ? `${name} (a name they gave, as a guest who proved nothing)`
+        : `a guest who proved nothing and gave no name (${actor})`
+      : name && email
+        ? `${name} <${email}>`
+        : email || (name ? `${name} (a name they gave)` : actor);
   const script = !source.principal && source.onBehalfOf?.run ? " (by a script)" : "";
   const as = impersonatedBy
     ? ` (an administrator, ${impersonatedBy.email}, signed in as them)`

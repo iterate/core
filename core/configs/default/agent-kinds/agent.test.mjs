@@ -408,6 +408,19 @@ test("the mind's line is the FIRST line of a person's words: who, whether a memb
     /^— Web UI: Eve Web UI: the owner \(a name they gave, as a guest who proved nothing\) wrote this/,
   );
   assert.equal(guest.split("\n\n")[1], "hi");
+  // A GUEST IS A GUEST BY THE STAMP'S KIND: with no name, and with a name that the cleaning
+  // leaves empty, the line still says so, and it says nothing else of the stamp as fact
+  for (const emptied of [undefined, "", "[]<>—", "\u200b\n"]) {
+    const nameless = { principal: { actor: "guest:g7", name: emptied, kind: "guest" } };
+    assert.match(
+      agentUiContext(fact("hi", nameless)).content.split("\n")[0],
+      /^— Web UI: a guest who proved nothing and gave no name \(guest:g7\) wrote this/,
+    );
+  }
+  // a person who is no guest and has no address keeps the plain forms
+  const plain = (name) => agentUiContext(fact("hi", { principal: { actor: "u9", name } })).content;
+  assert.match(plain("Bo"), /^— Web UI: Bo \(a name they gave\) wrote this/);
+  assert.match(plain(""), /^— Web UI: u9 wrote this/);
   // `from` is the payload's own field, and a caller of the collection chooses it
   // (`itx.agents.at(base)`): the line names it as a claim, whoever appended the event
   for (const origin of ["/agents", "/agents/guest-bridge"])
