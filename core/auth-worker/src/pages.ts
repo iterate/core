@@ -2,6 +2,7 @@ import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
 import { PLAIN_PAGE_ICON_SRC, plainPageCssHash, standalonePage } from "iterate/standalone-page";
 import { type AskingApp, appTile } from "./asking-app.ts";
 import { clientTile, knownMarkOf, shownLogoOf } from "./client-mark.ts";
+import type { MindMark } from "./mind-mark.ts";
 import { PAGE_TAG_SCRIPT } from "./page-tag.ts";
 
 export { type Fact, factsTable } from "iterate/standalone-page";
@@ -51,6 +52,8 @@ export function page(
     centered?: boolean;
     /** The one origin an image of this page may come from: a verified client's own logo. */
     imageOrigin?: string;
+    /** The mind's own logo in place of iterate's mark (./mind-mark.ts), with its origin. */
+    mindMark?: MindMark | null;
     /** CORE'S PAGE TAG (./page-tag.ts): what people did here and what broke. A page has no tag
      *  until it says `tag: true`, and an answer under a path of `NO_TAG_PATHS` loses it
      *  whatever its builder says (`withoutTag`, ./http.ts). */
@@ -72,7 +75,7 @@ export function page(
         : `style-src ${plainPageCssHash}`,
       // the tag's beacon goes to this origin's `/.page-events`, as a page's own script's calls do
       ...(input.script || input.tag ? [`script-src 'nonce-${nonce}'`, "connect-src 'self'"] : []),
-      `img-src ${PLAIN_PAGE_ICON_SRC}${input.imageOrigin ? ` ${input.imageOrigin}` : ""}`,
+      `img-src ${[PLAIN_PAGE_ICON_SRC, input.imageOrigin, input.mindMark?.origin].filter(Boolean).join(" ")}`,
     ].join("; "),
   );
   headers.set("x-frame-options", "DENY");
@@ -93,6 +96,7 @@ export function page(
       wide: input.wide,
       asker: input.asker,
       mark: input.mark,
+      mindMark: input.mindMark?.html,
       centered: input.centered,
     }),
     {
@@ -141,6 +145,7 @@ export function appSignIn(app: AskingApp, { heading }: { heading?: string } = {}
  *  keeps the passkey's button below. */
 export function signInPage(input: {
   mind: string;
+  mindMark?: MindMark | null;
   next: string;
   app: AskingApp | null;
   offersEmail: boolean;
@@ -184,6 +189,7 @@ export function signInPage(input: {
   return page({
     title: asking?.title || `Sign in to ${mind}`,
     mark: asking?.mark,
+    mindMark: input.mindMark,
     centered: true,
     imageOrigin: asking?.imageOrigin,
     body: `${asking?.heading || `<h1>Sign in to ${text(mind)}</h1>`}
@@ -336,6 +342,7 @@ export const CHOICE_FIELD = "continue-as";
  *  request is that app's own sign-in, and the page says so (`appSignIn`). */
 export function chooserPage(input: {
   mind: string;
+  mindMark?: MindMark | null;
   email: string;
   here: string;
   app?: AskingApp | null;
@@ -358,6 +365,7 @@ export function chooserPage(input: {
     {
       title: asking?.title || `Sign in to ${input.mind}`,
       mark: asking?.mark,
+      mindMark: input.mindMark,
       centered: true,
       imageOrigin: asking?.imageOrigin,
       body: `${asking?.heading || `<h1>Sign in to ${text(input.mind)}</h1>`}
@@ -401,6 +409,7 @@ export function consentPage(input: {
   handle: string;
   email: string;
   mind: string;
+  mindMark?: MindMark | null;
   resource: string;
   /** A host of the mind that the client asks to use: the page names it by that hostname. */
   host?: string;
@@ -424,6 +433,7 @@ export function consentPage(input: {
       // the client's mark beside the mind's: a known client's, or a verified client's own logo
       // (client-mark.ts). A client with neither has no tile: the mind's mark is the card's one.
       asker: knownMarkOf(client) || shownLogoOf(details) ? clientTile(client) : undefined,
+      mindMark: input.mindMark,
       centered: true,
       imageOrigin: shownLogoOf(details)?.origin,
       body: `${

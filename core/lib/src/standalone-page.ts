@@ -71,12 +71,17 @@ export function standalonePage(input: {
   /** The mind that the page is of, by its control-plane hostname: shown beside the mark, so that a
    *  person sees which mind they give a secret or an approval to. Text, escaped here. */
   mind?: string;
+  /** The mind's own logo in place of iterate's mark, as HTML: a tile (plain-page.css `.tile`).
+   *  It is the mind's side of the head where somebody asks for the mind, and the card's one mark
+   *  where no `mark` is given. */
+  mindMark?: string;
 }) {
+  const own = input.mindMark || MARK;
   const head = input.asker
-    ? `<div class="asks">${MARK}<span class="joins" aria-hidden="true"></span>${input.asker}</div>`
+    ? `<div class="asks">${own}<span class="joins" aria-hidden="true"></span>${input.asker}</div>`
     : input.mind
-      ? `<div class="masthead">${MARK}<span class="mind">${escapedText(input.mind)}</span></div>`
-      : input.mark || MARK;
+      ? `<div class="masthead">${own}<span class="mind">${escapedText(input.mind)}</span></div>`
+      : input.mark || own;
   const card = input.wide
     ? ' class="wide"'
     : input.asker || input.centered

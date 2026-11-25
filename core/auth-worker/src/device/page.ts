@@ -7,6 +7,7 @@ import { isMember } from "../members.ts";
 import { clientTile } from "../client-mark.ts";
 import { errorPage, factsTable, notMemberPage, otherAccountForm, page, text } from "../pages.ts";
 import { signedChangeBy, signerOf, signScript } from "../signed-change.ts";
+import { mindMarkOf } from "../mind-mark.ts";
 import { signInHref } from "../sign-in.ts";
 import { CALLBACK_PATH, normalizeUserCode, VERIFICATION_PATH } from "./protocol.ts";
 import { type DeviceRequest, deviceStore } from "./store.ts";
@@ -85,7 +86,7 @@ export async function devicePageResponse(env: Env, request: Request) {
       (device.status === "confirmed" && device.confirmedBy === session.userId));
   if (!found || !waits)
     return enter(mind, userCode, "No device is waiting for this code. It may have expired.");
-  if (request.method === "GET") return confirm(env, userCode, device, session.email);
+  if (request.method === "GET") return await confirm(env, userCode, device, session.email);
 
   // Only Decline declines: Continue with no signature (a page whose script did not run) says
   // what it takes, and the request waits on.
@@ -108,7 +109,13 @@ export async function devicePageResponse(env: Env, request: Request) {
         ? null
         : "the signed statement is for another request.";
   if (refused || "refused" in press)
-    return confirm(env, userCode, device, session.email, `The device is not signed in: ${refused}`);
+    return await confirm(
+      env,
+      userCode,
+      device,
+      session.email,
+      `The device is not signed in: ${refused}`,
+    );
   const facts = new AccountFacts();
   facts.add(session.userId, {
     type: DEVICE_CONFIRMED,
@@ -150,7 +157,13 @@ function enter(mind: string, typed = "", error?: string) {
  *  name is the device's own claim. */
 export const deviceTile = (name: string) => clientTile({ name, redirectUri: "", redirectHost: "" });
 
-function confirm(env: Env, userCode: string, device: DeviceRequest, email: string, error?: string) {
+async function confirm(
+  env: Env,
+  userCode: string,
+  device: DeviceRequest,
+  email: string,
+  error?: string,
+) {
   const mind = configOf(env).controlPlaneHostname;
   const where = [device.requestedFrom.city, device.requestedFrom.country]
     .filter(Boolean)
@@ -168,6 +181,7 @@ function confirm(env: Env, userCode: string, device: DeviceRequest, email: strin
       <p id="status" class="muted" role="status">Your passkey signs this request.</p>
       <div class="muted">Signed in as ${text(email)}. Not you? ${otherAccountForm(`${VERIFICATION_PATH}?${new URLSearchParams({ user_code: userCode })}`)}</div>`;
   const shown = {
+    mindMark: await mindMarkOf(env),
     status: error ? 403 : 200,
     script: `${signScript(mind)}${PRESS_SCRIPT}`,
   };

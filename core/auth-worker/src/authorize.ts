@@ -37,6 +37,7 @@ import {
   mindHostResourceOf,
 } from "./oauth.ts";
 import { isMemberSession } from "./members.ts";
+import { mindMarkOf } from "./mind-mark.ts";
 import { CHOICE_FIELD, chooserPage, consentPage, errorPage, notMemberPage } from "./pages.ts";
 import { signInHref } from "./sign-in.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
@@ -206,6 +207,7 @@ async function describe(env: Env, request: Request, choice?: Choice) {
   if (asked === "select_account")
     return chooserPage({
       mind: config.controlPlaneHostname,
+      mindMark: await mindMarkOf(env),
       email: session.email,
       here,
       // an app's own sign-in says which app, to a person who is no member: a member's page is
@@ -261,6 +263,7 @@ async function describe(env: Env, request: Request, choice?: Choice) {
     handle: consent.handle,
     email: session.email,
     mind: config.controlPlaneHostname,
+    mindMark: await mindMarkOf(env),
     resource: resourceInWords(env, authRequest.resource),
     host: hostResource ? new URL(hostResource).host : undefined,
     here,

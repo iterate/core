@@ -13,6 +13,8 @@
 // commit of those files. The Dash's header and the homepage show the name and the icon, and the
 // icon is every app's too: each app of the template answers it at its own `/icon.svg`, as its
 // favicon and as the icon the mind's sign-in pages show for it (apps/open-files.ts).
+// The mind's own sign-in and consent pages show the icon too, where they showed iterate's mark:
+// the issuer reads `icon` from the profile's route (core/auth-worker/src/mind-mark.ts).
 //
 // THE PROFILE IS NOT THE MIND'S IDENTITY. `/.well-known/iterate` is the mind's signed key history
 // (iterate/mind-identity-log): the platform answers it, this code never gets that path, and its

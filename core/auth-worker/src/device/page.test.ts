@@ -280,7 +280,12 @@ async function stackOf({ device = DEVICE } = {}) {
         statements.map((statement) => statement.counted()),
     },
     OAUTH_KV: {
-      get: async (key: string) => kept.get(key) ?? null,
+      // a mind with no logo of its own, read just now (../mind-mark.ts): no page here asks the
+      // mind's website, which would be a request to the real internet
+      get: async (key: string) =>
+        key === "iterate-mind-mark"
+          ? { icon: null, askAfter: Number.MAX_SAFE_INTEGER }
+          : (kept.get(key) ?? null),
       put: async (key: string, value: string) => void kept.set(key, value),
     },
     // the cast: the device page reads these bindings and no other

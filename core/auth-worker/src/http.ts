@@ -51,6 +51,7 @@ import { outsideReserved, pageEventsResponse, senderOf } from "./page-events.ts"
 import { passkeySignInResponse } from "./passkey-sign-in.ts";
 import { selfTestResponse } from "./self-test.ts";
 import { SESSIONS_PATH, sessionsResponse } from "./sessions-page.ts";
+import { mindMarkOf } from "./mind-mark.ts";
 import { AFTER_SIGN_OUT, SIGN_IN_PATH, signOutResponse } from "./sign-in.ts";
 import { statementDraftsResponse } from "./statement-drafts.ts";
 import { statementsResponse } from "./statements.ts";
@@ -147,6 +148,8 @@ async function answerOf(asked: Request, env: Env, ctx: ExecutionContext) {
     if (methods[0] === "email") return emailAddressPage(env, next, signIn);
     return signInPage({
       mind: configOf(env).controlPlaneHostname,
+      // an app's own sign-in shows the app's icon
+      mindMark: signIn.app ? null : await mindMarkOf(env),
       next,
       app: signIn.app,
       offersEmail: methods.includes("email"),

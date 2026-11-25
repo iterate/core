@@ -108,7 +108,11 @@ export function sqliteStack(config: Partial<MindConfig> = {}) {
       execute,
     };
   };
-  const kv = new Map<string, string>();
+  // A mind with no logo of its own, read just now: no test's page asks the mind's website for
+  // one (./mind-mark.ts), which would be a request to the real internet.
+  const kv = new Map<string, string>([
+    ["iterate-mind-mark", JSON.stringify({ icon: null, askAfter: Number.MAX_SAFE_INTEGER })],
+  ]);
   const mailed: {
     from: { email: string; name: string };
     to: string[];
