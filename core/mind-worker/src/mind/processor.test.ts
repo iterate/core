@@ -125,14 +125,14 @@ test("a commit whose class lacks an abstract method is published, and its worker
   const lacking = mindOf({
     owes: true,
     head: "seed",
-    probed: { ...aConfig, missing: ["email", "processEvent"] },
+    probed: { ...aConfig, missing: ["fetch", "processEvent"] },
   });
   lacking.deliver(lacking.state);
   await lacking.settled();
   expect(lacking.platformFacts.at(-1)).toMatchObject({
     type: "events.iterate.com/mind/worker-updated",
     idempotencyKey: "mind/publication:5",
-    payload: { commitOid: "seed", missing: ["email", "processEvent"] },
+    payload: { commitOid: "seed", missing: ["fetch", "processEvent"] },
   });
   const whole = mindOf({ owes: true, head: "seed", probed: aConfig });
   whole.deliver(whole.state);

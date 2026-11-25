@@ -143,9 +143,10 @@ const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/email/received",
   "events.iterate.com/email/sent",
   "events.iterate.com/email/forward-failed",
-  // what the config's `email` hook did with a mail: a forward, and a hook that did not end well
+  // what became of a request to forward a received mail
   "events.iterate.com/email/forwarded",
-  "events.iterate.com/email/hook-failed",
+  // the place on the log after which no request to forward a mail is served
+  "events.iterate.com/email/forward-requests-closed",
   "events.iterate.com/email/send-failed",
   "events.iterate.com/email/delivery-failed",
   "events.iterate.com/webhook/received",

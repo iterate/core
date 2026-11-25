@@ -3,7 +3,6 @@
 // delivered; and that the worker's `email` hook saves each mail. The worker's reads of the email
 // facet and log are out of scope.
 import { expect, test } from "vitest";
-import Config from "../../configs/default/worker.ts";
 import {
   deliveryFailureNote,
   isMindPeer,
@@ -16,20 +15,6 @@ import {
   type MindMailSettings,
 } from "../../configs/default/mail-replies.ts";
 import { nextMailHops } from "./email.ts";
-
-test("the worker's email hook saves the mail once, and forwards it nowhere", async () => {
-  const did: string[] = [];
-  // the entrypoint's own state is not the hook's: the method is called on a bare instance, and the
-  // cast names the class of the prototype that `Object.create` was given
-  const config = Object.create(Config.prototype) as Config;
-  await config.email({
-    // the cast: the template's hook reads no field of the mail
-    mail: {} as never,
-    save: async () => void did.push("saved"),
-    forward: async (to) => void did.push(`forwarded to ${to}`),
-  });
-  expect(did).toEqual(["saved"]);
-});
 
 const member: MailSender = { verified: true, member: true, direct: true };
 const outsider: MailSender = { verified: true, member: false, direct: true };

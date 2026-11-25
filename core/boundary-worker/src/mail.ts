@@ -1,7 +1,7 @@
 // Pure (binds nothing, calls nobody) and one file, so it can move into the mind whole.
-import { emailForwardedKey, type ForwardableMail } from "iterate/email";
-import { codedError, errorCode, MAIL_HOPS_HEADER, mailHopsOf } from "iterate/lib";
-import type { AuthService, MindTarget, ReceivedEmail } from "iterate/workers";
+import { emailForwardedKey } from "iterate/email";
+import { codedError, MAIL_HOPS_HEADER, mailHopsOf } from "iterate/lib";
+import type { AuthService, ReceivedEmail } from "iterate/workers";
 import PostalMime, { type Address } from "postal-mime";
 import type { MindTransport, PlatformFact } from "./http.ts";
 
@@ -17,188 +17,292 @@ const NOT_FORWARDABLE = "non-authenticated emails cannot be forwarded";
 const FORWARDED_BEFORE =
   "not forwarded: the mail's X-Forwarded-To says it was forwarded to this address before";
 
-/** THE TIME LIMITS OF ONE DELIVERY'S `email` HOOK AND ITS FACTS, side by side. Cloudflare's
- *  `message.forward()` answers 3 to 10 s after the call, though its copy arrives in 1 to 2.5 s.
- *  Cloudflare's own limit for an email handler is not known, so these values are proposed ones.
- *  THE WHOLE HANDLER takes the receipt (step 1) and the fixed forward (step 2), which no limit here
- *  bounds, PLUS the three: 15 + 20 + 5 s.
+/** THE TIME LIMITS OF ONE DELIVERY, side by side. Cloudflare's `message.forward()` answers 3 to
+ *  10 s after the call, though its copy arrives in 1 to 2.5 s. THE WHOLE HANDLER takes the receipt
+ *  (step 1) and the fixed forward (step 2), which no limit here bounds, PLUS the three.
  *
- *  EMAIL_HOOK_MS bounds THE CONFIG'S OWN TIME: its clock stops while a forward that the config
- *  called waits for Cloudflare's answer, since Cloudflare's time is not the config's fault. */
-const EMAIL_HOOK_MS = 15_000;
-/** How much longer, in all, the boundary waits for Cloudflare's answers to the forwards that the
- *  config called: the delivery's hook ends at the latest EMAIL_HOOK_MS + FORWARD_ANSWER_MS after
- *  it began. A forward that is unanswered then is `email/forwarded` with `answered: false`. */
+ *  FORWARD_REQUEST_MS: how long after the receipt the handler stays open for the mind's requests
+ *  to forward this mail (step 3). Cloudflare's `forward` works only while this handler is open,
+ *  so this is the time that the mind's code has to ask. */
+const FORWARD_REQUEST_MS = 10_000;
+/** How much longer the boundary waits for Cloudflare's answers to the forwards that were asked
+ *  for in time. A forward that is unanswered then is `email/forwarded` with `answered: false`. */
 const FORWARD_ANSWER_MS = 20_000;
-/** How long, at most, the boundary waits for the appends of the mail's facts after the forward has
- *  ended, all together. An append that has not answered then is its `mail.*-not-recorded` log line,
- *  and the handler returns: no fact holds it open without a bound. A save still in flight gets a
- *  bound of the same size, at the same time (step 7). */
+/** How long, at most, the boundary waits for the appends of the mail's facts after the forwards
+ *  have ended, all together. An append that has not answered then is its `mail.*-not-recorded`
+ *  log line, and the handler returns: no fact holds it open without a bound. */
 const FACTS_MS = 5_000;
 
 /** THE BOUNDARY'S MAIL HANDLER: a mail that Cloudflare delivers, for an address at any zone of the
- *  mind, goes to the mind, with what the boundary knows of its sender. ONE DELIVERY, IN THIS ORDER
- *  (check the code against it):
+ *  mind, goes on the mind's log, with what the boundary knows of its sender. No code of the mind's
+ *  config runs here: the config gets the mail as the event `email/received`, in `processEvent`.
+ *  ONE DELIVERY, IN THIS ORDER (check the code against it):
  *
- *  THE RULE: a mail is off the log (`email/received` on `/integrations/email`) ONLY when the
- *  config's `email` hook RETURNED without saving it: that is the config's choice. In every other
- *  case in which the mind took no save, nobody chose, and the boundary records the mail itself
- *  (step 6). Its files are kept in every case.
+ *  1. `mind.receiveEmail`: the mind stores the raw `.eml` and each attachment under `/email/`, and
+ *     then appends `email/received` on `/integrations/email` as the platform. A failure here
+ *     fails the delivery, so Cloudflare delivers the mail again; the mind stores each file once
+ *     and takes the same `email/received` once, however often the mail is delivered.
+ *  2. With `MAIL_FORWARD_TO` (the stack's `mail.forwardTo`, the older way), the stack's fixed
+ *     forward, below, is started. It is not awaited before step 3: Cloudflare takes 3 to 10 s to
+ *     answer a forward, and that time must not cost the mind's requests theirs.
+ *  3. THE MIND'S REQUESTS TO FORWARD THIS MAIL. Until FORWARD_REQUEST_MS after the receipt, the
+ *     handler waits for each `email/forward-requested` on `/integrations/email` that names this
+ *     mail's raw file (`mind.emailForwardRequest`), and forwards the original to its address
+ *     through Cloudflare's live `message.forward`. WHICH REQUEST COUNTS:
+ *      - one that names THIS delivery's mail: its `raw` is the raw path of step 1, and it is on
+ *        the log after this mail's `email/received`;
+ *      - one that the mind's config wrote, or a member at the root: its stamp's origin is `/`,
+ *        which the kernel writes and no writer chooses (core/itx/src/caller.ts `stampCaller`). An
+ *        agent's request has its own path there, and gets `email/forward-failed`;
+ *      - ONE ATTEMPT for each mail and address, over every delivery of the mail: the mind
+ *        claims the pair before it hands the request over, and hands over no request whose pair
+ *        is claimed (core/mind-worker/src/integrations/email.ts). So two deliveries of one mail
+ *        cannot both forward it, and a request that is read again at a redelivery is not tried
+ *        again: its first attempt's fact is its answer. A claim whose handler died before it
+ *        called Cloudflare leaves the mail not forwarded, with no fact: at most once, never twice.
+ *      - A DELIVERY THAT REUSES A MESSAGE-ID with another message is served no earlier request:
+ *        the mind answers the receipt's offset only for the message that the log holds, and a
+ *        request authorizes the message that the config read.
+ *     A forward is started and not awaited here, so a second request is taken while Cloudflare
+ *     answers the first. WHEN THE TIME IS UP, the mind closes the mail's requests with a fact,
+ *     `email/forward-requests-closed`, and hands over the requests that are on the log before
+ *     it: a request before that fact is served, and one after it never is. So a writer reads on
+ *     the log whether its request was in time. A mind that cannot be asked is asked again
+ *     while the time lasts; one that could not be asked to the end closed nothing, and that
+ *     fails the delivery (below), but for a mind of an older build, which has no such call.
+ *  4. The forwards that were started are waited for, up to FORWARD_ANSWER_MS. Each that Cloudflare
+ *     answers is `email/forwarded`; each unanswered then is `email/forwarded` with `answered:
+ *     false`; each that Cloudflare refuses is `email/forward-failed`, with its words.
+ *  5. THE BOOKKEEPING: every append of a fact that this delivery started is awaited, all
+ *     together, for at most FACTS_MS. One that has not answered then is its `mail.*-not-recorded`
+ *     log line.
  *
- *  1. `mind.receiveEmail` with the files: the mind stores the raw `.eml` and each attachment under
- *     `/email/`, so the bytes of a mail are kept before any hook runs. It sends no event, except on
- *     a stack with `MAIL_FORWARD_TO`, which records the mail here (below, the fixed forward). A
- *     failure here fails the delivery, so Cloudflare delivers the mail again; the mind stores each
- *     file once, however often the mail is delivered.
- *  2. With `MAIL_FORWARD_TO` (the stack's `mail.forwardTo`, the older way, which goes once the
- *     minds forward in their own `email`), the stack's fixed forward, below.
- *  3. `mind.email`: the config's `email` hook, with the mail, the delivery's save and its forward
- *     (`MailForward`), under the limits above and caught. The save (`saveOf`) is one call of
- *     `mind.receiveEmail` with the events alone, at most once in a delivery, and the mind appends
- *     `email/received` as the platform. The mind answers how the hook ended: "returned", "threw"
- *     or "missing" (iterate/workers `MindTarget.email`); a mind of an older build answers nothing.
- *  4. THE SAVE AND THE FORWARD END at the instant the hook returns or throws, its own time runs
- *     out, or the last deadline passes: one synchronous flag (`MailForward.end`), set in the
- *     callback that sees it, before any await. The last statement before Cloudflare's call, and
- *     before the save's call of the mind, checks the flag and both limits BY THE CLOCK, with
- *     nothing awaited between. A save or a forward after the end throws EXPIRED, and calls
- *     nothing. The mind ends its own side the instant the config's function settles
- *     (core/mind-worker/src/integrations/email-hook.ts).
- *  5. The forwards that the config called before the end are waited for, up to the last deadline.
- *     Each that Cloudflare answers is `email/forwarded`; each unanswered then is `email/forwarded`
- *     with `answered: false`.
- *  6. A hook that ran past its own time is `email/hook-failed` `timeout`, and a mind that could not
- *     be reached for it `unreachable`; the mind records a throw and a config with no `email`
- *     itself. THEN THE RULE: unless the mind answered "returned" before the hook ended, and unless
- *     a save already called the mind, the boundary records the mail itself, by the save's own call
- *     (`saveOf` `record`), and logs `mail.saved-by-the-boundary` with the raw path and why: the
- *     mind's answer ("threw", "missing", "no answer" from an older build), "unreachable" (its call
- *     rejected) or "unanswered" (the hook's time or the last deadline passed first).
- *  7. THE BOOKKEEPING: every append of a fact that this delivery started (steps 2, 5 and 6) is
- *     awaited, all together, for at most FACTS_MS. One that has not answered then is its
- *     `mail.*-not-recorded` log line. An append may start while the hook runs, but none is awaited
- *     before this step: none keeps the forward live, or the handler open past FACTS_MS. AT THE
- *     SAME TIME, the record (a save's or the boundary's), if the mind has not answered it yet, is
- *     awaited under a bound of its own of the same size (FACTS_MS). The two bounds run together,
- *     so the handler's longest time stays the same; the record has its own because its outcome
- *     fails the delivery, and a fact's never does. A record unanswered at its bound is the log
- *     line `mail.save-not-answered`, with the raw path.
- *  8. A RECORD THAT THE MIND DID NOT TAKE FAILS THE DELIVERY: its call rejected, or it is
- *     unanswered at its bound. The handler throws after step 7, so the appends of the mail's facts
- *     are awaited first, and Cloudflare delivers the mail again. The mind takes the same
- *     `email/received` once, however often it is recorded. A save refused as EXPIRED made no call
- *     of the mind, and fails nothing. Otherwise the handler returns: the config's own failures,
- *     its time and an unreachable mind fail no delivery by themselves.
+ *  THE DELIVERY FAILS ONLY when step 1 fails, when the fixed forward is refused (below), or when
+ *  the mind could not be asked for its requests to the end. The last two are said after step 4:
+ *  the requests of that delivery are served first, each once, and the next delivery serves the
+ *  rest.
+ *  Nothing that the mind's code asks for, or fails to ask for, fails a delivery.
  *
- *  THE DELIVERY FAILS ONLY when step 1 fails, when the fixed forward is refused (below), or in
- *  step 8.
+ *  ONE `email/received` FOR EACH MAIL holds by the mail's key: its Message-ID and the address it
+ *  reached. A mail with no Message-ID is keyed by its bytes (`parseEmail`): delivered again with
+ *  another transit header, it is a second mail, with a second raw file.
  *
- *  WHAT A FAILED DELIVERY CAN DOUBLE. A delivery that fails in step 8 is delivered again, and the
- *  hook runs again. Two things hold only as far as their keys do:
- *   - ONE `email/received` FOR EACH MAIL holds by the mail's key: its Message-ID and the address
- *     it reached. A mail with no Message-ID is keyed by its bytes (`parseEmail`). When its record
- *     landed, the answer was lost, and Cloudflare delivers it again with another transit header,
- *     its bytes are other bytes: the mind takes it as a second mail, with a second raw file.
- *   - ONE FORWARD FOR EACH MAIL AND ADDRESS holds by the mind's SENT mark, which is written after
- *     Cloudflare accepted (core/mind-worker/src/integrations/email-hook.ts). When the link to the
- *     mind breaks after Cloudflare accepted a forward that the config called, the mark does not
- *     land, the record on that link fails too, and the delivery fails: the redelivery's hook
- *     finds no mark and forwards a second copy. A second copy is better than a lost mail.
- *
- *  THE MAIL'S FACTS (`email/forwarded`, `email/forward-failed`, `email/hook-failed`) each carry an
- *  idempotency key. For a mind that runs elsewhere and is away, or whose link breaks under the
- *  append, the boundary's `ProvidedMind` keeps each and appends it when the mind is back
+ *  THE MAIL'S FACTS (`email/forwarded`, `email/forward-failed`) each carry an idempotency key.
+ *  For a mind that runs elsewhere and is away, or whose link breaks under the append, the
+ *  boundary's `ProvidedMind` keeps each and appends it when the mind is back
  *  (./provided-mind.ts). A fact that the mind refuses, or that the stack's own mind Worker does
  *  not take, is a `mail.*-not-recorded` log line, and changes nothing of the delivery.
  *
- *  A STACK WITH `MAIL_FORWARD_TO` RECORDS EVERY MAIL in step 1, whatever its config's hook does:
- *  the hook's save then finds it recorded, and calls the mind no more. Two reasons. A record
- *  after the forward could fail the delivery after the copy went, and the redelivery would
- *  forward a second copy. And a refused fixed forward fails the delivery before the hook runs, so
- *  a mail not recorded before it would reach no log.
- *
- *  THE STACK'S FIXED FORWARD goes through the same `MailForward`, so it records `email/forwarded`
- *  and a hook's forward of the same mail to the same address then throws FORWARDED_BEFORE. It
- *  reads no fact and no mark itself: AT ANY REDELIVERY that passes the `X-Forwarded-To` guard, it
- *  forwards again, as on main. What it does to the delivery is as it was: a forward that fails is
- *  a fact on the mind's email log, `email/forward-failed`, with Cloudflare's words. A mail whose
- *  sender is not proven is kept and not forwarded, and the delivery stands. Any other failure (an
- *  address that is not a verified destination, or that refuses) fails the delivery too, so its
- *  sender gets it back: while it lasts, every mail to the mind fails for its sender, and no hook
- *  runs. */
+ *  THE STACK'S FIXED FORWARD goes through the same `MailForward`, so it records `email/forwarded`,
+ *  and a request for the same address then forwards nothing more. It takes the same claim as a
+ *  request's forward (`fixedForward`): once for the mail, over every delivery, and a forward
+ *  that Cloudflare refused gives the claim back, so the next delivery tries again. Its answer is
+ *  waited for as a request's is (step 4): one that Cloudflare has not answered by then fails no
+ *  delivery. A forward that fails is
+ *  `email/forward-failed`, with Cloudflare's words. A mail whose sender is not proven is kept and
+ *  not forwarded, and the delivery stands. Any other failure (an address that is not a verified
+ *  destination, or that refuses) fails the delivery too, so its sender gets it back: while it
+ *  lasts, every mail to the mind fails for its sender. */
 export async function receivedMail(
   message: ForwardableEmailMessage,
   env: { AUTH: Pick<AuthService, "isMember">; MAIL_FORWARD_TO?: string },
-  mind: Pick<MindTransport, "receiveEmail" | "append" | "email" | "appendOrKeep">,
-  limits: HookLimits = { hookMs: EMAIL_HOOK_MS, forwardAnswerMs: FORWARD_ANSWER_MS },
+  mind: Pick<
+    MindTransport,
+    "receiveEmail" | "append" | "appendOrKeep" | "emailForwardRequest" | "emailForwardClaim"
+  >,
+  limits: { requestMs: number; forwardAnswerMs: number; factsMs: number } = {
+    requestMs: FORWARD_REQUEST_MS,
+    forwardAnswerMs: FORWARD_ANSWER_MS,
+    factsMs: FACTS_MS,
+  },
 ) {
-  // step 1
-  const { received, mail } = await parseEmail({
+  const { received, rawPath, messageId } = await parseEmail({
     from: message.from,
     to: message.to,
     raw: message.raw,
     isMember: (address) => env.AUTH.isMember(address),
   });
-  const recordedFirst = !!env.MAIL_FORWARD_TO;
-  await mind.receiveEmail({
-    events: recordedFirst ? received.events : [],
-    files: received.files,
-  });
+  // step 1
+  const kept = await mind.receiveEmail(received);
+  const requestsUntil = Date.now() + limits.requestMs;
   // `canBeForwarded` is on Cloudflare's message, and not yet in its types (workerd#8290); absent
   // (a local runtime), the forward finds out.
   const { canBeForwarded } = message as ForwardableEmailMessage & { canBeForwarded?: boolean };
-  const forwarding = new MailForward(message, mind, mail, canBeForwarded !== false);
-  const saving = saveOf(forwarding, mind, received, mail.raw.path, recordedFirst);
+  const forwarding = new MailForward(
+    message,
+    mind,
+    { rawPath, messageId, received: kept?.offset },
+    canBeForwarded !== false,
+  );
   try {
     // step 2
-    if (env.MAIL_FORWARD_TO)
-      await fixedForward(forwarding, message, mail.raw.path, env.MAIL_FORWARD_TO);
-    // steps 3 to 6
-    const settled = await hook(mind, forwarding, mail.raw.path, limits, {
-      mail: { ...mail, canBeForwarded: canBeForwarded !== false },
-      // Functions of this invocation's: Workers RPC and capnweb each pass them as stubs.
-      save: saving.save,
-      forward: (to) => forwarding.forward(to),
-    });
-    // step 6: only a hook that returned chose; for any other end, the boundary records
-    const why =
-      settled === "unsettled"
-        ? "unanswered"
-        : "unreachable" in settled
-          ? "unreachable"
-          : settled.answer === "returned"
-            ? null
-            : String(settled.answer ?? "no answer");
-    if (why && saving.record())
-      console.info({
-        event: "mail.saved-by-the-boundary",
-        namespace: "boundary",
-        message: "no config chose to leave the mail off the log, so the boundary records it",
-        raw: mail.raw.path,
-        why,
-      });
+    const fixed = env.MAIL_FORWARD_TO
+      ? fixedForward(forwarding, mind, rawPath, env.MAIL_FORWARD_TO, !kept, limits.factsMs)
+      : undefined;
+    // step 3
+    const notAsked = await forwardRequests(forwarding, mind, rawPath, kept?.offset, requestsUntil);
+    // step 4
+    const answersUntil = Date.now() + limits.forwardAnswerMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refused = await Promise.race([
+      fixed,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), limits.forwardAnswerMs);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    await forwarding.answered(answersUntil);
+    if (refused) throw refused;
+    // A mind of this build (it answered the mail's offset) that could not be asked to the end
+    // has not closed the mail's requests: the delivery fails, so that Cloudflare delivers the
+    // mail again and that delivery serves them. A mind of an older build has no such call, and
+    // its mail must not fail for that.
+    if (notAsked && kept) throw notAsked.error;
   } finally {
-    // step 4 once more, for a fixed forward that failed the delivery; then step 7
     forwarding.end();
-    const factsMs = limits.factsMs ?? FACTS_MS;
-    await Promise.all([forwarding.recorded(factsMs), saving.answered(factsMs)]);
+    // step 5
+    await forwarding.recorded(limits.factsMs);
   }
-  // step 8
-  const failed = saving.failed();
-  if (failed) throw failed.error;
 }
 
-/** THE FORWARD OF ONE DELIVERY, Cloudflare's live `message.forward`, wrapped: it forwards the
- *  original as it arrived, records `email/forwarded`, or throws a coded error (iterate/email
- *  `EmailHookArgs`). It refuses an address that it forwarded this mail to already in this
- *  delivery, or that the mail's `X-Forwarded-To` names: an address that leads back here ends at
- *  its second visit. Cloudflare writes one such header line for each forward, the address bare,
- *  and keeps the earlier lines and one that the sender wrote. The mind refuses an address that an
- *  earlier delivery's SENT mark names (core/mind-worker/src/integrations/email-hook.ts). */
+/** Step 2: the stack's fixed forward, once for the mail over every delivery of it. It takes the
+ *  claim of the mail and the address first, as a request's forward does; a claim that an earlier
+ *  delivery or a request holds means that the mail went there, or is going. A forward that
+ *  Cloudflare refuses gives the claim back, so that the next delivery tries again, and answers
+ *  Cloudflare's error. A claim that cannot be asked for is no claim: Cloudflare is not called,
+ *  and the error is answered, which fails the delivery, so that the next one asks again. Only
+ *  for a mind of an older build (`olderMind`: it answered no offset for the mail), which has no
+ *  such call, the forward goes as it always did. The claim is waited for `claimMs` at most. */
+async function fixedForward(
+  forwarding: MailForward,
+  mind: Pick<MindTransport, "emailForwardClaim">,
+  raw: string,
+  to: string,
+  olderMind: boolean,
+  claimMs: number,
+): Promise<unknown> {
+  // THE CLAIM HAS A BOUND OF ITS OWN, so that a claim call that hangs is never taken for a
+  // forward that Cloudflare has not answered yet: no answer in time is an error of the claim,
+  // which fails the delivery.
+  // this delivery's own word: only the delivery that took a claim gives it back
+  const owner = crypto.randomUUID();
+  const asked = mind.emailForwardClaim({ raw, to, owner });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let claimed: boolean;
+  try {
+    claimed = await Promise.race([
+      asked,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              codedError(
+                "TIMEOUT",
+                `the mind did not answer the claim of the forward to ${to} within ${claimMs} ms`,
+              ),
+            ),
+          claimMs,
+        );
+      }),
+    ]).finally(() => clearTimeout(timer));
+  } catch (error) {
+    // THE CLAIM MAY HAVE LANDED ALL THE SAME (its answer was lost, or comes after the bound), and
+    // Cloudflare was not called: so it is given back, at once and again when a late answer
+    // comes. The mind gives back only a claim that this delivery took: a claim of another
+    // delivery, which may have forwarded, stays. A claim that stays held after that (the release failed too) keeps the mail from
+    // this address at the next delivery: at most once, never twice.
+    const release = () => mind.emailForwardClaim({ raw, to, owner, release: true });
+    // ONE RELEASE AT A TIME: the second starts only when the first has ended, and then finds
+    // the owner's row gone or there, never half gone.
+    const first = release().catch(() => {});
+    void asked
+      .then(
+        (late) => late,
+        () => false,
+      )
+      .then(async (late) => {
+        await first;
+        if (late) await release();
+      })
+      .catch(() => {});
+    if (!olderMind) return error;
+    claimed = true;
+  }
+  if (!claimed) return;
+  const refused = await forwarding.forward(to);
+  if (refused)
+    await mind.emailForwardClaim({ raw, to, owner, release: true }).catch((error: unknown) =>
+      console.error({
+        event: "mail.forward-claim-not-released",
+        namespace: "boundary",
+        message: "a refused forward keeps its claim, so the next delivery does not try it again",
+        raw,
+        to,
+        error: String(error),
+      }),
+    );
+  return refused;
+}
+
+/** Step 3: each request of the mind to forward this mail, until `until`. Nothing here throws. An
+ *  ask that fails is made again while the time lasts, half a second later, and once more when it
+ *  is up; it answers the last error when the mind could not be asked to the end. */
+async function forwardRequests(
+  forwarding: MailForward,
+  mind: Pick<MindTransport, "emailForwardRequest">,
+  raw: string,
+  receivedOffset: number | undefined,
+  until: number,
+) {
+  let afterOffset = receivedOffset;
+  for (;;) {
+    // Asked also when the time is up: the mind then closes the mail's requests on its log, and
+    // answers null after the last request that came before that (`emailForwardRequest`).
+    const timeoutMs = Math.max(0, until - Date.now());
+    let request: Awaited<ReturnType<MindTransport["emailForwardRequest"]>>;
+    try {
+      request = await mind.emailForwardRequest({ raw, afterOffset, timeoutMs });
+    } catch (error) {
+      if (timeoutMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(500, timeoutMs)));
+        continue;
+      }
+      console.error({
+        event: "mail.forward-requests-not-read",
+        namespace: "boundary",
+        message: "the mind could not be asked for its requests to forward a mail",
+        raw,
+        error: String(error),
+      });
+      return { error };
+    }
+    if (!request) return;
+    afterOffset = request.offset;
+    const to = typeof request.to === "string" ? request.to.trim() : "";
+    if (!to) continue;
+    if (request.origin !== "/") {
+      // Under a key of the request's own: this refusal must not take the place of the fact that
+      // answers the config's own request for the same address.
+      forwarding.failed(
+        to,
+        `not forwarded: only the mind's config, at /, asks for a forward, and ${request.origin} asked`,
+        `request-${request.offset}`,
+      );
+      continue;
+    }
+    // Not awaited: Cloudflare answers in 3 to 10 s, and the next request is taken meanwhile.
+    void forwarding.forward(to);
+  }
+}
+
+/** THE FORWARDS OF ONE DELIVERY, through Cloudflare's live `message.forward`: each sends the
+ *  original as it arrived, and ends as a fact on the mind's email log, `email/forwarded` or
+ *  `email/forward-failed`. It forwards to an address once: a second call for an address that this
+ *  delivery forwarded to, or is forwarding to, does nothing. It refuses an address that the mail's
+ *  `X-Forwarded-To` names: an address that leads back here ends at its second visit. Cloudflare
+ *  writes one such header line for each forward, the address bare, and keeps the earlier lines
+ *  and one that the sender wrote. */
 class MailForward {
   #live = true;
-  /** Step 4 by the clock: a limit of the hook has passed, whether or not its timer has run. */
-  pastLimits: () => boolean = () => false;
   readonly #sent = new Set<string>();
   /** Each forward that Cloudflare has not answered yet, by address. */
   readonly #inFlight = new Map<string, Promise<unknown>>();
@@ -207,18 +311,17 @@ class MailForward {
   /** The appends of the mail's facts that this delivery started and that have not answered: each
    *  with the log line that says that it did not land. */
   readonly #facts = new Set<PendingFact>();
-  /** Told whether a forward waits for Cloudflare: the hook's clock stops while one does. */
-  onWaiting: (waiting: boolean) => void = () => {};
   readonly #forwardedBefore: string[];
   readonly #message: ForwardableEmailMessage;
   readonly #mind: FactsMind;
-  readonly #mail: { raw: { path: string }; messageId: string | null };
+  /** `received`: the offset of the mail's `email/received`, which each fact names. */
+  readonly #mail: { rawPath: string; messageId: string | null; received?: number };
   readonly #canBeForwarded: boolean;
 
   constructor(
     message: ForwardableEmailMessage,
     mind: FactsMind,
-    mail: { raw: { path: string }; messageId: string | null },
+    mail: { rawPath: string; messageId: string | null; received?: number },
     canBeForwarded: boolean,
   ) {
     this.#message = message;
@@ -231,21 +334,22 @@ class MailForward {
       .map((address) => address.trim());
   }
 
-  async forward(to: string) {
+  /** It never throws. It answers Cloudflare's error when Cloudflare refused the forward for
+   *  another reason than an unproven sender: the one failure that the stack's fixed forward fails
+   *  the delivery for. */
+  async forward(to: string): Promise<unknown> {
     const address = to.trim().toLowerCase();
+    if (this.#sent.has(address) || this.#inFlight.has(address)) return;
     if (!this.#canBeForwarded)
-      throw codedError(
-        "NOT_FORWARDABLE",
+      return this.failed(
+        to,
         "not forwarded: Cloudflare forwards no mail whose sender it did not prove",
       );
-    if (this.#forwardedBefore.includes(address))
-      throw codedError("FORWARDED_BEFORE", FORWARDED_BEFORE);
-    if (this.#sent.has(address) || this.#inFlight.has(address))
-      throw codedError("FORWARDED_BEFORE", `not forwarded: this mail went to ${to} before`);
+    if (this.#forwardedBefore.includes(address)) return this.failed(to, FORWARDED_BEFORE);
     // THE LAST CHECK BEFORE CLOUDFLARE'S CALL, with nothing awaited between them.
-    if (!this.#live || this.pastLimits())
-      throw codedError(
-        "EXPIRED",
+    if (!this.#live)
+      return this.failed(
+        to,
         "not forwarded: the mail's delivery has ended, and with it the message to forward",
       );
     const answer = (async () => this.#message.forward(to))();
@@ -253,57 +357,74 @@ class MailForward {
       address,
       answer.catch(() => {}),
     );
-    this.onWaiting(true);
     try {
       await answer;
     } catch (error) {
-      const words = error instanceof Error ? error.message : String(error);
-      throw codedError(words.includes(NOT_FORWARDABLE) ? "NOT_FORWARDABLE" : "REFUSED", words);
+      // The fact gives Cloudflare's own words, whole: a reader matches on them.
+      const words = String(error);
+      if (!this.#unanswered.has(address)) this.failed(to, words);
+      return words.includes(NOT_FORWARDABLE) ? undefined : error;
     } finally {
       this.#inFlight.delete(address);
-      this.onWaiting(this.#inFlight.size > 0);
     }
     this.#sent.add(address);
     // The boundary gave up on this answer and recorded that it did not come.
     if (this.#unanswered.has(address)) return;
-    // Cloudflare accepted the forward, and its caller is told at once (the mind writes its SENT
-    // mark on that answer). The fact's append is bookkeeping, awaited in step 7.
     this.#recordForwarded(to);
   }
 
-  /** Waits until Cloudflare has answered every forward in flight, or until `deadline`. */
+  /** Step 4: waits until Cloudflare has answered every forward in flight, or until `deadline`.
+   *  THEN THE BOUNDARY GIVES UP ON THE FORWARDS STILL IN FLIGHT: each is `email/forwarded` with
+   *  `answered: false`, under the same key, so that no reader takes the mail for not sent. */
   async answered(deadline: number) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       Promise.all(this.#inFlight.values()),
       new Promise((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now())))),
     ]).finally(() => clearTimeout(timer));
-  }
-
-  /** THE BOUNDARY GIVES UP ON THE FORWARDS IN FLIGHT: each is `email/forwarded` with `answered:
-   *  false`, under the same key, so that no reader takes the mail for not sent. It is no SENT
-   *  mark: Cloudflare may still reject, and then a later delivery forwards there again. */
-  giveUp() {
     for (const [address] of this.#inFlight) {
       this.#unanswered.add(address);
       this.#recordForwarded(address, { answered: false });
     }
-    return this.#unanswered.size;
+  }
+
+  /** `email/forward-failed` for one address, with why. One for each mail and address, and one
+   *  more for each `keyed`. */
+  failed(forwardTo: string, error: string, keyed?: string): undefined {
+    const payload = {
+      to: this.#message.to,
+      forwardTo,
+      messageId: this.#message.headers.get("message-id"),
+      raw: this.#mail.rawPath,
+      ...(this.#mail.received !== undefined && { received: this.#mail.received }),
+    };
+    this.#record(
+      {
+        type: "events.iterate.com/email/forward-failed",
+        idempotencyKey: `email/forward-failed:${this.#mail.rawPath}:${forwardTo.trim().toLowerCase()}${keyed ? `:${keyed}` : ""}`,
+        payload: { ...payload, error },
+      },
+      {
+        event: "mail.forward-failed-not-recorded",
+        message: "a forward failed, and the mind did not take the fact that says so",
+        ...payload,
+        error,
+      },
+    );
   }
 
   #recordForwarded(to: string, unanswered?: { answered: false }) {
     const payload = {
       to,
-      raw: this.#mail.raw.path,
+      raw: this.#mail.rawPath,
       messageId: this.#mail.messageId,
+      ...(this.#mail.received !== undefined && { received: this.#mail.received }),
       ...unanswered,
     };
-    // The forward happened, or was handed to Cloudflare: a fact that the mind does not take is
-    // logged, and changes nothing.
-    this.record(
+    this.#record(
       {
         type: "events.iterate.com/email/forwarded",
-        idempotencyKey: emailForwardedKey(this.#mail.raw.path, to),
+        idempotencyKey: emailForwardedKey(this.#mail.rawPath, to),
         payload,
       },
       {
@@ -314,9 +435,9 @@ class MailForward {
     );
   }
 
-  /** STARTS ONE APPEND OF A FACT OF THE MAIL, awaited in step 7 (`recorded`). A fact that the mind
+  /** STARTS ONE APPEND OF A FACT OF THE MAIL, awaited in step 5 (`recorded`). A fact that the mind
    *  does not take, or does not answer for in time, is `notRecorded`, logged once. */
-  record(
+  #record(
     fact: PlatformFact,
     notRecorded: { event: string; message: string; [field: string]: unknown },
   ) {
@@ -335,8 +456,8 @@ class MailForward {
     this.#facts.add(pending);
   }
 
-  /** Step 7: waits for every append that `record` started, for at most `ms` in all; each one that
-   *  has not answered then is its log line. */
+  /** Step 5: waits for every append that `#record` started, for at most `ms` in all; each one
+   *  that has not answered then is its log line. */
   async recorded(ms: number) {
     const until = Date.now() + ms;
     while (this.#facts.size > 0 && Date.now() < until) {
@@ -350,205 +471,14 @@ class MailForward {
       pending.notRecorded(`the mind did not answer within ${ms} ms`);
   }
 
-  /** Step 4: from now on `forward` throws EXPIRED. */
+  /** From now on a forward is `email/forward-failed`: the delivery has ended. */
   end() {
     this.#live = false;
   }
-
-  /** Not yet ended, and no limit of the hook passed by the clock: the delivery's `save` checks it,
-   *  as `forward` checks the same before Cloudflare's call. */
-  get live() {
-    return this.#live && !this.pastLimits();
-  }
-}
-
-/** THE RECORD OF ONE DELIVERY'S MAIL: one call of the mind, `mind.receiveEmail` with the events
- *  alone (step 1 stored the files), which appends `email/received` as the platform. The mind
- *  takes the same `email/received` once, however often a mail is recorded. Two callers share the
- *  one call: the config's `save` (iterate/email `EmailHookArgs.save`), and the boundary's own
- *  `record` (step 6). `save` lives as the delivery's forward does: after step 4 it throws EXPIRED
- *  and calls nothing. A call that rejects rejects in the hook, and is also `failed()`, which fails
- *  the delivery in step 8. `answered` is step 7's wait for a call still in flight; one unanswered
- *  at its bound is `failed()` too. `recordedFirst`: step 1 recorded the mail already (a stack with
- *  `MAIL_FORWARD_TO`), so the record is taken and nothing calls the mind again. */
-function saveOf(
-  forwarding: MailForward,
-  mind: Pick<MindTransport, "receiveEmail">,
-  received: ReceivedEmail,
-  raw: string,
-  recordedFirst: boolean,
-) {
-  let call = recordedFirst ? Promise.resolve() : undefined;
-  let failure: { error: unknown } | undefined;
-  const start = () =>
-    (call ||= mind.receiveEmail({ events: received.events, files: [] }).catch((error: unknown) => {
-      failure ||= { error };
-      throw error;
-    }));
-  return {
-    save: async () => {
-      if (!forwarding.live)
-        throw codedError(
-          "EXPIRED",
-          "not saved: the mail's delivery has ended, and with it its save",
-        );
-      await start();
-    },
-    /** Step 6: the boundary records the mail itself, by the same call; its failure is
-     *  `failed()`, as a save's is. True when this started the call: no save had. */
-    record() {
-      const started = !call;
-      start().catch(() => {});
-      return started;
-    },
-    async answered(ms: number) {
-      if (!call) return;
-      let settled = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        call.then(
-          () => (settled = true),
-          () => (settled = true),
-        ),
-        new Promise((resolve) => (timer = setTimeout(resolve, ms))),
-      ]).finally(() => clearTimeout(timer));
-      if (settled) return;
-      const message = `the mind did not answer the mail's save within ${ms} ms`;
-      console.error({ event: "mail.save-not-answered", namespace: "boundary", message, raw });
-      failure ||= { error: codedError("TIMEOUT", `not saved: ${message}`) };
-    },
-    failed: () => failure,
-  };
 }
 
 /** One append of a fact of the mail that has not answered yet. */
 type PendingFact = { landed: Promise<void>; notRecorded(appendError: string): void };
-
-/** The stack's `mail.forwardTo`, through the delivery's forward. Its failure is an
- *  `email/forward-failed` fact; only a refusal for another reason than an unproven sender or an
- *  earlier forward fails the delivery. Such a stack records every mail in step 1, before this,
- *  whatever its config's hook does: the forward must not go twice, and a refused forward must not
- *  cost the mail its place on the log. */
-async function fixedForward(
-  forwarding: MailForward,
-  message: ForwardableEmailMessage,
-  raw: string,
-  forwardTo: string,
-) {
-  try {
-    await forwarding.forward(forwardTo);
-  } catch (error) {
-    const code = errorCode(error);
-    const payload = { to: message.to, forwardTo, messageId: message.headers.get("message-id") };
-    // Cloudflare's words as the fact has always given them; the guard's own words bare.
-    const words =
-      code === "FORWARDED_BEFORE" && error instanceof Error ? error.message : String(error);
-    // The fact never changes what becomes of the delivery: an append that the mind refuses is
-    // logged. Awaited in step 7, also when the delivery fails.
-    forwarding.record(
-      {
-        type: "events.iterate.com/email/forward-failed",
-        idempotencyKey: `email/forward-failed:${raw}:${forwardTo.trim().toLowerCase()}`,
-        payload: { ...payload, error: words },
-      },
-      {
-        event: "mail.forward-failed-not-recorded",
-        message: "a forward failed, and the mind did not take the fact that says so",
-        ...payload,
-        error: words,
-      },
-    );
-    if (code === "REFUSED") throw error;
-  }
-}
-
-/** The hook's two limits (`EMAIL_HOOK_MS`, `FORWARD_ANSWER_MS`) and the facts' (`FACTS_MS`, when
- *  absent); a test passes its own. */
-type HookLimits = { hookMs: number; forwardAnswerMs: number; factsMs?: number };
-
-/** How the mind's `email` call settled, if it did before the hook ended: its answer, or its
- *  rejection; "unsettled" when the hook's time ran out first. */
-type MindAnswer = { answer: unknown } | { unreachable: unknown } | "unsettled";
-
-/** The config's `email` hook, under its limits. Nothing the config does here fails the delivery:
- *  a hook that runs past its own time, or a mind that could not be reached for it, is an
- *  `email/hook-failed` fact, logged when the mind does not take it; the caller decides from the
- *  mind's answer whether the boundary records the mail (step 6). The config's clock runs only while no
- *  forward waits for Cloudflare. A forward still in flight when the hook ends (it returned, threw
- *  or ran out of time) is waited for, up to the last deadline; one unanswered then is ONE fact,
- *  the forward's own (`MailForward.giveUp`), and no `timeout`: the config did not overrun. */
-async function hook(
-  mind: Pick<MindTarget, "email">,
-  forwarding: MailForward,
-  raw: string,
-  { hookMs, forwardAnswerMs }: HookLimits,
-  args: Parameters<MindTarget["email"]>[0],
-): Promise<MindAnswer> {
-  const deadline = Date.now() + hookMs + forwardAnswerMs;
-  type Ended = { why: "timeout" | "unreachable"; error: string } | "gave-up" | null;
-  let settled: MindAnswer = "unsettled";
-  // Step 4: whichever of the three comes first ends the forward in its own callback, before any
-  // await of this function's runs again. Only the first counts.
-  let done = false;
-  let finish!: (ended: Ended) => void;
-  const ending = new Promise<Ended>((resolve) => {
-    finish = (ended) => {
-      if (done) return;
-      done = true;
-      forwarding.end();
-      resolve(ended);
-    };
-  });
-  const clock = new HookClock(hookMs, () =>
-    finish({ why: "timeout", error: `the hook did not end within ${hookMs} ms of its own` }),
-  );
-  forwarding.onWaiting = (waiting) => (waiting ? clock.stop() : clock.start());
-  forwarding.pastLimits = () => Date.now() >= deadline || clock.spent();
-  const last = setTimeout(() => finish("gave-up"), Math.max(0, deadline - Date.now()));
-  // step 3
-  mind.email(args).then(
-    (answer) => {
-      if (!done) settled = { answer };
-      finish(null);
-    },
-    (error: unknown) => {
-      if (!done) settled = { unreachable: error };
-      finish({ why: "unreachable", error: String(error) });
-    },
-  );
-  const ended = await ending;
-  forwarding.onWaiting = () => {};
-  clock.stop();
-  clearTimeout(last);
-  // step 5
-  await forwarding.answered(deadline);
-  const unanswered = forwarding.giveUp();
-  // step 6
-  const failed =
-    ended === "gave-up"
-      ? unanswered > 0
-        ? null
-        : {
-            why: "timeout" as const,
-            error: `the hook and its forwards did not end within ${hookMs + forwardAnswerMs} ms`,
-          }
-      : ended;
-  if (!failed) return settled;
-  const payload = { ...failed, raw };
-  forwarding.record(
-    {
-      type: "events.iterate.com/email/hook-failed",
-      idempotencyKey: `email/hook-failed:${failed.why}:${raw}`,
-      payload,
-    },
-    {
-      event: "mail.hook-failed-not-recorded",
-      message: "the config's email hook failed, and the mind did not take the fact that says so",
-      ...payload,
-    },
-  );
-  return settled;
-}
 
 /** Where the boundary appends the mail's facts: the mind, and the object that keeps them for a
  *  mind that runs elsewhere and is away. */
@@ -561,48 +491,12 @@ function appendFact(mind: FactsMind, fact: PlatformFact) {
   return mind.appendOrKeep ? mind.appendOrKeep(EMAIL_PATH, fact) : mind.append(EMAIL_PATH, [fact]);
 }
 
-/** THE CONFIG'S OWN CLOCK: `ranOut` is called when it has run `ms` in all; `stop` and `start`
- *  pause it while a forward waits for Cloudflare. */
-class HookClock {
-  #left: number;
-  #since: number | undefined;
-  #timer: ReturnType<typeof setTimeout> | undefined;
-  readonly #ranOut: () => void;
-
-  constructor(ms: number, ranOut: () => void) {
-    this.#left = ms;
-    this.#ranOut = ranOut;
-    this.start();
-  }
-
-  start() {
-    if (this.#since !== undefined) return;
-    this.#since = Date.now();
-    this.#timer = setTimeout(this.#ranOut, this.#left);
-  }
-
-  /** The config's own time has run out by the clock, whether or not the timer has run. */
-  spent() {
-    return this.#left <= (this.#since === undefined ? 0 : Date.now() - this.#since);
-  }
-
-  stop() {
-    if (this.#since === undefined) return;
-    clearTimeout(this.#timer);
-    this.#left = Math.max(0, this.#left - (Date.now() - this.#since));
-    this.#since = undefined;
-  }
-}
-
 async function parseEmail(input: {
   from: string;
   to: string;
   raw: ReadableStream<Uint8Array> | ArrayBuffer;
   isMember: (address: string) => Promise<boolean>;
-}): Promise<{
-  received: ReceivedEmail;
-  mail: Omit<ForwardableMail, "canBeForwarded"> & { raw: { path: string } };
-}> {
+}): Promise<{ received: ReceivedEmail; rawPath: string; messageId: string | null }> {
   const raw = new Uint8Array(await new Response(input.raw).arrayBuffer());
   const email = await PostalMime.parse(raw);
   const messageId = bareMessageIdsOf(email.messageId)[0] ?? null;
@@ -683,7 +577,7 @@ async function parseEmail(input: {
       })),
     ],
   };
-  return { received, mail };
+  return { received, rawPath, messageId };
 }
 
 // Chunks of at most 1 MiB: over capnweb each chunk is one WebSocket message, in base64, and a message

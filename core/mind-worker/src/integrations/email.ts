@@ -25,19 +25,24 @@ import {
 } from "iterate/lib";
 import { type MindConfig, controlPlaneOriginOf, zoneOfMailAddress } from "iterate/mind-config";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
-import type { Door, ReceivedEmail } from "iterate/workers";
+import type { Door, MindTarget, ReceivedEmail } from "iterate/workers";
 import { z } from "zod";
 import { hopCaller } from "../context/hop-caller.ts";
 
 export const EMAIL_PATH = "/integrations/email";
 
 /** Files first, so the fact never names a file that is not there. A redelivery's fact differs in
- *  the fields Cloudflare stamps anew (Received, ARC): IDEMPOTENCY_CONFLICT means recorded. */
+ *  the fields Cloudflare stamps anew (Received, ARC): IDEMPOTENCY_CONFLICT means recorded, and
+ *  names the offset of the first delivery's fact. It answers the offset of the mail's
+ *  `email/received`, and for a delivery under a key that the log holds only when it is the same
+ *  message (`sameMessage`): anyone can send another message under a known Message-ID, and the
+ *  requests to forward the first one are not for it. */
 export async function receiveEmail(
   files: R2Bucket,
   emailContext: ReachableContext,
   mail: ReceivedEmail,
-) {
+): Promise<{ offset: number } | undefined> {
+  let offset: number | undefined;
   for (const file of mail.files) {
     const key = file.path.replace(/^\/+/, "");
     // Written once: anyone can send a known Message-ID, and must not replace the first one's files.
@@ -53,11 +58,158 @@ export async function receiveEmail(
   for (const event of mail.events) {
     if (event.type !== "events.iterate.com/email/received")
       throw codedError("INVALID_INPUT", `receiveEmail: ${event.type} is no inbound message`);
-    await recordEmail(emailContext, { principal: null }, event).catch((error: unknown) => {
-      if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
-      console.info({ event: "email.redelivered", idempotencyKey: event.idempotencyKey });
-    });
+    const recorded = await recordEmail(emailContext, { principal: null }, event).catch(
+      async (error: unknown) => {
+        if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+        console.info({ event: "email.redelivered", idempotencyKey: event.idempotencyKey });
+        // the cast: the conflict's data names the event that holds the key (core-itx stream.ts)
+        const existing = (error as { data?: { existingOffset?: number } }).data?.existingOffset;
+        return {
+          offset:
+            existing && (await sameMessage(emailContext, existing, event)) ? existing : undefined,
+        };
+      },
+    );
+    offset = recorded.offset;
   }
+  return offset === undefined ? undefined : { offset };
+}
+
+/** The parts of a received message that its sender wrote, as `email/received` holds them: what a
+ *  redelivery keeps, and another message under the same Message-ID does not. */
+const WRITTEN_BY_THE_SENDER = [
+  "messageId",
+  "from",
+  "to",
+  "cc",
+  "subject",
+  "text",
+  "html",
+  "inReplyTo",
+  "references",
+  "attachments",
+  "envelope",
+] as const;
+
+/** Whether the `email/received` at `offset` holds the message that `event` is of. */
+async function sameMessage(
+  emailContext: ReachableContext,
+  offset: number,
+  event: StreamEventInput,
+) {
+  // The casts: `invoke` answers `unknown`, and `readEvents` answers a page; a stored event's
+  // payload and this one's are objects, read here field by field and compared as JSON.
+  const page = (await emailContext.invoke(["itx", "builtins", ["readEvents", offset - 1, 1]], [], {
+    principal: null,
+  })) as StreamPage;
+  const held = page.events.find((each) => each.offset === offset)?.payload as
+    | Record<string, unknown>
+    | undefined;
+  const delivered = event.payload as Record<string, unknown>;
+  return (
+    !!held &&
+    WRITTEN_BY_THE_SENDER.every(
+      (field) => JSON.stringify(held[field]) === JSON.stringify(delivered[field]),
+    )
+  );
+}
+
+/** THE MIND'S NEXT REQUEST TO FORWARD ONE RECEIVED MAIL (iterate/workers
+ *  `MindTarget.emailForwardRequest`): the next `email/forward-requested` after `afterOffset`
+ *  that names the mail's raw file, waited for up to `timeoutMs`.
+ *
+ *  WHEN THE TIME IS UP, THE MAIL'S REQUESTS ARE CLOSED BY A FACT, `email/forward-requests-closed`,
+ *  once for each mail. Its place on the log is the rule: a request before it is served, and one
+ *  after it never is, by this delivery or a later one. So the log says of every request whether
+ *  it was in time, with no clock. After the fact is appended, the requests that landed before it
+ *  are still handed over, in their order; then the answer is null.
+ *
+ *  ONE ATTEMPT FOR EACH MAIL AND ADDRESS: a request written at the root, the only kind that the
+ *  boundary serves, is claimed here before it is handed over (a `reserveSend` row, put once and
+ *  never released), and a request whose pair is claimed is passed over. So two deliveries of one
+ *  mail, at the same time or one after the other, cannot both forward it to one address. A
+ *  request from another context claims nothing: it could keep the config's own request from
+ *  being served. */
+export async function emailForwardRequest(
+  emailContext: ReachableContext,
+  wait: Parameters<MindTarget["emailForwardRequest"]>[0],
+): ReturnType<MindTarget["emailForwardRequest"]> {
+  const until = Date.now() + wait.timeoutMs;
+  let afterOffset = wait.afterOffset;
+  let closed = false;
+  for (;;) {
+    const filter = {
+      type: [
+        "events.iterate.com/email/forward-requested",
+        "events.iterate.com/email/forward-requests-closed",
+      ],
+      payload: { raw: wait.raw },
+      afterOffset,
+      // once the requests are closed, the search of the log up to that fact is all that is left
+      timeoutMs: closed ? 5_000 : Math.max(0, until - Date.now()),
+    };
+    // the cast: `invoke` answers `unknown`, and `waitForEvent` answers the event it found
+    const next = (await emailContext
+      .invoke(["itx", "builtins", ["waitForEvent", filter]], [], { principal: null })
+      .catch((error: unknown) => {
+        if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+        return null;
+      })) as StreamEvent | null;
+    if (!next) {
+      if (closed) return null;
+      // one wait is at most 120 s long (core-itx stream.ts): a longer time takes another
+      if (Date.now() < until) continue;
+      await recordEmail(
+        emailContext,
+        { principal: null },
+        {
+          type: "events.iterate.com/email/forward-requests-closed",
+          idempotencyKey: `email/forward-requests-closed:${wait.raw}`,
+          payload: { raw: wait.raw },
+        },
+      );
+      closed = true;
+      continue;
+    }
+    if (next.type === "events.iterate.com/email/forward-requests-closed") return null;
+    afterOffset = next.offset;
+    // the cast: a request's payload is its writer's, so `to` is read as unknown and checked
+    const { to } = next.payload as { to?: unknown };
+    if (typeof to === "string" && to.trim() && next.source.origin === "/") {
+      if (!(await emailContext.reserveSend(forwardAttemptKey(wait.raw, to))).reserved) continue;
+    }
+    return { offset: next.offset, to, origin: next.source.origin };
+  }
+}
+
+/** The key of the one attempt to forward a mail to an address (`reserveSend`). */
+const forwardAttemptKey = (raw: string, to: string) =>
+  `email/forward-attempt:${raw}:${to.trim().toLowerCase()}`;
+
+/** THE CLAIM OF ONE ATTEMPT, for the stack's fixed forward (iterate/workers
+ *  `MindTarget.emailForwardClaim`). A claim that is taken gets a second row that names its owner,
+ *  and a release gives the claim back only when that row is there: a delivery that never took
+ *  the claim cannot take another's away. A claim whose owner row did not land is never given
+ *  back. */
+export async function emailForwardClaim(
+  emailContext: ReachableContext,
+  claim: Parameters<MindTarget["emailForwardClaim"]>[0],
+) {
+  const key = forwardAttemptKey(claim.raw, claim.to);
+  const owned = `${key}:by:${claim.owner}`;
+  if (!claim.release) {
+    if (!(await emailContext.reserveSend(key)).reserved) return false;
+    await emailContext.reserveSend(owned);
+    return true;
+  }
+  // The owner's row goes first: a second release of this owner that comes after it finds no
+  // row and changes nothing. A delivery sends its releases one after the other (the boundary's
+  // `fixedForward`), so two never run here at once.
+  if (await emailContext.sentBefore(owned)) {
+    await emailContext.releaseSend(owned);
+    await emailContext.releaseSend(key);
+  }
+  return true;
 }
 
 /** It arrives over the wire. */

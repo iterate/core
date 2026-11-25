@@ -65,7 +65,7 @@ type ErrorCode =
   | "CALL_SESSION_ENDED" // a call's signalling step (core/configs/default/call/rules.ts): the SFU answered 410 for the page's own session, which is gone for good; the page makes its connection and its session anew, by its bounded repair (the kit's call engine)
   | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/itx/src/cause.ts): the act is refused for good, never retried
   | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
-  | "NOT_FORWARDABLE" // a received mail's forward (iterate/email `EmailHookArgs`): Cloudflare forwards no mail whose sender it did not prove
+  | "NOT_FORWARDABLE" // a received mail's forward (core/boundary-worker/src/mail.ts): Cloudflare forwards no mail whose sender it did not prove
   | "FORWARDED_BEFORE" // a received mail's forward: this mail went to that address before, or its X-Forwarded-To names it
   | "REFUSED" // a received mail's forward: Cloudflare refused it for another reason, its words in the message (an address that is no verified destination)
   | "EXPIRED" // a received mail's forward after its delivery ended: the original is no longer there to forward

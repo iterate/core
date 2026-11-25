@@ -1,17 +1,9 @@
-import type { EmailHookArgs } from "iterate/email";
 import { IterateConfigEntrypoint, type IterateConfigProcessEventArgs } from "iterate/sdk";
 
 export default class extends IterateConfigEntrypoint {
-  // Every durable event of the mind, and the init case: AGENTS.md.
+  // Every durable event of the mind, and the init case: AGENTS.md. A mail to the mind is one:
+  // `events.iterate.com/email/received` on /integrations/email.
   async processEvent(_args: IterateConfigProcessEventArgs) {}
-
-  // Every mail, while its delivery is live. save() keeps it on /integrations/email, and replies and
-  // agents react to it in processEvent. A hook that returns without it keeps only the mail's
-  // files; one that throws or runs out of time leaves the mail on the log. Forward it here too:
-  // await forward("a@b.c").
-  async email({ save }: EmailHookArgs) {
-    await save();
-  }
 
   // Every hostname of the mind's zones but its control-plane hostname: AGENTS.md. An app's hostname is
   // `<label>.<zone>`, so the switch is on the first label; any other hostname is the homepage's:

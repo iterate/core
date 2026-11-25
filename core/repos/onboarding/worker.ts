@@ -16,7 +16,5 @@ export default class extends IterateConfigEntrypoint {
     return serveFiles(request, { index, files });
   }
 
-  async email() {}
-
   async processEvent() {}
 }

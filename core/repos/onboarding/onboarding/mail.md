@@ -9,8 +9,7 @@ The owner should come away with: every address at their domain is the mind's, in
   address at another domain.
 - Every address at a zone of the mind receives: the stack takes each zone's catch-all mail rule. Each
   mail in is an `events.iterate.com/email/received` event on `/integrations/email`, pushed as it
-  arrives, unless the config's `email` hook returns without saving it (the templates' hooks save
-  every one). Nothing polls.
+  arrives. Nothing polls.
 - A reply in the thread of a mail you sent comes back to YOU (`mail-replies.md`), as the owner's
   message in this chat: "Email from <address>: <subject>", the text, and the call to answer with.
   It is the owner's word only when it came straight from the address they sign in with; an

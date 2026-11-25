@@ -61,10 +61,10 @@ export const MindConfig = z
        *  Absent: no binding, and the platform's fetch sends. */
       egressGatewayWorker: z.string().min(1).optional(),
     }),
-    /** A FORWARD BY THE STACK, beside the config's own `email` method (iterate/sdk), where a
-     *  mind's config forwards. Absent: the config's `email` alone decides where a mail goes. `forwardTo`:
-     *  each mail is also forwarded there as it arrived (a team's mailbox or group), before the
-     *  config's `email` runs. The address must be a verified destination address of the
+    /** A FORWARD BY THE STACK, beside the forwards that the mind's config asks for by event
+     *  (iterate/email `email/forward-requested`). Absent: the config's requests alone decide
+     *  where a mail goes. `forwardTo`: each mail is also forwarded there as it arrived (a team's
+     *  mailbox or group), before the config's requests. The address must be a verified destination address of the
      *  account's Email Routing, which a person confirms once by the link Cloudflare mails to it. */
     mail: z.strictObject({ forwardTo: z.email() }).optional(),
     /** THE MIND'S TELEMETRY in Cloudflare's own store. `traceSampling` is the share of requests

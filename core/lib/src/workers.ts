@@ -9,7 +9,6 @@ import type {
   StackClientName,
   TelemetryRows,
 } from "./api.ts";
-import type { EmailHookArgs } from "./email.ts";
 import type { Facts } from "./facts.ts";
 import type { Lender, Principal, SignInMethod } from "./principal.ts";
 import type { Envelope, Statement } from "./signed.ts";
@@ -33,29 +32,40 @@ export interface MindTarget {
    *  answer, so the `source.signer` one names is the key the auth Worker verified. In any other
    *  call an event's signer is dropped. */
   append(path: string, events: StreamEventInput[], fromAuth?: boolean): Promise<void>;
-  /** Files first, then each `email/received` fact, appended as the platform. The boundary calls it
-   *  twice in a delivery: first with the files alone, before the hook, so the mail's bytes are
-   *  kept; then with the events alone, which puts the mail on the log: when the config's `save()`
-   *  asks, or for the boundary itself when the hook did not return. A stack with
-   *  `MAIL_FORWARD_TO` sends the events with the files, before the hook. A redelivery, or a second
-   *  call, records nothing new. */
-  receiveEmail(mail: ReceivedEmail): Promise<void>;
-  /** THE CONFIG'S `email` HOOK FOR ONE DELIVERY, after `receiveEmail` stored the mail's files
-   *  (iterate/sdk `IterateConfigEntrypoint.email`). `save` and `forward` are capabilities that the
-   *  boundary made for this delivery and that die with it: functions, which Workers RPC and
-   *  capnweb each pass as stubs, and which each hop wraps again in a function of its own
-   *  (core/boundary-worker/src/mail.ts). The mail is off the log only when the hook returned
-   *  without calling `save`. `save` is absent from a boundary of an older build, which records the mail itself before the
-   *  hook. The mind records what the hook did: a throw, or a config with no
-   *  `email`, is an `email/hook-failed` fact, never this call's failure. It throws only when the
-   *  mind could not be reached or could not record. IT ANSWERS HOW THE HOOK ENDED: "returned"
-   *  (the config's function returned, and chose whether the mail is on the log), "threw" or
-   *  "missing" (no `email`). A mind of an older build answers nothing. For every answer but
-   *  "returned", and for a rejection, the boundary records the mail itself unless the hook saved
-   *  it. */
-  email(
-    args: Omit<EmailHookArgs, "save"> & Partial<Pick<EmailHookArgs, "save">>,
-  ): Promise<"returned" | "threw" | "missing" | void>;
+  /** Files first, then each `email/received` fact, appended as the platform. The boundary calls
+   *  it once for each delivery, before anything else. A redelivery records nothing new. It answers
+   *  the offset of the mail's `email/received` on `/integrations/email`. It answers nothing for a
+   *  delivery that reuses a Message-ID with another message (the requests to forward the first
+   *  are not for it), and a mind of an older build answers nothing. */
+  receiveEmail(mail: ReceivedEmail): Promise<{ offset: number } | void>;
+  /** THE MIND'S NEXT REQUEST TO FORWARD ONE RECEIVED MAIL: the next `email/forward-requested` on
+   *  `/integrations/email` after `afterOffset` whose `raw` is this mail's, waited for up to
+   *  `timeoutMs`; null when none came. When the time is up, the mind closes the mail's requests
+   *  with the fact `email/forward-requests-closed`, still answers each request that is on the
+   *  log before that fact, and then answers null: so the boundary asks until the answer is null.
+   *  `origin` is the request's stamp (`source.origin`: the
+   *  context whose code wrote it), by which the boundary decides whether it counts
+   *  (core/boundary-worker/src/mail.ts). One attempt for each mail and address: the mind claims
+   *  the pair of a request from the root before it answers it, and passes over a request whose
+   *  pair is claimed. */
+  emailForwardRequest(wait: {
+    raw: string;
+    afterOffset?: number;
+    timeoutMs: number;
+  }): Promise<{ offset: number; to: unknown; origin: string } | null>;
+  /** THE CLAIM OF ONE ATTEMPT TO FORWARD A MAIL TO AN ADDRESS, for the stack's own fixed forward
+   *  (`mail.forwardTo`): true when this call took it, false when it was taken before, by an
+   *  earlier delivery or by a request. `owner` names the delivery that asks, a random word of its
+   *  own. `release` gives the claim back, after Cloudflare refused the forward or was never
+   *  called, so that the next delivery tries again: ONLY the owner that took a claim gives it
+   *  back, and a release by any other changes nothing. It answers true. It is the claim that
+   *  `emailForwardRequest` takes for a request, which has no owner and is never given back. */
+  emailForwardClaim(claim: {
+    raw: string;
+    to: string;
+    owner: string;
+    release?: true;
+  }): Promise<boolean>;
   /** An act a member approved after its caller stopped waiting (./acts.ts): the mind does it now,
    *  once, and writes what came of it on the caller's context. The gate decides whether it is
    *  still to do, so a second call does nothing. */

@@ -33,7 +33,6 @@ import {
 // The hosts' `callWithCause` and `fetch` run what they call under the cause the platform hands them
 // (../cause.ts).
 import { causeOfRequest, currentCause, runCausedBy } from "../cause.ts";
-import { type EmailHookArgs, expiredIfTheDeliveryIsGone } from "../email.ts";
 import { errorCode, reportIssue } from "../lib.ts";
 import { auth } from "./auth.ts";
 import { codeFailedFact, type CodeFailedWhere, scrubbedError } from "./code-failed.ts";
@@ -500,34 +499,6 @@ export abstract class IterateConfigEntrypoint<
     else await implemented(this, "processEvent")?.call(this, { event, itx });
   }
 
-  /** The platform's delivery of one received mail to `email` (the dispatch boundary refuses any
-   *  caller but the platform), through `callWithCause`. It answers "missing" for a class that
-   *  lacks the abstract `email`, and the mind records that once for the config's commit
-   *  (core/mind-worker/src/integrations/email-hook.ts). */
-  async deliverEmail(args: EmailHookArgs): Promise<"done" | "missing"> {
-    const email = implemented(this, "email");
-    if (!email) return "missing";
-    // THE CONFIG'S OWN LINK TO `save` AND `forward` ENDS WITH THE DELIVERY: once the mind's call
-    // has returned, a call of either throws HERE, in this runtime, before the mind sees it. So this
-    // side says EXPIRED too (iterate/email `expiredIfTheDeliveryIsGone`).
-    const save = async () => {
-      try {
-        await args.save();
-      } catch (error) {
-        throw expiredIfTheDeliveryIsGone(error);
-      }
-    };
-    const forward = async (to: string) => {
-      try {
-        await args.forward(to);
-      } catch (error) {
-        throw expiredIfTheDeliveryIsGone(error);
-      }
-    };
-    await email.call(this, { ...args, save, forward });
-    return "done";
-  }
-
   /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through, with the
    *  context it came from (`callerPath`). On no list: only the platform calls it
    *  (core/itx/src/context/built-ins.ts `workers`). */
@@ -553,13 +524,14 @@ export abstract class IterateConfigEntrypoint<
     return path;
   };
 
-  /** A MIND'S INTERFACE IS THREE METHODS, and a config implements each: from outside, `fetch`
-   *  (every request) and `email` (every mail); inside, `processEvent` (every event). Outside
-   *  parties also append to the mind's contexts through its API at `/api`, so much of a mind's
-   *  logic reacts in `processEvent`. All three are abstract: the config's own `tsc` and editor ask
-   *  for them. The loader never type-checks, so the platform still says what a class that lacks one
-   *  gets: a 501 page for each request, an event taken as handled, a mail that the platform
-   *  records on the log itself; and one record of the lack for each published commit.
+  /** A MIND'S INTERFACE IS TWO METHODS, and a config implements each: from outside, `fetch`
+   *  (every request); inside, `processEvent` (every event). Outside parties also append to the
+   *  mind's contexts through its API at `/api`, and a mail to the mind arrives as an event
+   *  (`email/received` on `/integrations/email`; iterate/email), so much of a mind's logic reacts
+   *  in `processEvent`. Both are abstract: the config's own `tsc` and editor ask for them. The
+   *  loader never type-checks, so the platform still says what a class that lacks one gets: a 501
+   *  page for each request, an event taken as handled; and one record of the lack for each
+   *  published commit.
    *
    *  THE AUTHOR HOOK: every durable event of every context of the mind from its first
    *  publication on (what was committed while no config was published may be passed over), one per
@@ -567,31 +539,6 @@ export abstract class IterateConfigEntrypoint<
    *  `itx` is the mind's root, `itx.cd(event.path)` the event's own context. Make each reaction
    *  idempotent (an append keyed by `event.path` and `event.offset`) and keep no state here. */
   abstract processEvent(args: IterateConfigProcessEventArgs): void | Promise<void>;
-
-  /** EVERY MAIL TO AN ADDRESS OF THE MIND, while its delivery is live. The platform has stored the
-   *  mail's files under `/email/` before this runs. `save()` keeps the mail: the platform appends
-   *  `email/received` on `/integrations/email`, and `processEvent` gets that event: replies and
-   *  agents react there. A mail is off the log only when this RETURNS without calling `save`:
-   *  the mind then keeps its files alone, and no agent gets it. A throw, or a hook that runs past
-   *  the boundary's time limit, leaves the mail on the log (the platform records it), with an
-   *  `email/hook-failed` fact beside it, and does not fail the delivery. `forward(to)` sends the
-   *  original on, as it arrived (iterate/email `EmailHookArgs` names the errors of both). A save
-   *  that the mind did not take fails the delivery, so Cloudflare delivers the mail again. The
-   *  platform alone calls it.
-   *
-   *  ```ts
-   *  async email({ mail, save, forward }: EmailHookArgs) {
-   *    await save();
-   *    if (mail.envelope.to === "team@example.com") await forward("team@elsewhere.example");
-   *  }
-   *  ```
-   *
-   *  workerd's `WorkerEntrypoint` types `email` as the native handler of a Worker's own mail
-   *  (`email(message: ForwardableEmailMessage)`). A loaded config never gets that event: the
-   *  boundary's handler does, and the platform calls this method in-process through
-   *  `deliverEmail`. So the name is the mind's, and the type error below is that one clash. */
-  // @ts-expect-error -- the config's hook, not workerd's native mail handler: see above
-  abstract email(args: EmailHookArgs): Promise<void>;
 
   /** AN EVENT ANOTHER MIND ADDED HERE: a mind this one lets in signed it with its own key
    *  (core/configs/default/minds.md). `mind` is that mind's id, which decides; `hostname` where
@@ -611,7 +558,7 @@ export abstract class IterateConfigEntrypoint<
 
 /** The method `name` of a config's class, or undefined where the class lacks it: the loader never
  *  type-checks, so an abstract method can be missing at run time. */
-function implemented<Name extends "fetch" | "processEvent" | "email">(
+function implemented<Name extends "fetch" | "processEvent">(
   config: IterateConfigEntrypoint,
   name: Name,
 ): IterateConfigEntrypoint[Name] | undefined {

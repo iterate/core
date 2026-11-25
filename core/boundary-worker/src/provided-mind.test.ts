@@ -40,7 +40,7 @@ test("with no link, a request is answered 503 and every other call fails as unav
     boundary.append("/", []),
     boundary.runAct({ digest: "d", text: "t" }),
     boundary.receiveEmail({ events: [], files: [] }),
-    boundary.email({ mail: {} as never, forward: async () => {} }),
+    boundary.emailForwardRequest({ raw: "/email/key/hello@example.com.eml", timeoutMs: 10 }),
   ])
     await expect(call).rejects.toMatchObject({
       code: "UNAVAILABLE",
@@ -73,40 +73,18 @@ test("a mind that hands in its connect function gets every request, mail and act
   expect(door).toMatchObject({ props: [{ provided: true }] });
 });
 
-test("the config's email hook reaches a mind at home with its forward, and the forward calls back across the link to the boundary's invocation", async () => {
+test("the boundary's ask for the mind's next forward request reaches a mind at home, and the answer crosses back", async () => {
   const { boundary, dial } = stack();
   const home = await dial();
   const mind = pretendMind("home");
   await home.handIn(mind);
-  const forwarded: string[] = [];
-  const forward = async (to: string) => {
-    if (to === "refused@elsewhere.example")
-      throw Object.assign(new Error("destination address not verified"), { code: "REFUSED" });
-    forwarded.push(to);
-  };
-  const answer = await boundary.email({
-    mail: { subject: "a@elsewhere.example refused@elsewhere.example" } as never,
-    forward,
+  const wait = { raw: "/email/key/hello@example.com.eml", afterOffset: 4, timeoutMs: 10 };
+  expect(await boundary.emailForwardRequest(wait)).toEqual({
+    offset: 5,
+    to: "a@elsewhere.example",
+    origin: "/",
   });
-  expect(forwarded).toEqual(["a@elsewhere.example"]);
-  // the mind's answer crosses back: its config was handed save
-  expect(answer).toBe("returned");
-  // a refusal crosses back with its words
-  expect(mind).toMatchObject({
-    calls: [
-      [
-        "email",
-        "a@elsewhere.example refused@elsewhere.example",
-        ["sent", "Error: destination address not verified"],
-      ],
-    ],
-  });
-  // The forward is the call's: capnweb lets go of it when the call returns, so a hook that kept
-  // it reaches nothing. On Cloudflare the boundary's own forward also says EXPIRED by then.
-  await expect(async () => mind.keptForward!("late@elsewhere.example")).rejects.toThrow(
-    "This RpcImportHook was already disposed.",
-  );
-  expect(forwarded).toEqual(["a@elsewhere.example"]);
+  expect(mind).toMatchObject({ calls: [["emailForwardRequest", wait]] });
 });
 
 test("the dial reaches the object with the boundary's mark and without a caller's stamps: its session authenticates there", async () => {
@@ -329,48 +307,31 @@ test("a deploy without the binding of its topology says which one is missing", (
   );
 });
 
-test("the link breaks during the config's hook: its hook-failed fact is kept, and appended once when the mind is back, marked late", async () => {
-  const { boundary, dial, storage } = stack();
+test("the link breaks while the boundary waits for the mind's forward requests: the mail is on the log, its requests are not closed, and the delivery fails so that the next one serves them", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { boundary, dial } = stack();
   const home = await dial();
-  const away = pretendMind("home", { emailHangs: true });
+  const away = pretendMind("home", { requestHangs: true });
   await home.handIn(away);
-  const delivery = receivedMail(mailMessage(), { AUTH: { isMember: async () => false } }, boundary);
-  // the hook runs
-  await vi.waitFor(() => expect(away.keptForward).toBeDefined());
+  const delivery = receivedMail(
+    mailMessage(),
+    { AUTH: { isMember: async () => false } },
+    boundary,
+    {
+      requestMs: 200,
+      forwardAnswerMs: 50,
+      factsMs: 50,
+    },
+  );
+  await vi.waitFor(() =>
+    expect(away.calls.map((call) => call[0])).toEqual(["receiveEmail", "emailForwardRequest"]),
+  );
   home.socket.close(1001, "the home lab stops");
-  // nothing was saved, and the boundary's own record finds no mind: the delivery fails, and
-  // Cloudflare delivers the mail again
-  await expect(delivery).rejects.toThrow();
-  expect(keptTypes(storage)).toEqual(["events.iterate.com/email/hook-failed"]);
-
-  const back = pretendMind("back");
-  await (await dial()).handIn(back);
-  await vi.waitFor(() => expect(keptTypes(storage)).toEqual([]));
-  expect(back).toMatchObject({
-    calls: [
-      [
-        "append",
-        "/integrations/email",
-        [
-          {
-            type: "events.iterate.com/email/hook-failed",
-            idempotencyKey: expect.stringMatching(/^email\/hook-failed:unreachable:\/email\//),
-            payload: {
-              why: "unreachable",
-              error: expect.any(String),
-              raw: expect.stringMatching(/^\/email\//),
-              recordedLate: { happenedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) },
-            },
-          },
-        ],
-      ],
-    ],
-  });
-  // a later hand-in finds nothing more to append
-  const again = pretendMind("again");
-  await (await dial()).handIn(again);
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  expect(again).toMatchObject({ calls: [] });
+  await expect(delivery).rejects.toMatchObject({ code: "UNAVAILABLE" });
+  expect(logged).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "mail.forward-requests-not-read" }),
+  );
+  logged.mockRestore();
 });
 
 test("facts kept while the mind is away are appended in the order they happened", async () => {
@@ -683,7 +644,14 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
       // the object's own methods, called on the object, as a Durable Object's stub calls them
       getByName: (): Pick<
         ProvidedMind,
-        "fetch" | "api" | "append" | "runAct" | "receiveEmail" | "email" | "appendOrKeep"
+        | "fetch"
+        | "api"
+        | "append"
+        | "runAct"
+        | "receiveEmail"
+        | "emailForwardRequest"
+        | "emailForwardClaim"
+        | "appendOrKeep"
       > => ({
         fetch: (request) => {
           if (request.headers.has(PROVIDED_MIND_DIAL_HEADER))
@@ -694,7 +662,8 @@ function stack({ homeLabTokenEndsIn = 60_000 } = {}) {
         append: (...call) => object.append(...call),
         runAct: (held) => object.runAct(held),
         receiveEmail: (mail) => object.receiveEmail(mail),
-        email: (args) => object.email(args),
+        emailForwardRequest: (wait) => object.emailForwardRequest(wait),
+        emailForwardClaim: (claim) => object.emailForwardClaim(claim),
         appendOrKeep: (path, fact) => object.appendOrKeep(path, fact),
       }),
     },
@@ -747,7 +716,7 @@ function pretendMind(
     log = new Map<string, unknown>(),
     refuse,
     appendHangs = false,
-    emailHangs = false,
+    requestHangs = false,
     waits,
   }: {
     /** The mind's log: each fact's payload by its idempotency key, as the mind's stream keeps it. */
@@ -758,8 +727,8 @@ function pretendMind(
     waits?: (fact: Fact) => Promise<void> | undefined;
     /** The mind takes each fact and never answers: its link breaks under the call. */
     appendHangs?: boolean;
-    /** The config's hook never ends. */
-    emailHangs?: boolean;
+    /** The mind never answers the ask for its next forward request. */
+    requestHangs?: boolean;
   } = {},
 ) {
   class Api extends RpcTarget {
@@ -815,31 +784,13 @@ function pretendMind(
     }
     receiveEmail(...call: unknown[]) {
       this.calls.push(["receiveEmail", ...call]);
+      return { offset: 1 };
     }
-    /** The forward of the delivery it was last handed, kept past its call as a careless config
-     *  would keep it. */
-    keptForward?: (to: string) => Promise<void>;
-    // The config's hook as the mind runs it: a forward to each address the subject names, and
-    // what each answered.
-    async email({
-      mail,
-      forward,
-    }: {
-      mail: { subject: string };
-      forward(to: string): Promise<void>;
-    }) {
-      this.keptForward = forward;
-      if (emailHangs) return new Promise(() => {});
-      const answers: unknown[] = [];
-      for (const to of mail.subject.split(" "))
-        answers.push(
-          await forward(to).then(
-            () => "sent",
-            (error: unknown) => String(error),
-          ),
-        );
-      this.calls.push(["email", mail.subject, answers]);
-      return "returned";
+    // The mind's next request to forward the mail: one, right after the offset asked for.
+    emailForwardRequest(wait: { afterOffset?: number }) {
+      this.calls.push(["emailForwardRequest", wait]);
+      if (requestHangs) return new Promise(() => {});
+      return { offset: (wait.afterOffset ?? 0) + 1, to: "a@elsewhere.example", origin: "/" };
     }
   }
   return new Mind();

@@ -25,7 +25,7 @@
 // further message.
 //
 // THE FACTS THAT A MIND AWAY COULD NOT TAKE. A fact of a mail (./mail.ts: `email/forwarded`,
-// `email/forward-failed`, `email/hook-failed`) that the mind does not take, for any reason but its
+// `email/forward-failed`) that the mind does not take, for any reason but its
 // own typed refusal (not connected, a link that breaks under the call, a platform failure), is
 // kept in this object's storage (`appendOrKeep`), and appended in its order by ONE DRAIN at a time
 // (`#drain`), after a hand-in and after a live append that landed. A ROW GOES ONLY WHEN ITS APPEND
@@ -137,21 +137,15 @@ export class ProvidedMind extends DurableObject<DoorEnv> {
   }
 
   async receiveEmail(mail: Parameters<MindTarget["receiveEmail"]>[0]) {
-    await this.#mind().receiveEmail(mail);
+    return await this.#mind().receiveEmail(mail);
   }
 
-  /** THE CONFIG'S `email` HOOK, over the link (iterate/workers `MindTarget.email`). `save` and
-   *  `forward` are Workers RPC stubs of the boundary's invocation here. capnweb sends its own
-   *  stubs, its targets and plain functions, so a function of this object's calls each stub, and
-   *  capnweb hands that function to the far end as a stub of its own: the home lab calls back
-   *  through it, and it lasts while this call does. It answers what the mind answered:
-   *  how the hook ended, or nothing from a mind of an older build. */
-  async email({ mail, save, forward }: Parameters<MindTarget["email"]>[0]) {
-    return await this.#mind().email({
-      mail,
-      ...(save && { save: () => save() }),
-      forward: (to) => forward(to),
-    });
+  async emailForwardRequest(wait: Parameters<MindTarget["emailForwardRequest"]>[0]) {
+    return await this.#mind().emailForwardRequest(wait);
+  }
+
+  async emailForwardClaim(claim: Parameters<MindTarget["emailForwardClaim"]>[0]) {
+    return await this.#mind().emailForwardClaim(claim);
   }
 
   async runAct(held: Parameters<MindTarget["runAct"]>[0]) {

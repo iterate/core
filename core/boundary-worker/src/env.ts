@@ -37,7 +37,16 @@ export type Env = DoorEnv & {
   PROVIDED_MIND?: {
     getByName(
       name: string,
-    ): Pick<MindTarget, "fetch" | "append" | "runAct" | "receiveEmail" | "email" | "api"> &
+    ): Pick<
+      MindTarget,
+      | "fetch"
+      | "append"
+      | "runAct"
+      | "receiveEmail"
+      | "emailForwardRequest"
+      | "emailForwardClaim"
+      | "api"
+    > &
       Required<Pick<MindTransport, "appendOrKeep">>;
   };
 };

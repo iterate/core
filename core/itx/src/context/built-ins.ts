@@ -653,7 +653,8 @@ export function workersRoot(deps: {
           );
         const [method, ...callArgs] = call;
         // `processMindEvent` is `deliverEvent`'s to call, with the mind the platform read off the
-        // event's signer: a direct call could name any mind. `email` is `deliverEmail`'s.
+        // event's signer: a direct call could name any mind. `email` is the name of a Worker's
+        // native mail handler, which a loaded worker never gets.
         if (
           method === "callWithCause" ||
           method === "getItx" ||
@@ -661,13 +662,6 @@ export function workersRoot(deps: {
           method === "email"
         )
           throw codedError("NOT_A_METHOD", `workers.get(spec).${method}: no caller reaches it`);
-        // A mail is the boundary's to hand in, through the mind Worker (core/mind-worker rpc.ts
-        // `Mind.email`): loaded code that called the hook could hand it an invented mail.
-        if (method === "deliverEmail" && (!deps.caller().platform || deps.caller().signer))
-          throw codedError(
-            "FORBIDDEN",
-            "workers.get(spec).deliverEmail is the platform's own call, for a mail it received",
-          );
         // A loaded worker's `fetch` reads who is asking off its Request: the call's own caller,
         // stamped here, never what the Request says, which the calling code could write.
         const cause = deps.cause();

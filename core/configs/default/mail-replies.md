@@ -4,11 +4,9 @@ Who gets the mail that reaches the mind, and how a reply finds its agent: the
 `events.iterate.com/email/received` and `email/delivery-failed` cases of `worker.ts`, which call `mail.ts`, and
 `mail-replies.ts`, whose header has the rules in their order.
 
-A mail is on `/integrations/email` because the `email` hook of `worker.ts` calls `save()`: the
-platform then appends `email/received`, once for each mail, with its own words about the sender.
-A mail is off the log only when the hook returns without calling `save`: the platform keeps its
-files under `/email/`, and this case never sees it. A hook that throws, runs out of time or is
-missing leaves the mail on the log, with its `email/hook-failed` fact beside it.
+Every mail is on `/integrations/email`: the platform keeps its files under `/email/` and appends
+`email/received`, once for each mail, with its own words about the sender, before any code of
+the mind runs.
 
 The `events.iterate.com/email/received` case hands each email a member sends to the mind
 to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has

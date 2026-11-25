@@ -21,10 +21,11 @@ export default {
   // invocation reads it itself (core-itx/request-body).
   fetch: (request, env, ctx) =>
     boundaryResponse(requestWithOwnedBody(request, "boundary"), env, ctx, mindTransportOf(env)),
-  // The mind stores the mail, then its config's `email` hook runs (./mail.ts says the order). A
-  // failure to store throws, so Cloudflare delivers the mail again: a mind that runs elsewhere and
-  // is not connected is such a failure. The fact's idempotency key keeps a retry after a committed
-  // append from landing twice. Nothing the hook does fails the delivery.
+  // The mind stores the mail and puts it on its log, then the mind's requests to forward it are
+  // served (./mail.ts says the order). A failure to store throws, so Cloudflare delivers the mail
+  // again: a mind that runs elsewhere and is not connected is such a failure. The fact's
+  // idempotency key keeps a retry after a committed append from landing twice. Nothing that the
+  // mind's code does fails the delivery.
   email: (message, env) => receivedMail(message, env, mindTransportOf(env)),
   // The stack's one queue of Cloudflare events (./cloudflare-events.ts): a row for each kind. An
   // event for a mind that is not connected is retried until it is, or the consumer's retries run

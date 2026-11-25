@@ -23,8 +23,8 @@ session that it gets, with a function that takes the boundary's door and answers
 (`iterate/workers` `ControlPlaneSession`). The boundary keeps what the function
 answers in a Durable Object, `ProvidedMind`, for as long as the socket is open, and sends the mind
 every request, mail, act and API session through it. A mail comes in through the stack's
-Cloudflare Email Routing, as for any mind, and the config's `email` hook runs here: its
-`forward(to)` calls back over the socket to the boundary while the delivery lasts. The root is
+Cloudflare Email Routing, as for any mind: the boundary has the mind here record it, and asks
+over the socket for the mind's requests to forward it while the delivery lasts. The root is
 born at start: its config repo is seeded and published. Then `http://localhost:8789/` is the apex of the first zone,
 `<label>.localhost:8789` is `<label>.<zone>` (nobody signed in), and through the stack
 `https://<zone>/` is the same mind.
@@ -40,7 +40,7 @@ link also ends when its token does, and then this process dials again with a fre
 while there is no link fails its delivery, and Cloudflare delivers it again: on 19 Nov 2026 it
 tried again after 23 s and 95 s, with no bounce, and the third try was stored and forwarded. A
 fact of a mail that the boundary could not append because the link was gone or broke under the
-call (`email/forwarded`, `email/forward-failed`, `email/hook-failed`) is kept in `ProvidedMind`'s
+call (`email/forwarded`, `email/forward-failed`) is kept in `ProvidedMind`'s
 storage, at most 100, and appended right after the mind hands itself in again, in its order. Its
 payload's `recordedLate.happenedAt` says when it happened; `droppedBefore` says how many older
 facts were dropped at the bound. A fact that reached the mind before the link broke is not

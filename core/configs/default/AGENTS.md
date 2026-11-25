@@ -106,25 +106,28 @@ and calls the files beside it:
   case says who may come: none for a public site, `this.auth.require` for members,
   `this.auth.requirePerson` for anyone signed in. A fetch route can take a hostname's requests
   first ([apps.md](apps.md)).
-- `email({ mail, save, forward })` runs for every mail to an address of the mind, while its
-  delivery is live. The platform has stored the mail's files under `/email/` before.
-  `await save()` keeps the mail: the platform appends `email/received` on
-  `/integrations/email`, once for each mail, and `processEvent` gets it: replies and agents
-  react there. A mail is off the log only when the hook returns without saving it: then only
-  its files are kept. A save that the mind does not take rejects, and the delivery fails, so
-  Cloudflare delivers the mail again. `await forward("a@b.c")` sends
-  the original on, as it arrived, to an address that a person verified as a destination
-  in the mind's Cloudflare account; it records `email/forwarded`, and throws a coded error otherwise
-  (`EmailHookArgs` in `iterate/email`). A throw here, or a hook that runs past its time limit
-  (15 s of its own: the wait for Cloudflare's answer to a forward does not count), or a class
-  with no `email`, leaves the mail on the log: the platform records it, with an
-  `email/hook-failed` fact beside it. Await each save and forward:
-  both capabilities end when `email` returns, a call after that throws EXPIRED, and a forward
-  that is still running then ends EXPIRED.
+- A mail to an address of the mind is an event, and no method: the platform stores the mail's
+  files under `/email/`, appends `events.iterate.com/email/received` on `/integrations/email`,
+  once for each mail, and `processEvent` gets it: replies and agents react there. To send the
+  original on, as it arrived, append a request there when the mail's event comes:
 
-  A `worker.ts` of your own must call `await save()` in an `email` that returns, or the mind
-  records no mail and no agent gets one: a hook that returns without saving has chosen to leave
-  the mail off the log.
+  ```ts
+  await itx.cd("/integrations/email").append({
+    type: "events.iterate.com/email/forward-requested",
+    idempotencyKey: `forward:${mail.raw.path}:a@b.c`,
+    payload: { raw: mail.raw.path, to: "a@b.c" },
+  });
+  ```
+
+  `to` is an address that a person verified as a destination in the mind's Cloudflare account.
+  The platform forwards only while the mail's delivery is open, about 10 s from its receipt, and
+  answers with `email/forwarded` or `email/forward-failed` (its `error` says why: Cloudflare
+  forwards no mail whose sender it did not prove). When that time is up the platform appends
+  `email/forward-requests-closed` for the mail: a request after that fact on the log is never
+  served and gets no answer. Code whose forward must not be lost reads the log from the mail's
+  event to its own request, and sends a copy with `itx.email.send` when the fact comes first.
+  Only a request that `worker.ts` itself appends counts, or a member's at the root: an agent's
+  is refused (`iterate/email` has the events).
 
 - `itx.config.<name>(…)` reaches every public method of the class: the mind's own API, for its
   agents and its pages. The template's methods are in `api.ts`; add one there or to

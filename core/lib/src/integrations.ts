@@ -89,7 +89,6 @@ const NOT_CALLABLE: ReadonlySet<string> = new Set([
   "processMindEvent",
   "deliverEvent",
   "email",
-  "deliverEmail",
   "callWithCause",
   "getItx",
   "auth",

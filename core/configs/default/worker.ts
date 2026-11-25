@@ -5,16 +5,14 @@
 // agents, keeps its secrets and signs people in. What the mind DOES is this repo: a commit to
 // `main` is live a few seconds later, and the mind's own agents commit here too.
 //
-// The platform calls three methods of the class below:
+// The platform calls two methods of the class below:
 //
 //   fetch(request)             every request to a hostname of the mind: its apps, its website
-//   email({ mail, forward })   every mail to an address of the mind
 //   processEvent({ event })    every event of every context: a mail, a Slack message, a commit,
 //                              a schedule that fired
 //
 // Every other public method of the class is the mind's own API, `itx.config.<name>(…)`, for its
 // agents and its pages. Those are in api.ts. AGENTS.md is the guide to the rest of the repo.
-import type { EmailHookArgs } from "iterate/email";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { ConfigApi, TASKS_BOARD_REPO } from "./api.ts";
 import { dashApp } from "./apps/dash/app.ts";
@@ -89,15 +87,6 @@ export default class extends ConfigApi {
     };
     const answer = await route(documentRequest(request, this));
     return addPageTag(request, answer, this, (work) => this.ctx.waitUntil(work));
-  }
-
-  // EVERY MAIL to an address of the mind, while its delivery is live. `save()` keeps it: one
-  // event on the context /integrations/email, which the `email/received` case below hands to an
-  // agent. A hook that returns without it leaves the mail off the log, and no agent gets it; one
-  // that throws or runs out of time leaves the mail on the log. To send the original on:
-  // `await forward("someone@example.com")`.
-  async email({ save }: EmailHookArgs) {
-    await save();
   }
 
   // EVERY EVENT of every context of the mind, one at a time, in no order, at least once: each

@@ -26,21 +26,7 @@ export function forwardEveryMethod<Instance extends object>(
 /** The mind, for the boundary: every method of `MindTarget` goes on to the local Mind Worker as it
  *  came. */
 export function relayTo(target: () => MindTarget) {
-  class Relay extends RpcTarget {
-    /** The config's `email` hook (iterate/workers `MindTarget.email`). capnweb hands `save` and
-     *  `forward` in as stubs of its own, which last while this call does and call back over the
-     *  link to the boundary. Neither goes into Workers RPC as it is: a function of this isolate's
-     *  calls each, and Workers RPC hands the local Mind Worker a stub of that function. A boundary
-     *  of an older build hands no `save`. It answers what the local Mind Worker answered
-     *  (how the hook ended, or nothing from an older build). */
-    email({ mail, save, forward }: Parameters<MindTarget["email"]>[0]) {
-      return target().email({
-        mail,
-        ...(save && { save: () => save() }),
-        forward: (to) => forward(to),
-      });
-    }
-  }
+  class Relay extends RpcTarget {}
   // the cast: a Workers RPC stub answers each of the mind's methods by name
   forwardEveryMethod(Relay, (_relay, method, args) =>
     (target() as unknown as Record<string, (...args: unknown[]) => unknown>)[method]!(...args),

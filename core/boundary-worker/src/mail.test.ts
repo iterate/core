@@ -1,15 +1,17 @@
 import { expect, test, vi } from "vitest";
-import type { EmailHookArgs } from "iterate/email";
-import { errorCode } from "iterate/lib";
 import { receivedMail } from "./mail.ts";
 
 const GROUP = "team@group.example";
+const OTHER = "other@elsewhere.example";
+
+/** Short limits: the wait for the mind's requests, for Cloudflare's answers, and for the facts. */
+const LIMITS = { requestMs: 60, forwardAnswerMs: 100, factsMs: 100 };
 
 /** The raw file of the one mail `delivered` makes: `/email/<its message key>/<its address>.eml`. */
 const RAW = await (async () => {
   const mail = delivered();
-  await receivedMail(mail.message, mail.env(), mail.mind);
-  return (mail.hooked[0] as { raw: { path: string } }).raw.path;
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  return mail.asks[0]!.raw;
 })();
 
 /** The idempotency key of the `email/received` of the mail `delivered` makes. */
@@ -19,538 +21,212 @@ const RECEIVED_KEY = `email/received:${RAW.split("/")[2]}:hello@mind.example`;
 const PROVEN =
   "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=sender.example; spf=pass smtp.mailfrom=ada@sender.example";
 
-test("a mail's files go to the mind alone, then the mail to the config's hook, and with no forward address nowhere else", async () => {
-  const mail = delivered({ hook: async ({ save }) => save() });
-  await receivedMail(mail.message, mail.env(), mail.mind);
-  expect(mail).toMatchObject({ did: ["the mind kept its files", "the hook ran"], appended: [] });
-  // step 1 sends the raw file and no event; the save sends the event and no file
-  expect(mail).toMatchObject({
-    calls: [
-      { events: [], files: [RAW] },
-      { events: [RECEIVED_KEY], files: [] },
-    ],
-  });
-  // the saved payload, and whether Cloudflare would forward it: unknown here, so the forward finds out
-  expect(mail).toMatchObject({ hooked: [{ ...mail.received[0]!, canBeForwarded: true }] });
-});
-
-test("a hook that does not save leaves the mail off the log: its files are kept, no fact is appended, and the delivery stands", async () => {
+test("every mail goes on the mind's log with its files, in one call, before anything else, and with no forward address nowhere else", async () => {
   const mail = delivered();
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
   expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran"],
-    calls: [{ events: [], files: [RAW] }],
-    received: [],
+    did: ["the mind kept the mail"],
+    calls: [{ events: [RECEIVED_KEY], files: [RAW] }],
+    received: [{ subject: "hello", raw: { path: RAW } }],
     appended: [],
   });
+  // then the mind is asked for its requests to forward this mail, after the mail's own event
+  expect(mail.asks[0]).toMatchObject({ raw: RAW, afterOffset: 7 });
 });
 
 test("with a forward address the original is forwarded there, after the mind has it", async () => {
   const mail = delivered();
-  await receivedMail(mail.message, mail.env(GROUP), mail.mind);
+  await receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS);
   expect(mail).toMatchObject({
-    did: ["the mind kept its files", `forwarded to ${GROUP}`, "the hook ran"],
-    appended: [
-      {
-        path: "/integrations/email",
-        events: [
-          {
-            type: "events.iterate.com/email/forwarded",
-            idempotencyKey: `email/forwarded:${RAW}:${GROUP}`,
-            payload: { to: GROUP, raw: RAW, messageId: null },
-          },
-        ],
-      },
-    ],
+    did: ["the mind kept the mail", `forwarded to ${GROUP}`],
+    appended: [{ path: "/integrations/email", events: [forwarded(GROUP)] }],
   });
 });
 
 test("a mail that Cloudflare will not forward because nobody proved its sender is kept, and the delivery stands", async () => {
   const mail = delivered({ forward: "non-authenticated emails cannot be forwarded" });
-  await receivedMail(mail.message, mail.env(GROUP), mail.mind);
+  await receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS);
   expect(mail).toMatchObject({
-    did: ["the mind kept its files", `forward to ${GROUP} refused`, "the hook ran"],
+    did: ["the mind kept the mail", `forward to ${GROUP} refused`],
     appended: [
       {
         path: "/integrations/email",
-        events: [
-          {
-            type: "events.iterate.com/email/forward-failed",
-            idempotencyKey: `email/forward-failed:${RAW}:${GROUP}`,
-            payload: {
-              to: "hello@mind.example",
-              forwardTo: GROUP,
-              messageId: "<m1@sender.example>",
-              error: "Error: non-authenticated emails cannot be forwarded",
-            },
-          },
-        ],
+        events: [forwardFailed(GROUP, "Error: non-authenticated emails cannot be forwarded")],
       },
     ],
   });
 });
 
-test("any other failure of the forward fails the delivery, so that Cloudflare delivers the mail again", async () => {
+test("any other failure of the stack's forward fails the delivery, so that Cloudflare delivers the mail again; the mail is on the log all the same", async () => {
   const mail = delivered({ forward: "destination address not verified" });
-  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind)).rejects.toThrow(
+  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS)).rejects.toThrow(
     "destination address not verified",
   );
   expect(mail).toMatchObject({
-    did: ["the mind kept its files", `forward to ${GROUP} refused`],
-    appended: [{ events: [{ payload: { error: "Error: destination address not verified" } }] }],
+    did: ["the mind kept the mail", `forward to ${GROUP} refused`],
+    received: [{ subject: "hello" }],
+    appended: [{ events: [forwardFailed(GROUP, "Error: destination address not verified")] }],
   });
+});
+
+test("the stack's forward goes once for a mail over its deliveries: after a delivery that forwarded and then failed because the mind could not be asked, the next delivery forwards nothing more", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const first = delivered({ requests: "the mind is away" });
+  await expect(receivedMail(first.message, first.env(GROUP), first.mind, LIMITS)).rejects.toThrow(
+    "the mind is away",
+  );
+  expect(first).toMatchObject({ did: ["the mind kept the mail", `forwarded to ${GROUP}`] });
+  const again = delivered({ claims: [...first.claims] });
+  await receivedMail(again.message, again.env(GROUP), again.mind, LIMITS);
+  expect(again).toMatchObject({ did: ["the mind kept the mail"], appended: [] });
+  logged.mockRestore();
+});
+
+test("a stack's forward that Cloudflare refused gives its claim back, so the next delivery tries again; and a mind of an older build, which has no claim, is forwarded for all the same", async () => {
+  const refused = delivered({ forward: "destination address not verified" });
+  await expect(
+    receivedMail(refused.message, refused.env(GROUP), refused.mind, LIMITS),
+  ).rejects.toThrow("destination address not verified");
+  expect([...refused.claims]).toEqual([]);
+  const older = delivered({ claims: "none", offset: null });
+  await receivedMail(older.message, older.env(GROUP), older.mind, LIMITS);
+  expect(older).toMatchObject({ did: ["the mind kept the mail", `forwarded to ${GROUP}`] });
+});
+
+test("a claim that cannot be asked for is no claim: the stack's forward does not call Cloudflare, and the delivery fails so that the next one asks again", async () => {
+  const mail = delivered({ claims: "none" });
+  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS)).rejects.toThrow(
+    "the mind has no emailForwardClaim",
+  );
+  expect(mail).toMatchObject({ did: ["the mind kept the mail"], appended: [] });
+});
+
+test("a claim that is not answered in its time is no forward in flight: Cloudflare is not called, the delivery fails, and the claim that lands late is given back", async () => {
+  const mail = delivered({ claims: "hangs" });
+  await expect(
+    receivedMail(mail.message, mail.env(GROUP), mail.mind, { ...LIMITS, factsMs: 30 }),
+  ).rejects.toMatchObject({ code: "TIMEOUT" });
+  expect(mail).toMatchObject({ did: ["the mind kept the mail"], appended: [] });
+  // given back at once, and again when the late answer says that it was taken
+  await vi.waitFor(() => expect(mail).toMatchObject({ released: [GROUP, GROUP] }));
+  // one after the other: the second release never runs beside the first
+  expect(mail.overlapped()).toBe(false);
+});
+
+test("a claim whose answer is lost may have landed: Cloudflare was not called, so it is given back, and the delivery fails", async () => {
+  const mail = delivered({ claims: "answer lost" });
+  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS)).rejects.toThrow(
+    "Network connection lost.",
+  );
+  expect(mail).toMatchObject({ did: ["the mind kept the mail"], released: [GROUP] });
+});
+
+test("a delivery whose claim call fails gives back nothing that it did not take: the claim of the delivery that forwarded stays, and no second copy goes", async () => {
+  const first = delivered();
+  await receivedMail(first.message, first.env(GROUP), first.mind, LIMITS);
+  expect([...first.claims]).toEqual([GROUP]);
+  // the second delivery shares the mind's claims, and its own claim call is lost
+  const second = delivered({ claimCallFails: true });
+  second.claims.add(GROUP);
+  await expect(
+    receivedMail(second.message, second.env(GROUP), second.mind, LIMITS),
+  ).rejects.toThrow("Network connection lost.");
+  expect(second).toMatchObject({ did: ["the mind kept the mail"] });
+  expect([...second.claims]).toEqual([GROUP]);
+});
+
+test("the stack's forward does not cost the mind's requests their time: while Cloudflare answers it for longer than the wait, a request for another address is served", async () => {
+  const mail = delivered({ requests: [{ to: OTHER, afterMs: 20 }], forwardAnswerMs: 90 });
+  await receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS);
+  expect(mail).toMatchObject({
+    did: ["the mind kept the mail", `forwarded to ${GROUP}`, `forwarded to ${OTHER}`],
+  });
+  expect(mail.appended.flatMap((append) => append.events)).toEqual(
+    expect.arrayContaining([forwarded(GROUP), forwarded(OTHER)]),
+  );
 });
 
 test("a mail that was forwarded to this address before is not forwarded again: a forward address that comes back here ends at its second visit", async () => {
   // Email Routing writes `X-Forwarded-To` on what it forwards
   const mail = delivered({ forwardedTo: `Team@Group.Example` });
-  await receivedMail(mail.message, mail.env(GROUP), mail.mind);
+  await receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS);
   expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran"],
+    did: ["the mind kept the mail"],
     // any sender can write the header, so the mind's log says that the mail was not forwarded
     appended: [{ events: [{ payload: { error: expect.stringContaining("forwarded to") } }] }],
   });
   // two header lines, the newest first: this forward address is in the older one
   const twice = delivered({ forwardedTo: ["next@other.example", GROUP] });
-  await receivedMail(twice.message, twice.env(GROUP), twice.mind);
-  expect(twice).toMatchObject({ did: ["the mind kept its files", "the hook ran"] });
+  await receivedMail(twice.message, twice.env(GROUP), twice.mind, LIMITS);
+  expect(twice).toMatchObject({ did: ["the mind kept the mail"] });
   // a forward that went to another address is forwarded on: one that only ends in the same
   // letters, too
   for (const forwardedTo of ["someone@else.example", `the-${GROUP}`]) {
     const other = delivered({ forwardedTo });
-    await receivedMail(other.message, other.env(GROUP), other.mind);
-    expect(other).toMatchObject({
-      did: ["the mind kept its files", `forwarded to ${GROUP}`, "the hook ran"],
-    });
+    await receivedMail(other.message, other.env(GROUP), other.mind, LIMITS);
+    expect(other).toMatchObject({ did: ["the mind kept the mail", `forwarded to ${GROUP}`] });
   }
 });
 
-test("a fact that the mind does not take changes nothing of the delivery: an unproved sender's mail still stands", async () => {
+test("a fact that the mind does not take is logged and changes nothing of the delivery: an unproved sender's mail still stands", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
   const mail = delivered({
     forward: "non-authenticated emails cannot be forwarded",
     append: "the email log is paused",
   });
-  await receivedMail(mail.message, mail.env(GROUP), mail.mind);
-  expect(mail).toMatchObject({
-    did: ["the mind kept its files", `forward to ${GROUP} refused`, "the hook ran"],
-  });
-});
-
-test("a mail that the mind did not take is not forwarded: the next delivery does both", async () => {
-  const mail = delivered({ mind: "the mind is away" });
-  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind)).rejects.toThrow(
-    "the mind is away",
-  );
-  expect(mail).toMatchObject({ did: [] });
-});
-
-test("the hook's forward sends the original and records it once for the mail and address; a second forward there in the same delivery is refused", async () => {
-  const outcomes: unknown[] = [];
-  const mail = delivered({
-    hook: async ({ forward }) => {
-      await forward("misha@elsewhere.example");
-      outcomes.push(await forward("Misha@Elsewhere.Example").catch(codeOf));
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind);
-  expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran", "forwarded to misha@elsewhere.example"],
-    appended: [
-      {
-        events: [
-          {
-            type: "events.iterate.com/email/forwarded",
-            idempotencyKey: `email/forwarded:${RAW}:misha@elsewhere.example`,
-          },
-        ],
-      },
-    ],
-  });
-  expect(outcomes).toEqual(["FORWARDED_BEFORE"]);
-});
-
-test("the hook's save is the one call that sends email/received to the mind, with no files, and two saves make one call", async () => {
-  const mail = delivered({
-    hook: async ({ save }) => {
-      await save();
-      await save();
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind);
-  expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran"],
-    appended: [],
-    saves: [[RECEIVED_KEY]],
-    received: [{ raw: { path: RAW } }],
-  });
-});
-
-test("a save after the hook ended is EXPIRED, calls the mind not at all, and fails nothing", async () => {
-  let kept: EmailHookArgs["save"] | undefined;
-  const mail = delivered({
-    hook: async ({ save }) => {
-      kept = save;
-    },
-  });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(await kept!().catch(codeOf)).toBe("EXPIRED");
-  expect(mail).toMatchObject({ saves: [], received: [] });
-});
-
-test("a save that the mind refuses rejects in the hook, and fails the delivery after the hook, so Cloudflare delivers the mail again", async () => {
-  const outcomes: unknown[] = [];
-  const mail = delivered({
-    save: "the mind refused it",
-    hook: async ({ save, forward }) => {
-      outcomes.push(await save().catch((error: unknown) => String(error)));
-      await forward("a@elsewhere.example");
-    },
-  });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).rejects.toThrow(
-    "the mind refused it",
-  );
-  expect(outcomes).toEqual(["Error: the mind refused it"]);
-  // the hook ran on, and the forward's fact is on the log before the delivery fails
-  expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran", "forwarded to a@elsewhere.example"],
-    appended: [{ events: [{ type: "events.iterate.com/email/forwarded" }] }],
-    received: [],
-  });
-});
-
-test("a failed save that the hook does not catch fails the delivery too", async () => {
-  const mail = delivered({ save: "the mind refused it", hook: async ({ save }) => save() });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).rejects.toThrow(
-    "the mind refused it",
-  );
-  expect(mail).toMatchObject({ saves: [[RECEIVED_KEY]], received: [] });
-});
-
-test("a save still in flight when the hook ends is awaited before the handler returns", async () => {
-  const unawaited: Promise<void>[] = [];
-  const mail = delivered({
-    saveMs: 40,
-    hook: async ({ save }) => {
-      unawaited.push(save());
-    },
-  });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(mail).toMatchObject({ received: [{ raw: { path: RAW } }] });
-  await Promise.all(unawaited);
-});
-
-test("a save that the mind does not answer by its bound is logged and fails the delivery", async () => {
-  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  const unawaited: Promise<void>[] = [];
-  const mail = delivered({
-    saveHangs: true,
-    hook: async ({ save }) => {
-      unawaited.push(save());
-    },
-  });
-  await expect(
-    receivedMail(mail.message, mail.env(), mail.mind, {
-      hookMs: 50,
-      forwardAnswerMs: 50,
-      factsMs: 20,
-    }),
-  ).rejects.toMatchObject({ code: "TIMEOUT" });
-  expect(errors).toHaveBeenCalledWith(
-    expect.objectContaining({ event: "mail.save-not-answered", raw: RAW }),
-  );
-  expect(mail).toMatchObject({ saves: [[RECEIVED_KEY]], received: [] });
-  errors.mockRestore();
-  expect(unawaited).toHaveLength(1);
-});
-
-test("a hook that saves and forwards does both: the mail is on the log, and so is its forward", async () => {
-  const mail = delivered({
-    hook: async ({ save, forward }) => {
-      await save();
-      await forward("a@elsewhere.example");
-    },
-  });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran", "forwarded to a@elsewhere.example"],
-    received: [{ raw: { path: RAW } }],
-    appended: [
-      {
-        events: [
-          {
-            type: "events.iterate.com/email/forwarded",
-            idempotencyKey: `email/forwarded:${RAW}:a@elsewhere.example`,
-          },
-        ],
-      },
-    ],
-  });
-});
-
-test("the stack's fixed forward runs first, through the same forward: the hook's forward of the mail to that address is refused, and one to another goes", async () => {
-  const outcomes: unknown[] = [];
-  const mail = delivered({
-    hook: async ({ forward }) => {
-      outcomes.push(await forward(GROUP).catch(codeOf));
-      await forward("misha@elsewhere.example");
-    },
-  });
-  await receivedMail(mail.message, mail.env(GROUP), mail.mind);
-  expect(mail).toMatchObject({
-    did: [
-      "the mind kept its files",
-      `forwarded to ${GROUP}`,
-      "the hook ran",
-      "forwarded to misha@elsewhere.example",
-    ],
-  });
-  expect(outcomes).toEqual(["FORWARDED_BEFORE"]);
-});
-
-test.for([
-  {
-    name: "a mail that Cloudflare says it cannot forward is NOT_FORWARDABLE, and Cloudflare is not asked",
-    fails: { canBeForwarded: false },
-    expected: { code: "NOT_FORWARDABLE", did: [] },
-  },
-  {
-    name: "Cloudflare's refusal of an unproven sender is NOT_FORWARDABLE",
-    fails: { forward: "non-authenticated emails cannot be forwarded" },
-    expected: { code: "NOT_FORWARDABLE", did: ["forward to a@elsewhere.example refused"] },
-  },
-  {
-    name: "any other refusal is REFUSED, with Cloudflare's words",
-    fails: { forward: "destination address not verified" },
-    expected: {
-      code: "REFUSED",
-      message: "destination address not verified",
-      did: ["forward to a@elsewhere.example refused"],
-    },
-  },
-  {
-    name: "an address that the mail's X-Forwarded-To names is FORWARDED_BEFORE",
-    fails: { forwardedTo: "a@elsewhere.example" },
-    expected: { code: "FORWARDED_BEFORE", did: [] },
-  },
-])("$name; the hook catches it, and the delivery stands", async ({ fails, expected }) => {
-  let caught: unknown;
-  const mail = delivered({
-    ...fails,
-    hook: async ({ forward }) => {
-      caught = await forward("a@elsewhere.example").catch((error: unknown) => error);
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind);
-  expect({
-    code: errorCode(caught),
-    ...(expected.message && { message: (caught as Error).message }),
-    did: mail.did.slice(2),
-  }).toEqual(expected);
-  expect(mail).toMatchObject({ appended: [] });
-});
-
-test("a hook that runs past the limit is a timeout fact, the delivery stands, and a forward after it is EXPIRED", async () => {
-  let late: Promise<unknown> = Promise.resolve();
-  const mail = delivered({
-    hook: async ({ forward }) => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      late = forward("a@elsewhere.example").catch(codeOf);
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind, { hookMs: 5, forwardAnswerMs: 5 });
-  expect(mail).toMatchObject({
-    appended: [
-      {
-        path: "/integrations/email",
-        events: [
-          {
-            type: "events.iterate.com/email/hook-failed",
-            idempotencyKey: `email/hook-failed:timeout:${RAW}`,
-            payload: {
-              why: "timeout",
-              error: "the hook did not end within 5 ms of its own",
-              raw: RAW,
-            },
-          },
-        ],
-      },
-    ],
-  });
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  expect(await late).toBe("EXPIRED");
-  expect(mail).toMatchObject({ did: ["the mind kept its files", "the hook ran"] });
-});
-
-test("the config's clock stops while Cloudflare answers its forward: a forward answered after the config's limit is email/forwarded, and no timeout", async () => {
-  // as Cloudflare does: the copy goes at once, the answer comes seconds later
-  const mail = delivered({
-    forwardAnswerMs: 150,
-    hook: async ({ forward }) => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      await forward("a@elsewhere.example");
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind, { hookMs: 100, forwardAnswerMs: 400 });
-  expect(mail).toMatchObject({
-    did: ["the mind kept its files", "the hook ran", "forwarded to a@elsewhere.example"],
-    appended: [
-      {
-        events: [
-          {
-            type: "events.iterate.com/email/forwarded",
-            idempotencyKey: `email/forwarded:${RAW}:a@elsewhere.example`,
-            payload: { to: "a@elsewhere.example", raw: RAW },
-          },
-        ],
-      },
-    ],
-  });
-});
-
-test("a forward that the config did not await is still waited for when the hook returns, and recorded", async () => {
-  const mail = delivered({
-    forwardAnswerMs: 60,
-    hook: async ({ forward }) => {
-      void forward("a@elsewhere.example").catch(() => {});
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind, { hookMs: 20, forwardAnswerMs: 400 });
-  expect(mail.appended).toMatchObject([
-    {
-      events: [
-        { type: "events.iterate.com/email/forwarded", payload: { to: "a@elsewhere.example" } },
-      ],
-    },
-  ]);
-});
-
-test("a forward whose answer does not come by the last deadline is ONE fact: email/forwarded with answered false, and no timeout", async () => {
-  const mail = delivered({
-    forwardAnswerMs: 2_000,
-    hook: async ({ forward }) => {
-      await forward("a@elsewhere.example");
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind, { hookMs: 20, forwardAnswerMs: 60 });
-  // one fact, with every field: toMatchObject holds an array to its length
-  expect(mail).toMatchObject({
-    appended: [
-      {
-        path: "/integrations/email",
-        events: [
-          {
-            type: "events.iterate.com/email/forwarded",
-            idempotencyKey: `email/forwarded:${RAW}:a@elsewhere.example`,
-            payload: {
-              to: "a@elsewhere.example",
-              raw: RAW,
-              messageId: null,
-              answered: false,
-            },
-          },
-        ],
-      },
-    ],
-  });
-});
-
-test("the forward is dead the instant the deadline wins: a forward after it, while the hook-failed append never answers, is EXPIRED and reaches no Cloudflare", async () => {
-  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
-  let late: Promise<unknown> | undefined;
-  const mail = delivered({
-    appendHangs: true,
-    hook: async ({ forward }) => {
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      late = forward("a@elsewhere.example").catch(codeOf);
-    },
-  });
-  const delivery = receivedMail(mail.message, mail.env(), mail.mind, {
-    hookMs: 5,
-    forwardAnswerMs: 5,
-    factsMs: 100,
-  });
-  await vi.waitFor(() => expect(late).toBeDefined(), { interval: 5 });
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  expect(mail).toMatchObject({ did: ["the mind kept its files", "the hook ran"] });
-  expect(await late).toBe("EXPIRED");
-  // the append that never answers holds the handler for its bound, and is a log line
-  await expect(delivery).resolves.toBeUndefined();
-  expect(logged.mock.calls.map(([line]) => line)).toContainEqual(
-    expect.objectContaining({
-      event: "mail.hook-failed-not-recorded",
-      appendError: "the mind did not answer within 100 ms",
-    }),
+  await receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS);
+  expect(mail).toMatchObject({ did: ["the mind kept the mail", `forward to ${GROUP} refused`] });
+  expect(logged).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "mail.forward-failed-not-recorded", forwardTo: GROUP }),
   );
   logged.mockRestore();
 });
 
-test.for([
-  ["the last deadline", { hookMs: 1_000, forwardAnswerMs: 1_000 }],
-  ["the config's own time", { hookMs: 1_000, forwardAnswerMs: 100_000 }],
-] as const)(
-  "a forward after %s has passed BY THE CLOCK, before its timer has run, is EXPIRED and reaches no Cloudflare",
-  async ([, limits]) => {
-    let late: Promise<unknown> | undefined;
-    const mail = delivered({
-      hook: async ({ forward }) => {
-        // the clock passes the limit at once; no timer of the boundary's has run
-        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_000);
-        late = forward("a@elsewhere.example").catch(codeOf);
-        clock.mockRestore();
-      },
-    });
-    await receivedMail(mail.message, mail.env(), mail.mind, limits);
-    expect(await late).toBe("EXPIRED");
-    expect(mail).toMatchObject({ did: ["the mind kept its files", "the hook ran"] });
-  },
-);
-
-test("a forward's fact is on the mind's log before the handler returns, also when Cloudflare answers after the hook returned and the append is slow", async () => {
-  const mail = delivered({
-    forwardAnswerMs: 30,
-    appendMs: 50,
-    hook: async ({ forward }) => {
-      void forward("a@elsewhere.example").catch(() => {});
-    },
-  });
-  await receivedMail(mail.message, mail.env(), mail.mind, {
-    hookMs: 20,
-    forwardAnswerMs: 400,
-    factsMs: 1_000,
-  });
-  expect(mail.appended).toMatchObject([
-    {
-      events: [
-        { type: "events.iterate.com/email/forwarded", payload: { to: "a@elsewhere.example" } },
-      ],
-    },
-  ]);
+test("a mail that the mind did not take is not forwarded: the next delivery does both", async () => {
+  const mail = delivered({ mind: "the mind is away", requests: [{ to: OTHER }] });
+  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS)).rejects.toThrow(
+    "the mind is away",
+  );
+  expect(mail).toMatchObject({ did: [], asks: [] });
 });
 
-test("a mind that cannot be reached for the hook is an unreachable fact, the boundary records the mail, and the delivery stands", async () => {
-  const infos = vi.spyOn(console, "info").mockImplementation(() => {});
-  const mail = delivered({ hook: "This mind runs elsewhere and is not connected right now." });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(infos).toHaveBeenCalledWith(
-    expect.objectContaining({ event: "mail.saved-by-the-boundary", raw: RAW, why: "unreachable" }),
-  );
-  infos.mockRestore();
+test("the mind's request to forward the mail sends the original on and is answered by email/forwarded", async () => {
+  const mail = delivered({ requests: [{ to: OTHER }] });
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
   expect(mail).toMatchObject({
-    saves: [[RECEIVED_KEY]],
-    received: [{ raw: { path: RAW } }],
+    did: ["the mind kept the mail", `forwarded to ${OTHER}`],
+    appended: [{ path: "/integrations/email", events: [forwarded(OTHER)] }],
+  });
+  // the second ask is for the requests after the first one
+  expect(mail.asks.map((ask) => ask.afterOffset)).toEqual([7, 8]);
+});
+
+test("a second request is taken while Cloudflare answers the first forward, and both are recorded", async () => {
+  const mail = delivered({ requests: [{ to: OTHER }, { to: GROUP }], forwardAnswerMs: 80 });
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(mail).toMatchObject({
+    did: ["the mind kept the mail", `forwarded to ${OTHER}`, `forwarded to ${GROUP}`],
+  });
+  expect(mail.appended.flatMap((append) => append.events)).toEqual(
+    expect.arrayContaining([forwarded(OTHER), forwarded(GROUP)]),
+  );
+});
+
+test("a request that an agent wrote is not served: only one written at the root counts, and the log says why", async () => {
+  const mail = delivered({ requests: [{ to: OTHER, origin: "/agents/email/t5" }] });
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(mail).toMatchObject({
+    did: ["the mind kept the mail"],
     appended: [
       {
-        path: "/integrations/email",
         events: [
           {
-            type: "events.iterate.com/email/hook-failed",
-            idempotencyKey: `email/hook-failed:unreachable:${RAW}`,
-            payload: {
-              why: "unreachable",
-              error: "Error: This mind runs elsewhere and is not connected right now.",
-              raw: RAW,
-            },
+            ...forwardFailed(
+              OTHER,
+              "not forwarded: only the mind's config, at /, asks for a forward, and /agents/email/t5 asked",
+            ),
+            // a key of the request's own: the config's request for this address keeps its answer
+            idempotencyKey: `email/forward-failed:${RAW}:${OTHER}:request-8`,
           },
         ],
       },
@@ -558,125 +234,96 @@ test("a mind that cannot be reached for the hook is an unreachable fact, the bou
   });
 });
 
-test("a hook fact that the mind does not take is logged, and the delivery stands", async () => {
-  const infos = vi.spyOn(console, "info").mockImplementation(() => {});
-  const mail = delivered({ hook: "the mind is away", append: "the email log is paused" });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  infos.mockRestore();
-});
-
-test("a mind that the link loses after the hook's save was taken: one record, the delivery stands, and the fact says unreachable", async () => {
-  const mail = delivered({ hook: async ({ save }) => save(), lostAfterHook: "the link broke" });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(mail).toMatchObject({
-    saves: [[RECEIVED_KEY]],
-    received: [{ raw: { path: RAW } }],
-    appended: [{ events: [{ payload: { why: "unreachable", raw: RAW } }] }],
-  });
-});
-
-/** Each end of a hook in which nobody chose to leave the mail off the log, with the `why` of the
- *  boundary's record. */
-const NOBODY_CHOSE = [
-  {
-    name: "the hook threw",
-    why: "threw",
-    fails: {
-      hook: async () => {
-        throw new Error("the config broke");
-      },
-    },
-  },
-  { name: "the config has no email", why: "missing", fails: { answer: "missing" as const } },
-  { name: "the mind is of an older build", why: "no answer", fails: { answer: "none" as const } },
-  { name: "the mind cannot be reached", why: "unreachable", fails: { hook: "the mind is away" } },
-  {
-    name: "the mind's call never answers within the limits",
-    why: "unanswered",
-    fails: { hook: () => new Promise<void>(() => {}) },
-  },
-];
-const SHORT = { hookMs: 10, forwardAnswerMs: 10, factsMs: 50 };
-
-test.for(NOBODY_CHOSE)(
-  "$name: the boundary records the mail once, and the delivery stands",
-  async ({ why, fails }) => {
-    const infos = vi.spyOn(console, "info").mockImplementation(() => {});
-    const mail = delivered(fails);
-    await expect(receivedMail(mail.message, mail.env(), mail.mind, SHORT)).resolves.toBeUndefined();
-    expect(mail).toMatchObject({ saves: [[RECEIVED_KEY]], received: [{ raw: { path: RAW } }] });
-    expect(infos).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "mail.saved-by-the-boundary", raw: RAW, why }),
-    );
-    infos.mockRestore();
-  },
-);
-
-test.for(NOBODY_CHOSE)(
-  "$name: a record that the mind refuses fails the delivery",
-  async ({ fails }) => {
-    const infos = vi.spyOn(console, "info").mockImplementation(() => {});
-    const mail = delivered({ ...fails, save: "the mind refused it" });
-    await expect(receivedMail(mail.message, mail.env(), mail.mind, SHORT)).rejects.toThrow(
-      "the mind refused it",
-    );
-    infos.mockRestore();
-  },
-);
-
-test("a hook that returned without saving chose: nothing is recorded, and the delivery stands", async () => {
-  const infos = vi.spyOn(console, "info");
-  const mail = delivered();
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(mail).toMatchObject({ saves: [], received: [] });
-  expect(infos).not.toHaveBeenCalledWith(
-    expect.objectContaining({ event: "mail.saved-by-the-boundary" }),
-  );
-  infos.mockRestore();
-});
-
-test("a hook that saved and then threw makes one record, the hook's", async () => {
-  const infos = vi.spyOn(console, "info");
+test("a request for an address that the mail went to in this delivery forwards nothing more: the stack's own forward, or an earlier request", async () => {
   const mail = delivered({
-    hook: async ({ save }) => {
-      await save();
-      throw new Error("the config broke after it saved");
-    },
+    requests: [{ to: GROUP }, { to: OTHER }, { to: ` ${OTHER.toUpperCase()}` }],
   });
-  await expect(receivedMail(mail.message, mail.env(), mail.mind)).resolves.toBeUndefined();
-  expect(mail).toMatchObject({ saves: [[RECEIVED_KEY]], received: [{ raw: { path: RAW } }] });
-  expect(infos).not.toHaveBeenCalledWith(
-    expect.objectContaining({ event: "mail.saved-by-the-boundary" }),
+  await receivedMail(mail.message, mail.env(GROUP), mail.mind, LIMITS);
+  expect(mail).toMatchObject({
+    did: ["the mind kept the mail", `forwarded to ${GROUP}`, `forwarded to ${OTHER}`],
+  });
+  expect(mail.appended.flatMap((append) => append.events)).toHaveLength(2);
+});
+
+test("a requested forward that Cloudflare refuses is email/forward-failed with its words, and the delivery stands", async () => {
+  const mail = delivered({
+    requests: [{ to: OTHER }],
+    forward: "destination address not verified",
+  });
+  await expect(receivedMail(mail.message, mail.env(), mail.mind, LIMITS)).resolves.toBeUndefined();
+  expect(mail).toMatchObject({
+    did: ["the mind kept the mail", `forward to ${OTHER} refused`],
+    appended: [{ events: [forwardFailed(OTHER, "Error: destination address not verified")] }],
+  });
+});
+
+test("a mail that Cloudflare says it cannot forward is not handed to Cloudflare: the request is answered at once", async () => {
+  const mail = delivered({ requests: [{ to: OTHER }], canBeForwarded: false });
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(mail).toMatchObject({
+    did: ["the mind kept the mail"],
+    appended: [
+      {
+        events: [
+          forwardFailed(
+            OTHER,
+            "not forwarded: Cloudflare forwards no mail whose sender it did not prove",
+          ),
+        ],
+      },
+    ],
+  });
+});
+
+test("a forward whose answer does not come by the last deadline is email/forwarded with answered false, and the handler returns", async () => {
+  const mail = delivered({ requests: [{ to: OTHER }], forwardAnswerMs: 5_000 });
+  const started = Date.now();
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(Date.now() - started).toBeLessThan(1_000);
+  expect(mail).toMatchObject({ appended: [{ events: [forwarded(OTHER, { answered: false })] }] });
+});
+
+test("a request that comes after the wait is not served: the handler has returned", async () => {
+  const mail = delivered({ requests: [{ to: OTHER, afterMs: 500 }] });
+  const started = Date.now();
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(Date.now() - started).toBeLessThan(400);
+  expect(mail).toMatchObject({ did: ["the mind kept the mail"], appended: [] });
+});
+
+test("a request that names no address is passed over, and the next one is served", async () => {
+  const mail = delivered({ requests: [{ to: 5 }, { to: " " }, { to: OTHER }] });
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(mail).toMatchObject({ did: ["the mind kept the mail", `forwarded to ${OTHER}`] });
+});
+
+test("a mind of an older build, which answers no offset and cannot be asked for requests, is logged, and its delivery stands", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const mail = delivered({ requests: "the mind has no emailForwardRequest", offset: null });
+  await expect(receivedMail(mail.message, mail.env(), mail.mind, LIMITS)).resolves.toBeUndefined();
+  expect(mail).toMatchObject({ did: ["the mind kept the mail"], appended: [] });
+  expect(mail.asks.at(-1)).toEqual({ raw: RAW, afterOffset: undefined });
+  expect(logged).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "mail.forward-requests-not-read", raw: RAW }),
   );
-  infos.mockRestore();
+  logged.mockRestore();
 });
 
-test("a stack with a fixed forward records the mail in step 1, with its files; a hook that does not save changes nothing, and one that saves calls the mind no more", async () => {
-  for (const hook of [undefined, async ({ save }: EmailHookArgs) => save()]) {
-    const mail = delivered({ hook });
-    await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind)).resolves.toBeUndefined();
-    expect(mail).toMatchObject({
-      calls: [{ events: [RECEIVED_KEY], files: [RAW] }],
-      received: [{ raw: { path: RAW } }],
-      saves: [],
-    });
-  }
+test("a mind that could not be asked for its requests to the end closed nothing: it is asked again while the time lasts, and then the delivery fails, so the next delivery serves them", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  const mail = delivered({ requests: "the mind is away" });
+  await expect(receivedMail(mail.message, mail.env(), mail.mind, LIMITS)).rejects.toThrow(
+    "the mind is away",
+  );
+  // once at the start, and once more when the time was up
+  expect(mail.asks.length).toBeGreaterThan(1);
+  logged.mockRestore();
 });
 
-test("a stack whose fixed forward is refused has the mail recorded all the same, though the delivery fails", async () => {
-  const mail = delivered({ forward: "destination address not verified" });
-  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind)).rejects.toMatchObject({
-    code: "REFUSED",
-  });
-  expect(mail).toMatchObject({ received: [{ raw: { path: RAW } }], saves: [] });
-});
-
-test("a fixed forward that fails the delivery runs no hook: the next delivery does", async () => {
-  const mail = delivered({ forward: "destination address not verified" });
-  await expect(receivedMail(mail.message, mail.env(GROUP), mail.mind)).rejects.toMatchObject({
-    code: "REFUSED",
-  });
-  expect(mail).toMatchObject({ did: ["the mind kept its files", `forward to ${GROUP} refused`] });
+test("an ask that fails once is made again, and the request is served", async () => {
+  const mail = delivered({ requests: [{ to: OTHER }], asksFail: 1 });
+  await receivedMail(mail.message, mail.env(), mail.mind, { ...LIMITS, requestMs: 700 });
+  expect(mail).toMatchObject({ did: ["the mind kept the mail", `forwarded to ${OTHER}`] });
 });
 
 /** An envelope sender whose quoted local part holds a `)`, `;` and words that read as results. */
@@ -762,13 +409,36 @@ test.for([
   },
 ])("$name", async ({ headers, envelopeFrom, expected }) => {
   const mail = delivered({ headers, envelopeFrom });
-  await receivedMail(mail.message, mail.env(), mail.mind);
-  expect(mail).toMatchObject({ hooked: [expected] });
+  await receivedMail(mail.message, mail.env(), mail.mind, LIMITS);
+  expect(mail).toMatchObject({ received: [expected] });
 });
 
 /** Cloudflare's Authentication-Results field with these results, one folded line each. */
 function cloudflareRecord(...results: string[]) {
   return `Authentication-Results: mx.cloudflare.net;${results.map((result) => `\r\n\t${result}`).join(";")}`;
+}
+
+function forwarded(to: string, more?: object) {
+  return {
+    type: "events.iterate.com/email/forwarded",
+    idempotencyKey: `email/forwarded:${RAW}:${to}`,
+    payload: { to, raw: RAW, messageId: "m1@sender.example", received: 7, ...more },
+  };
+}
+
+function forwardFailed(forwardTo: string, error: unknown) {
+  return {
+    type: "events.iterate.com/email/forward-failed",
+    idempotencyKey: `email/forward-failed:${RAW}:${forwardTo}`,
+    payload: {
+      to: "hello@mind.example",
+      forwardTo,
+      messageId: "<m1@sender.example>",
+      raw: RAW,
+      received: 7,
+      error,
+    },
+  };
 }
 
 /** One mail as Cloudflare hands it to the Worker, with a mind and a forward that say what they did,
@@ -780,10 +450,6 @@ function delivered(
     /** One address, or one for each `X-Forwarded-To` line, the newest first. */
     forwardedTo?: string | string[];
     append?: string;
-    /** The mind takes no fact and never answers an append. */
-    appendHangs?: boolean;
-    /** How long the mind takes to answer an append. */
-    appendMs?: number;
     /** Header lines above the mail's own. */
     headers?: string[];
     /** The envelope sender, if not the From address. */
@@ -792,29 +458,36 @@ function delivered(
     forwardAnswerMs?: number;
     /** Cloudflare's `canBeForwarded`; absent as in a local runtime. */
     canBeForwarded?: boolean;
-    /** What the config's `email` hook does, in the mind; a string: the mind cannot be reached for
-     *  it, with those words. */
-    hook?: ((args: EmailHookArgs) => Promise<void>) | string;
-    /** The mind refuses the hook's save, with these words. */
-    save?: string;
-    /** How long the mind takes to answer the hook's save. */
-    saveMs?: number;
-    /** The mind never answers the hook's save. */
-    saveHangs?: boolean;
-    /** What the mind's `email` answers when the hook did not throw: "returned" when absent;
-     *  "missing" for a config with no `email`; "none" for a mind of an older build, which answers
-     *  nothing. */
-    answer?: "returned" | "missing" | "none";
-    /** The link to the mind breaks after the hook ran: its `email` rejects with these words. */
-    lostAfterHook?: string;
+    /** The mind's requests to forward this mail, in their order: `origin` is "/" when absent, and
+     *  `afterMs` how long after the ask the request comes. A string: the mind cannot be asked,
+     *  with those words. */
+    requests?: { to: unknown; origin?: string; afterMs?: number }[] | string;
+    /** The claims that an earlier delivery left; "none": a mind of an older build, which has no
+     *  such call; "hangs": the claim is answered, as taken, only after 200 ms; "answer lost": the claim
+     *  lands and its answer does not come. */
+    claims?: string[] | "none" | "hangs" | "answer lost";
+    /** The claim call itself fails; a release still reaches the mind. */
+    claimCallFails?: boolean;
+    /** How many asks for the next request fail before one is answered. */
+    asksFail?: number;
+    /** The offset that the mind answers for the mail's `email/received`: 7 when absent; null
+     *  for a mind of an older build, which answers nothing. */
+    offset?: number | null;
   } = {},
 ) {
   const did: string[] = [];
-  const saves: unknown[] = [];
   const calls: { events: unknown[]; files: string[] }[] = [];
   const received: unknown[] = [];
   const appended: { path: string; events: unknown[] }[] = [];
-  const hooked: unknown[] = [];
+  const asks: { raw: string; afterOffset: number | undefined }[] = [];
+  const requests = typeof fails.requests === "string" ? [] : [...(fails.requests || [])];
+  let offset = fails.offset || 7;
+  let asksFailing = fails.asksFail || 0;
+  const claims = new Set(Array.isArray(fails.claims) ? fails.claims : []);
+  const owners = new Map<string, string>();
+  const released: string[] = [];
+  let releasing = 0;
+  let overlapped = false;
   const headers = new Headers({ "message-id": "<m1@sender.example>" });
   for (const address of [fails.forwardedTo || []].flat()) headers.append("x-forwarded-to", address);
   const raw = new TextEncoder().encode(
@@ -822,6 +495,7 @@ function delivered(
       ...(fails.headers || []),
       "From: Ada <ada@sender.example>",
       "To: hello@mind.example",
+      "Message-ID: <m1@sender.example>",
       "Subject: hello",
       "",
       "hi",
@@ -831,14 +505,18 @@ function delivered(
   return {
     did,
     appended,
-    /** The payload of each `email/received` the mind took: only a save sends one. */
+    /** The payload of each `email/received` the mind took. */
     received,
-    /** The mail that the config's hook was handed. */
-    hooked,
-    /** The idempotency keys of each call of the mind that the hook's save made. */
-    saves,
     /** Each call of `receiveEmail`: its events' keys and its files' paths. */
     calls,
+    /** Each ask for the mind's next request to forward the mail. */
+    asks,
+    /** The addresses whose attempt is claimed. */
+    claims,
+    /** The claims given back on a mind whose claim hangs. */
+    released,
+    /** Whether two releases ever ran at the same time. */
+    overlapped: () => overlapped,
     // The cast: of Cloudflare's message, the handler reads the envelope, the headers and the bytes and
     // calls `forward`.
     message: {
@@ -866,49 +544,68 @@ function delivered(
         events: { idempotencyKey?: string; payload?: unknown }[];
         files: { path: string }[];
       }) => {
+        if (fails.mind) throw new Error(fails.mind);
         calls.push({
           events: mail.events.map((event) => event.idempotencyKey),
           files: mail.files.map((file) => file.path),
         });
-        // a call with no files is the record: the hook's save or the boundary's own
-        if (mail.files.length === 0) {
-          saves.push(mail.events.map((event) => event.idempotencyKey));
-          if (fails.saveHangs) return new Promise<void>(() => {});
-          if (fails.saveMs) await new Promise((resolve) => setTimeout(resolve, fails.saveMs));
-          if (fails.save) throw new Error(fails.save);
-          received.push(...mail.events.map((event) => event.payload));
-          return;
-        }
-        if (fails.mind) throw new Error(fails.mind);
-        did.push("the mind kept its files");
-        // a stack with a fixed forward records the mail with its files
+        did.push("the mind kept the mail");
         received.push(...mail.events.map((event) => event.payload));
+        return fails.offset === null ? undefined : { offset };
       },
       append: async (path: string, events: unknown[]) => {
-        if (fails.appendHangs) return new Promise<void>(() => {});
-        if (fails.appendMs) await new Promise((resolve) => setTimeout(resolve, fails.appendMs));
         if (fails.append) throw new Error(fails.append);
         appended.push({ path, events });
       },
-      // As the mind runs the hook: a throw of the config's is the answer "threw", not this call's
-      // failure; a string hook is a mind that cannot be reached.
-      email: async (args: EmailHookArgs): Promise<"returned" | "threw" | "missing" | undefined> => {
-        if (typeof fails.hook === "string") throw new Error(fails.hook);
-        did.push("the hook ran");
-        hooked.push(args.mail);
-        const threw = await (fails.hook?.(args) ?? Promise.resolve()).then(
-          () => false,
-          () => true,
-        );
-        if (fails.lostAfterHook) throw new Error(fails.lostAfterHook);
-        if (threw) return "threw";
-        if (fails.answer === "none") return undefined;
-        return fails.answer || "returned";
+      // As the mind's claim of one attempt for a mail and an address.
+      emailForwardClaim: async (claim: { to: string; owner: string; release?: true }) => {
+        if (fails.claims === "none") throw new Error("the mind has no emailForwardClaim");
+        if (fails.claims === "answer lost") {
+          if (claim.release) released.push(claim.to);
+          else throw new Error("Network connection lost.");
+          return true;
+        }
+        if (fails.claims === "hangs") {
+          if (!claim.release) await new Promise((resolve) => setTimeout(resolve, 200));
+          else {
+            // a release takes a while, and says how many were running with it
+            releasing += 1;
+            overlapped ||= releasing > 1;
+            // longer than the claim's late answer takes, so an unchained second release would
+            // start while the first still runs
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            releasing -= 1;
+            released.push(claim.to);
+          }
+          return true;
+        }
+        if (fails.claimCallFails && !claim.release) throw new Error("Network connection lost.");
+        // as the mind: only the delivery that took a claim gives it back
+        if (claim.release) {
+          if (owners.get(claim.to) === claim.owner) claims.delete(claim.to);
+          return true;
+        }
+        if (claims.has(claim.to)) return false;
+        claims.add(claim.to);
+        owners.set(claim.to, claim.owner);
+        return true;
+      },
+      // As the mind waits for the next request on its email log: null when none came in time.
+      emailForwardRequest: async (wait: {
+        raw: string;
+        afterOffset?: number;
+        timeoutMs: number;
+      }) => {
+        asks.push({ raw: wait.raw, afterOffset: wait.afterOffset });
+        if (typeof fails.requests === "string") throw new Error(fails.requests);
+        if (asksFailing-- > 0) throw new Error("the link broke");
+        const next = requests[0];
+        const waitMs = Math.min(next?.afterMs ?? (next ? 0 : Infinity), wait.timeoutMs);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        if (!next || (next.afterMs ?? 0) > wait.timeoutMs) return null;
+        requests.shift();
+        return { offset: ++offset, to: next.to, origin: next.origin || "/" };
       },
     },
   };
-}
-
-function codeOf(error: unknown) {
-  return errorCode(error);
 }

@@ -124,7 +124,7 @@ const PROBE_MODULE = ".iterate-publication-probe.js";
 /** The abstract methods of `IterateConfigEntrypoint` (iterate/sdk). The loader never type-checks,
  *  so a commit may lack one: it is published, and `mind/worker-updated` names what it lacks, once
  *  for the commit. */
-const ConfigMethod = z.enum(["fetch", "processEvent", "email"]);
+const ConfigMethod = z.enum(["fetch", "processEvent"]);
 type ConfigMethod = z.infer<typeof ConfigMethod>;
 
 const ProbeAnswer = z.object({

@@ -20,7 +20,8 @@ export function mindTransportOf(env: Env): MindTransport {
       append: (path, events, fromAuth) => mind.append(path, events, fromAuth),
       runAct: (held) => mind.runAct(held),
       receiveEmail: (mail) => mind.receiveEmail(mail),
-      email: (args) => mind.email(args),
+      emailForwardRequest: (wait) => mind.emailForwardRequest(wait),
+      emailForwardClaim: (claim) => mind.emailForwardClaim(claim),
       api: (who) => mind.api(who),
     };
   }
@@ -31,7 +32,8 @@ export function mindTransportOf(env: Env): MindTransport {
     append: (path, events, fromAuth) => provided.append(path, events, fromAuth),
     runAct: (held) => provided.runAct(held),
     receiveEmail: (mail) => provided.receiveEmail(mail),
-    email: (args) => provided.email(args),
+    emailForwardRequest: (wait) => provided.emailForwardRequest(wait),
+    emailForwardClaim: (claim) => provided.emailForwardClaim(claim),
     api: (who) => provided.api(who),
     link: (dial) => provided.fetch(markedRequest(dial, true)),
     appendOrKeep: (path, fact) => provided.appendOrKeep(path, fact),
