@@ -4,6 +4,7 @@ import {
   type AppDescription,
   serveAppDescription,
 } from "./app-description.ts";
+import { OwnerEmailPattern } from "./mind-config.ts";
 
 test("the app's own object is answered as JSON at one well-known path, to anyone", async () => {
   expect(APP_DESCRIPTION_PATH).toBe("/.well-known/iterate-app");
@@ -39,18 +40,43 @@ test("a sign-in method that the issuer does not know is refused by the type, and
   expect(() => serveAppDescription(ask(APP_DESCRIPTION_PATH), everyone)).toThrow(/for/);
 });
 
-test("the mail domains of an app's people are served as they are written, and anything that is no whole lowercase domain is refused as it is served", async () => {
-  const shop: AppDescription = { name: "Shop", emailDomains: ["example.com", "second.example"] };
+test("the addresses and the patterns of an app's people are served in lowercase, and a pattern that is no owner email pattern is refused as it is served", async () => {
+  const shop: AppDescription = {
+    name: "Shop",
+    allowedEmails: ["eve@elsewhere.test"],
+    allowedEmailPatterns: ["*@example.com", "*@second.example"],
+  };
   expect(await serveAppDescription(ask(APP_DESCRIPTION_PATH), shop)!.json()).toEqual(shop);
-  for (const domain of ["@example.com", "*.example.com", "Example.com", "example"])
-    expect(
-      () =>
-        serveAppDescription(ask(APP_DESCRIPTION_PATH), { name: "Shop", emailDomains: [domain] }),
-      domain,
-    ).toThrow(/emailDomains/);
-  // @ts-expect-error -- a list names one domain at least
-  const none: AppDescription = { name: "Shop", emailDomains: [] };
-  expect(() => serveAppDescription(ask(APP_DESCRIPTION_PATH), none)).toThrow(/emailDomains/);
+  expect(
+    await serveAppDescription(ask(APP_DESCRIPTION_PATH), {
+      name: "Shop",
+      allowedEmails: ["Eve@Elsewhere.test"],
+    })!.json(),
+  ).toEqual({ name: "Shop", allowedEmails: ["eve@elsewhere.test"] });
+  // a list of domains is not read, and is not dropped in silence either
+  expect(() =>
+    serveAppDescription(ask(APP_DESCRIPTION_PATH), {
+      name: "Shop",
+      // @ts-expect-error -- no such field
+      emailDomains: ["example.com"],
+    }),
+  ).toThrow(/emailDomains is not read/);
+  // the same patterns as the mind config's, and no other spelling
+  for (const pattern of ["example.com", "@example.com", "*@*.example.com", "*@Example.com", "*"]) {
+    const says = { name: "Shop", allowedEmailPatterns: [pattern] };
+    expect(OwnerEmailPattern.safeParse(pattern), pattern).toMatchObject({ success: false });
+    expect(() => serveAppDescription(ask(APP_DESCRIPTION_PATH), says), pattern).toThrow(
+      /allowedEmailPatterns/,
+    );
+  }
+  for (const says of [
+    { name: "Shop", allowedEmails: ["example.com"] },
+    { name: "Shop", allowedEmails: [] },
+  ])
+    expect(() => serveAppDescription(ask(APP_DESCRIPTION_PATH), says)).toThrow(/allowedEmails/);
+  expect(() =>
+    serveAppDescription(ask(APP_DESCRIPTION_PATH), { name: "Shop", allowedEmailPatterns: [] }),
+  ).toThrow(/allowedEmailPatterns/);
 });
 
 const GUESTBOOK: AppDescription = {

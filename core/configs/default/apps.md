@@ -57,10 +57,11 @@ apps/<name>/
   member: it gives a person who is no member a session for the apps, so an app for members has no
   reason to name `"email"`. The code is mailed from
   `sign-in@<the zone of the app's host>`, under the app's name.
-  An app whose people are at certain mail domains names them: `emailDomains: ["example.com"]`.
-  The sign-in then mails a code for the app's host to an address at one of those domains alone,
-  and takes no mailed code's session of any other address, so nobody else signs up. It binds the
-  mailed code alone: which members come is still the app's guard.
+  An app for certain people names them as a mind's config names its owners: addresses in
+  `allowedEmails`, and patterns in `allowedEmailPatterns`, each `*@<domain>` (every address at
+  exactly that domain). The sign-in then mails a code for the app's host to an address that one
+  of the two names, and takes no mailed code's session of any other address, so nobody else
+  signs up. They bind the mailed code alone: which members come is still the app's guard.
   `this.auth.person(request).method` says which of the two the person used. The platform reads no
   web app manifest: an app that wants to be installable in a browser serves one of its own.
 - **A page takes a new commit by itself: `apps/live-reload/live-reload.js`.** The Dash, the docs

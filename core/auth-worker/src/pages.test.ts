@@ -64,7 +64,7 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
     name: "Guestbook",
     icon: "https://guestbook.example.com/icon.svg",
     members: false,
-    emailDomains: null,
+    allowedEmails: null,
     signIn: ["passkey" as const],
   };
   // an app that names "email" after the passkey has the button to the mailed code's page below,
@@ -115,7 +115,7 @@ test("the mind's sign-in offers the passkey as its main action, and below it an 
       name: "Onboarding",
       icon: "https://onboarding.example.com/icon.svg",
       members: true,
-      emailDomains: null,
+      allowedEmails: null,
       signIn: ["passkey"],
     },
     offersEmail: false,
@@ -135,7 +135,7 @@ test("on a mind where nobody has a passkey yet, the sign-in for owners has the f
     name: "Onboarding",
     icon: "https://onboarding.example.com/icon.svg",
     members: true,
-    emailDomains: null,
+    allowedEmails: null,
     signIn: ["passkey" as const],
   };
   const next = "/oauth2/auth?client_id=onboarding&state=a";
@@ -347,7 +347,7 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
     name: "Guestbook",
     icon: null,
     members: false,
-    emailDomains: null,
+    allowedEmails: null,
     signIn: ["email" as const, "passkey" as const],
   };
   const forApp = await kept(

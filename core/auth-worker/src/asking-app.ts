@@ -34,17 +34,20 @@
 // methods alone, in the app's order (`signInOf`). It is read from the app, never from the
 // request, so an MCP client that signs a person in to the app gets the same list.
 //
-// WHOSE ADDRESS A MAILED CODE SIGNS IN (`emailDomains`) is enforced with it: for an app that
-// names domains, no code is mailed to an address at any other (./email-sign-in.ts), and a session
-// that a mailed code opened for such an address gets no code for the app's host (`appTakes`). So
-// the list holds at the sign-up, and not only at the app's own guard. It binds the method
-// "email" alone; a list that changes binds the grants made after it.
+// WHOSE ADDRESS A MAILED CODE SIGNS IN (`allowedEmails`, `allowedEmailPatterns`) is enforced
+// with it, by the rule that says who owns a mind (iterate/mind-config `isOwnerEmail`): addresses,
+// each whole, and patterns `*@<domain>`. For an app that names either, no code is mailed to an
+// address that neither names (./email-sign-in.ts), and a session that a mailed code opened for
+// such an address gets no code for the app's host (`appTakes`). So the list holds at the sign-up,
+// and not only at the app's own guard. It binds the method "email" alone; a list that changes
+// binds the grants made after it.
 //
 // AN APP IS AN OAUTH CLIENT, as Codex is: the host's client holds the app's name and icon (its
 // `clientName` and `logoUri`), written here whenever the description is read and says something
 // else. So the list of a person's sign-ins by client (./oauth.ts `sessionsByClientOf`) names the
 // app as the sign-in pages do, and asks no app for it.
 import { APP_DESCRIPTION_PATH, AppDescription } from "iterate/app-description";
+import { domainOfOwnerEmailPattern, isOwnerEmail } from "iterate/mind-config";
 import type { SignInMethod } from "iterate/principal";
 import { admitted } from "./device/limits.ts";
 import { configOf, type Env, issuerOf } from "./env.ts";
@@ -70,8 +73,8 @@ export type AskingApp = {
   /** How the app's people sign in, in the app's order: what it names, or the default for whom it
    *  is for (`saidIn`). The sign-in page opens on the first. */
   signIn: SignInMethod[];
-  /** The domains whose addresses a mailed code signs in to the app, or null: any address. */
-  emailDomains: string[] | null;
+  /** Whose address a mailed code signs in to the app (`takesAddress`), or null: any address. */
+  allowedEmails: AllowedEmails | null;
 };
 
 const text = (value: string) =>
@@ -96,7 +99,7 @@ export async function signInOf(
   methods: SignInMethod[];
   /** For a mind hostname's sign-in: the app's name, and whose address a mailed code signs in to
    *  it (`takesAddress`). The pages' refusal names the app by it, whichever client asks. */
-  mailedCode: Pick<AskingApp, "name" | "emailDomains"> | null;
+  mailedCode: Pick<AskingApp, "name" | "allowedEmails"> | null;
 } | null> {
   const authorization = hostAuthorizationIn(env, next);
   if (!authorization) return { app: null, methods: CONTROL_PLANE_SIGN_IN, mailedCode: null };
@@ -121,18 +124,25 @@ export async function askingAppOf(env: Env, next: string): Promise<AskingApp | n
  *  app, and any other when the app names its method. A mailed code's counts only for an address
  *  that the app takes (`takesAddress`). */
 export const appTakes = (
-  app: Pick<AskingApp, "signIn" | "emailDomains">,
+  app: Pick<AskingApp, "signIn" | "allowedEmails">,
   session: { method: SignInMethod; email: string },
 ) =>
   session.method === "passkey" ||
   (app.signIn.includes(session.method) &&
     (session.method !== "email" || takesAddress(app, session.email)));
 
-/** WHETHER A MAILED CODE SIGNS `email` IN TO THE APP: the app names no domains, or the address is
- *  at one of them, whole (the text after its last "@", in lowercase). */
-export const takesAddress = (app: Pick<AskingApp, "emailDomains">, email: string) =>
-  !app.emailDomains ||
-  app.emailDomains.includes(email.slice(email.lastIndexOf("@") + 1).toLowerCase());
+/** The addresses and the patterns (`*@<domain>`) that an app names for the mailed code. */
+export type AllowedEmails = { emails: string[]; patterns: string[] };
+
+/** WHETHER A MAILED CODE SIGNS `email` IN TO THE APP: the app names nobody, or the address is one
+ *  that it names, by the one rule that says who owns a mind (iterate/mind-config
+ *  `isOwnerEmail`). */
+export const takesAddress = (app: Pick<AskingApp, "allowedEmails">, email: string) =>
+  !app.allowedEmails ||
+  isOwnerEmail(
+    { ownerEmails: app.allowedEmails.emails, ownerEmailPatterns: app.allowedEmails.patterns },
+    email,
+  );
 
 /** `next` as an authorization request of this issuer for a mind hostname: the hostname's origin,
  *  and the request's parameters. Null for anything else. */
@@ -164,7 +174,7 @@ async function isOwnSignIn(
 export async function appOf(env: Env, origin: string): Promise<AskingApp | null> {
   const { host } = new URL(origin);
   const key = `iterate-app-description:${host}`;
-  let kept = await env.OAUTH_KV.get<Kept>(key, "json");
+  let kept = inThisShape(await env.OAUTH_KV.get<Kept & DomainsRow>(key, "json"));
   if (
     !kept &&
     !(await keptHostClientOf(env, host)) &&
@@ -205,8 +215,25 @@ export async function appOf(env: Env, origin: string): Promise<AskingApp | null>
     icon: kept.icon,
     members: kept.members,
     signIn: kept.signIn,
-    // a row that was kept before the issuer read this field has none
-    emailDomains: kept.emailDomains || null,
+    allowedEmails: kept.allowedEmails,
+  };
+}
+
+/** A ROW OF AN ISSUER THAT READ A LIST OF DOMAINS (`emailDomains`) where this one reads
+ *  `allowedEmails`. The mind's KV outlives a deploy, so this issuer may read such a row for the
+ *  five minutes until the app is asked again. */
+type DomainsRow = { emailDomains?: string[] | null; allowedEmails?: AllowedEmails | null };
+
+/** Such a row as this issuer keeps it: a domain is the pattern `*@<domain>`, which names the same
+ *  addresses. So a row that held a list never reads as "any address". */
+function inThisShape(row: (Kept & DomainsRow) | null): Kept | null {
+  if (!row) return null;
+  const { emailDomains, ...kept } = row;
+  if (kept.allowedEmails || !emailDomains)
+    return { ...kept, allowedEmails: kept.allowedEmails || null };
+  return {
+    ...kept,
+    allowedEmails: { emails: [], patterns: emailDomains.map((domain) => `*@${domain}`) },
   };
 }
 
@@ -231,13 +258,13 @@ const NOTHING: {
   icon: string | null;
   members: boolean;
   signIn: SignInMethod[];
-  emailDomains: string[] | null;
-} = { name: null, icon: null, members: false, signIn: ["email", "passkey"], emailDomains: null };
+  allowedEmails: AllowedEmails | null;
+} = { name: null, icon: null, members: false, signIn: ["email", "passkey"], allowedEmails: null };
 
 /** AN APP THAT THE ISSUER HAS NO WORD OF YET: it did not answer, or its description is wrong, and
  *  nothing that it said before is kept. The issuer does not know whom the app takes, so it takes
  *  the passkey alone until the app says: a code that is mailed meanwhile, or a grant for an
- *  address, could be one that the app's own list refuses (`signIn`, `emailDomains`). */
+ *  address, could be one that the app's own list refuses (`signIn`, `allowedEmails`). */
 const UNHEARD: typeof NOTHING = { ...NOTHING, signIn: ["passkey"] };
 
 /** WHAT THE TEXT OF AN APP'S DESCRIPTION SAYS (iterate/app-description `AppDescription`): a name
@@ -247,7 +274,7 @@ const UNHEARD: typeof NOTHING = { ...NOTHING, signIn: ["passkey"] };
  *  and email then passkey for any other, and whose address a mailed code signs in. A text that is
  *  no JSON object says nothing: an app with no description answers with a page, or with none.
  *  NULL: A JSON OBJECT THAT IS NO `AppDescription`, such as one that names a method this issuer
- *  does not know, or a domain that is none, and one that broke off or is over 20,000 characters. The app wrote a description and it is wrong, so it is
+ *  does not know, or a pattern that is none, and one that broke off or is over 20,000 characters. The app wrote a description and it is wrong, so it is
  *  held to no list that it did not write, and it is not opened to anyone either: the caller keeps
  *  what the app last said (`appOf`). */
 export function saidIn(descriptionText: string, descriptionUrl: string): typeof NOTHING | null {
@@ -263,6 +290,9 @@ export function saidIn(descriptionText: string, descriptionUrl: string): typeof 
     return unread;
   }
   if (typeof json !== "object" || !json || Array.isArray(json)) return NOTHING;
+  // A list of domains (`emailDomains`) is a restriction that this issuer does not read. The parse
+  // would drop it and leave the app for any address, so such a description is wrong.
+  if ("emailDomains" in json) return null;
   const parsed = AppDescription.safeParse(json);
   if (!parsed.success) return null;
   const name = parsed.data.name
@@ -273,6 +303,7 @@ export function saidIn(descriptionText: string, descriptionUrl: string): typeof 
   const { origin } = new URL(descriptionUrl);
   const icon = parsed.data.icon ? new URL(parsed.data.icon, descriptionUrl) : null;
   const members = parsed.data.for === "members";
+  const { allowedEmails, allowedEmailPatterns } = parsed.data;
   return {
     name: name || null,
     // a path that begins `//` names another host: an icon is the app's own origin's alone
@@ -281,8 +312,29 @@ export function saidIn(descriptionText: string, descriptionUrl: string): typeof 
     signIn: [
       ...new Set<SignInMethod>(parsed.data.signIn || (members ? ["passkey"] : NOTHING.signIn)),
     ],
-    emailDomains: parsed.data.emailDomains ? [...new Set(parsed.data.emailDomains)] : null,
+    allowedEmails:
+      allowedEmails || allowedEmailPatterns
+        ? {
+            emails: [...new Set(allowedEmails || [])],
+            patterns: [...new Set(allowedEmailPatterns || [])],
+          }
+        : null,
   };
+}
+
+/** WHOM AN APP'S MAILED CODE IS FOR, IN WORDS, or "" for an app that takes any address. The
+ *  pages name the domains of the patterns, and never an address that the app names: the page is
+ *  for anyone. */
+export function allowedEmailsWords(app: Pick<AskingApp, "name" | "allowedEmails">): string {
+  if (!app.allowedEmails) return "";
+  const { emails, patterns } = app.allowedEmails;
+  const domains = new Intl.ListFormat("en", { type: "disjunction" }).format(
+    patterns.map(domainOfOwnerEmailPattern),
+  );
+  if (!patterns.length) return `${app.name} takes only the addresses that it names.`;
+  return emails.length
+    ? `${app.name} takes an address at ${domains}, and the addresses that it names, only.`
+    : `${app.name} takes an address at ${domains} only.`;
 }
 
 /** The app's tile (plain-page.css `.tile`): its icon, or its initials. Never a built-in mark of

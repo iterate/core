@@ -898,16 +898,19 @@ test("a mailed code's session at an app that names the passkey alone goes to tha
   expect(stack.mailed).toHaveLength(before);
 });
 
-// AN APP NAMES WHOSE ADDRESS A MAILED CODE SIGNS IN (iterate/app-description `emailDomains`), and
-// the issuer holds the sign-up to the list: at the mail, and at every code for the app's host.
-test("an app that names domains: no code is mailed to an address at another domain and no challenge is made, from the app's own page and from an MCP client alike; a session of such an address gets no code for the host; a passkey's session passes", async () => {
+// AN APP NAMES WHOSE ADDRESS A MAILED CODE SIGNS IN (iterate/app-description `allowedEmails`,
+// `allowedEmailPatterns`), and the issuer holds the sign-up to them: at the mail, and at every
+// code for the app's host.
+test("an app that names addresses and patterns: no code is mailed to an address that neither names and no challenge is made, from the app's own page and from an MCP client alike; a session of such an address gets no code for the host; a passkey's session passes", async () => {
   const stack = stackOf();
   const shop = "https://shop.example.com";
   const inside = "eve@shop-people.dev";
+  const named = "kit@kits-mail.dev";
   stack.described.set("shop.example.com", {
     name: "Shop",
     signIn: ["email", "passkey"],
-    emailDomains: ["shop-people.dev"],
+    allowedEmails: [named],
+    allowedEmailPatterns: ["*@shop-people.dev"],
   });
   const mcp = await oauthHelpers(stack.env).createClient({
     clientName: "An MCP client",
@@ -925,7 +928,7 @@ test("an app that names domains: no code is mailed to an address at another doma
   for (const next of [own, fromMcp])
     expect(
       await (await ask(stack.env, `/sign-in/email?${new URLSearchParams({ next })}`)).text(),
-    ).toContain("Shop takes an address at shop-people.dev only.");
+    ).toContain("Shop takes an address at shop-people.dev, and the addresses that it names, only.");
 
   const challenges = () =>
     stack.db.prepare("select count(*) as n from email_challenges").get() as { n: number };
@@ -946,13 +949,16 @@ test("an app that names domains: no code is mailed to an address at another doma
     status: 400,
     mailed: 0,
     challenges: 0,
-    says: "Shop takes an address at shop-people.dev only. Use such an address.",
+    says: "Shop takes an address at shop-people.dev, and the addresses that it names, only. Use such an address.",
   };
   expect({
-    // an address at another domain, a subdomain of the app's, and a member's: one answer for all
+    // an address that neither names, at a subdomain of a pattern's, beside the named one at its
+    // domain, and a member's: one answer for all
     outsider: await asked(GUEST, own),
     outsiderFromMcp: await asked(GUEST, fromMcp),
     subdomain: await asked("eve@mail.shop-people.dev", own),
+    besideTheNamed: await asked("eve@kits-mail.dev", own),
+    named: await asked(named, own),
     member: await asked(MEMBER, own),
     insider: await asked(inside, own),
     insiderInCapitals: await asked("Bo@Shop-People.dev", fromMcp),
@@ -960,6 +966,8 @@ test("an app that names domains: no code is mailed to an address at another doma
     outsider: refused,
     outsiderFromMcp: refused,
     subdomain: refused,
+    besideTheNamed: refused,
+    named: { status: 303, mailed: 1, challenges: 1, says: "" },
     member: refused,
     insider: { status: 303, mailed: 1, challenges: 1, says: "" },
     insiderInCapitals: { status: 303, mailed: 1, challenges: 1, says: "" },

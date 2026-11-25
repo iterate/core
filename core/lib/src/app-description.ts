@@ -9,18 +9,11 @@
 // It is no web app manifest: a browser reads none of it. An app that wants to be installable in a
 // browser serves a manifest of its own, which the platform does not read.
 import { z } from "zod";
+import { OwnerEmailPattern } from "./mind-config.ts";
 import { SignInMethod } from "./principal.ts";
 
 /** Where an app answers its `AppDescription`, on its own hostname, for anyone. */
 export const APP_DESCRIPTION_PATH = "/.well-known/iterate-app";
-
-/** A mail domain as an app writes it: lowercase, two labels at least, no "@" and no wildcard. */
-const EmailDomain = z
-  .string()
-  .regex(
-    /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
-    'a mail domain in lowercase, as "example.com"',
-  );
 
 /** WHAT AN APP OF A MIND SAYS OF ITSELF, as an object in the app's own code:
  *
@@ -43,14 +36,18 @@ export const AppDescription = z.object({
    *  `["passkey"]` for an app for members, `["email", "passkey"]` for any other. A mailed code
    *  signs in no member, so an app for members has no reason to name "email". */
   signIn: z.tuple([SignInMethod], SignInMethod).optional(),
-  /** WHOSE ADDRESS A MAILED CODE SIGNS IN TO THE APP: an address at one of these domains, and no
-   *  other. Each is a whole domain in lowercase, the part after the "@" (`"example.com"`); a
-   *  subdomain is another domain. The issuer mails no code for the app's hostname to any other
-   *  address, and gives no code for the hostname to a session that a mailed code opened for
-   *  another address, whoever asks: the app's own page, or an MCP client. It binds the method
-   *  "email" alone: a passkey's session still counts, so the guard in the app's own code says
-   *  which members come. With none, a mailed code signs in any address. */
-  emailDomains: z.tuple([EmailDomain], EmailDomain).optional(),
+  /** WHOSE ADDRESS A MAILED CODE SIGNS IN TO THE APP, as a mind's config names its owners
+   *  (iterate/mind-config `ownerEmails`, `ownerEmailPatterns`, and their one matcher
+   *  `isOwnerEmail`): `allowedEmails` names addresses, each whole, and `allowedEmailPatterns`
+   *  names patterns, each `*@<domain>`: every address at exactly that domain, no sub-domain. An
+   *  app that names either takes an address that one of the two names, and no other. The issuer
+   *  then mails no code for the app's hostname to any other address, and gives no code for the
+   *  hostname to a session that a mailed code opened for another address, whoever asks: the
+   *  app's own page, or an MCP client. They bind the method "email" alone: a passkey's session
+   *  still counts, so the guard in the app's own code says which members come. With neither, a
+   *  mailed code signs in any address. */
+  allowedEmails: z.array(z.email().toLowerCase()).min(1).optional(),
+  allowedEmailPatterns: z.array(OwnerEmailPattern).min(1).optional(),
 });
 export type AppDescription = z.infer<typeof AppDescription>;
 
@@ -69,6 +66,12 @@ export function serveAppDescription(request: Request, app: AppDescription): Resp
   if (new URL(request.url).pathname !== APP_DESCRIPTION_PATH) return null;
   if (request.method !== "GET" && request.method !== "HEAD")
     return new Response("Method not allowed\n", { status: 405, headers: { allow: "GET, HEAD" } });
+  // A list of domains (`emailDomains`) is not read: the parse would drop it, and the app would
+  // then be for any address. So it is refused by name, and the issuer keeps what it last read.
+  if ("emailDomains" in app)
+    throw new Error(
+      'emailDomains is not read: name the people in allowedEmailPatterns, as "*@example.com"',
+    );
   // the issuer keeps what it read for five minutes of its own: nothing between keeps it longer
   return Response.json(AppDescription.parse(app), { headers: { "cache-control": "no-store" } });
 }

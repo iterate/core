@@ -2,7 +2,9 @@
 // and what the sign-in pages then show.
 import type { SignInMethod } from "iterate/principal";
 import { expect, test, vi } from "vitest";
+import { isOwnerEmail } from "iterate/mind-config";
 import {
+  allowedEmailsWords,
   appOf,
   appTakes,
   appTile,
@@ -49,7 +51,7 @@ test("an app is read from a sign-in's request only when the stack holds all thre
     icon: `${ORIGIN}/icon.svg`,
     members: false,
     signIn: FOR_ANYONE,
-    emailDomains: null,
+    allowedEmails: null,
   });
   // a path on the host is the host, as the authorization endpoint reads it
   expect(await askingAppOf(stack.env, next({ resource: `${ORIGIN}/mcp` }))).toMatchObject({
@@ -79,7 +81,7 @@ const NOTHING = {
   icon: null,
   members: false,
   signIn: FOR_ANYONE,
-  emailDomains: null,
+  allowedEmails: null,
 };
 
 test.for([
@@ -130,9 +132,29 @@ test.for([
     said: { name: "Guestbook", signIn: ["email"] },
   },
   {
-    name: "the domains whose addresses a mailed code signs in, each once",
-    description: { name: "Shop", emailDomains: ["example.com", "second.example", "example.com"] },
-    said: { name: "Shop", emailDomains: ["example.com", "second.example"] },
+    name: "the addresses and the patterns that a mailed code signs in, each once and in lowercase",
+    description: {
+      name: "Shop",
+      allowedEmails: ["Eve@Elsewhere.test", "eve@elsewhere.test"],
+      allowedEmailPatterns: ["*@example.com", "*@second.example", "*@example.com"],
+    },
+    said: {
+      name: "Shop",
+      allowedEmails: {
+        emails: ["eve@elsewhere.test"],
+        patterns: ["*@example.com", "*@second.example"],
+      },
+    },
+  },
+  {
+    name: "addresses alone, and patterns alone",
+    description: { name: "Shop", allowedEmails: ["eve@elsewhere.test"] },
+    said: { name: "Shop", allowedEmails: { emails: ["eve@elsewhere.test"], patterns: [] } },
+  },
+  {
+    name: "patterns alone",
+    description: { name: "Shop", allowedEmailPatterns: ["*@example.com"] },
+    said: { name: "Shop", allowedEmails: { emails: [], patterns: ["*@example.com"] } },
   },
   {
     name: "what a browser's manifest would say is passed over",
@@ -146,12 +168,31 @@ test.for([
     description: { name: "G", signIn: ["email", "google"] },
     said: null,
   },
-  { name: "an empty list of domains", description: { name: "G", emailDomains: [] }, said: null },
-  ...["@example.com", "*.example.com", "Example.com", "example", "a@example.com"].map((domain) => ({
-    name: `a domain that is none: ${domain}`,
-    description: { name: "G", emailDomains: [domain] },
+  {
+    // a restriction that this issuer does not read is never dropped: the last policy stays
+    name: "a list of domains, which this issuer does not read",
+    description: { name: "G", emailDomains: ["example.com"] },
     said: null,
-  })),
+  },
+  {
+    name: "an empty list of patterns",
+    description: { name: "G", allowedEmailPatterns: [] },
+    said: null,
+  },
+  { name: "an empty list of addresses", description: { name: "G", allowedEmails: [] }, said: null },
+  {
+    name: "an address that is none",
+    description: { name: "G", allowedEmails: ["example.com"] },
+    said: null,
+  },
+  // a pattern is `*@<domain>` in lowercase and nothing else, as an owner email pattern
+  ...["example.com", "@example.com", "*@*.example.com", "*@Example.com", "a*@example.com"].map(
+    (pattern) => ({
+      name: `a pattern that is none: ${pattern}`,
+      description: { name: "G", allowedEmailPatterns: [pattern] },
+      said: null,
+    }),
+  ),
   { name: "an empty list of methods", description: { name: "G", signIn: [] }, said: null },
   { name: "methods that are no list", description: { name: "G", signIn: "email" }, said: null },
   {
@@ -175,10 +216,10 @@ test.for([
 test("a JSON object that broke off, or that is too long to read, is no word of the app", () => {
   const long = JSON.stringify({
     name: "Shop",
-    emailDomains: Array.from({ length: 2000 }, (_, n) => `shop-${n}.example.com`),
+    allowedEmailPatterns: Array.from({ length: 2000 }, (_, n) => `*@shop-${n}.example.com`),
   });
   expect(long.length).toBeGreaterThan(20_000);
-  for (const text of ['{"name":"Shop","emailDomains":["exam', " {", "{<", long])
+  for (const text of ['{"name":"Shop","allowedEmailPatterns":["*@exam', " {", "{<", long])
     expect(saidIn(text, DESCRIPTION), text.slice(0, 40)).toBeNull();
 });
 
@@ -200,7 +241,7 @@ test("the description is read at its well-known path once in five minutes, with 
     icon: `${ORIGIN}/icon.svg`,
     members: false,
     signIn: ["passkey"],
-    emailDomains: null,
+    allowedEmails: null,
   });
   expect(await appOf(stack.env, ORIGIN)).toEqual(app);
   // the one address that is asked: no web app manifest is read
@@ -251,7 +292,7 @@ test.for([
       icon: `${ORIGIN}/icon.svg`,
       members: true,
       signIn: FOR_MEMBERS,
-      emailDomains: null,
+      allowedEmails: null,
     });
     expect(stack.askedAgainIn(HOST, before)).toBe("1 minute");
     // and the client that the list of sign-ins reads still names the app
@@ -262,45 +303,99 @@ test.for([
   },
 );
 
+test("a row that an issuer kept with a list of domains is read as the patterns of those domains, and never as any address, also while the app does not answer", async () => {
+  const stack = stackWith({});
+  const key = `iterate-app-description:${HOST}`;
+  const row = (askAfter: number) =>
+    JSON.stringify({
+      name: "Shop",
+      icon: null,
+      members: false,
+      signIn: FOR_ANYONE,
+      emailDomains: ["example.com"],
+      askAfter,
+    });
+  const patterns = { emails: [], patterns: ["*@example.com"] };
+  // not due yet: the row is read as it is, and the app is not asked
+  await stack.env.OAUTH_KV.put(key, row(Date.now() + 60_000));
+  {
+    using web = answers({ name: "Shop" });
+    const app = (await appOf(stack.env, ORIGIN))!;
+    expect(app).toMatchObject({ allowedEmails: patterns });
+    expect(takesAddress(app, "eve@example.com")).toBe(true);
+    expect(takesAddress(app, "eve@elsewhere.test")).toBe(false);
+    expect(web).toMatchObject({ asked: [] });
+  }
+  // due, and the app does not answer: it is what the row said, in this issuer's shape
+  await stack.env.OAUTH_KV.put(key, row(0));
+  {
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("down", { status: 503 }));
+    using _down = { [Symbol.dispose]: () => spy.mockRestore() };
+    expect(await appOf(stack.env, ORIGIN)).toMatchObject({ allowedEmails: patterns });
+    expect(JSON.parse((await stack.env.OAUTH_KV.get(key))!)).toMatchObject({
+      allowedEmails: patterns,
+    });
+  }
+  // due, and the app still answers with its list of domains: the row's restriction stays
+  stack.due(HOST);
+  {
+    using _web = answers({ name: "Shop", emailDomains: ["example.com"] });
+    const before = Date.now();
+    expect(await appOf(stack.env, ORIGIN)).toMatchObject({ allowedEmails: patterns });
+    expect(stack.askedAgainIn(HOST, before)).toBe("1 minute");
+  }
+  // due, and the app answers with its list in this issuer's fields: that is what it is
+  stack.due(HOST);
+  using _web = answers({ name: "Shop", allowedEmails: ["eve@elsewhere.test"] });
+  expect(await appOf(stack.env, ORIGIN)).toMatchObject({
+    allowedEmails: { emails: ["eve@elsewhere.test"], patterns: [] },
+  });
+});
+
 test("an app whose description is wrong is still what it last said, and is asked again after a minute; one that the issuer never heard takes the passkey alone until it says", async () => {
   const stack = stackWith({});
   {
-    using _web = answers({ name: "Shop", emailDomains: ["example.com"] });
+    using _web = answers({ name: "Shop", allowedEmailPatterns: ["*@example.com"] });
     await appOf(stack.env, ORIGIN);
   }
   stack.due(HOST);
   const policyOf = async (origin: string) => {
     const app = (await appOf(stack.env, origin))!;
-    return { signIn: app.signIn, emailDomains: app.emailDomains };
+    return { signIn: app.signIn, allowedEmails: app.allowedEmails };
   };
   {
     // a list that is not whole, in a description that is otherwise right
-    using _web = answers({ name: "Shop", for: "members", emailDomains: ["@example.com"] });
+    using _web = answers({ name: "Shop", for: "members", allowedEmailPatterns: ["@example.com"] });
     const before = Date.now();
-    expect(await policyOf(ORIGIN)).toEqual({ signIn: FOR_ANYONE, emailDomains: ["example.com"] });
+    expect(await policyOf(ORIGIN)).toEqual({
+      signIn: FOR_ANYONE,
+      allowedEmails: { emails: [], patterns: ["*@example.com"] },
+    });
     expect(stack.askedAgainIn(HOST, before)).toBe("1 minute");
   }
   // NOTHING IS KEPT OF THESE: the app's first answer is wrong, or it does not answer. The issuer
   // mails no code and takes no mailed code's session for an app that it has not heard.
   for (const [n, answer] of [
-    () => Response.json({ name: "Shop", emailDomains: ["@example.com"] }),
+    () => Response.json({ name: "Shop", allowedEmailPatterns: ["@example.com"] }),
     () => new Response("down", { status: 503 }),
     () => new Response("too many requests", { status: 429 }),
-    () => new Response('{"name":"Shop","emailDomains":["exam'),
+    () => new Response('{"name":"Shop","allowedEmailPatterns":["*@exam'),
     () => Promise.reject(new Error("no answer")),
   ].entries()) {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => answer());
     using _down = { [Symbol.dispose]: () => spy.mockRestore() };
     const origin = `https://shop-${n}.${DOMAIN}`;
-    expect(await policyOf(origin), String(n)).toEqual({ signIn: ["passkey"], emailDomains: null });
+    expect(await policyOf(origin), String(n)).toEqual({ signIn: ["passkey"], allowedEmails: null });
     // and once it answers, it is what it says
     spy.mockImplementation(async () =>
-      Response.json({ name: "Shop", emailDomains: ["a.example"] }),
+      Response.json({ name: "Shop", allowedEmails: ["eve@a.example"] }),
     );
     stack.due(`shop-${n}.${DOMAIN}`);
     expect(await policyOf(origin), String(n)).toEqual({
       signIn: FOR_ANYONE,
-      emailDomains: ["a.example"],
+      allowedEmails: { emails: ["eve@a.example"], patterns: [] },
     });
   }
 });
@@ -321,7 +416,7 @@ test("an app that answers with no description any more has said so: it is its ho
     icon: null,
     members: false,
     signIn: FOR_ANYONE,
-    emailDomains: null,
+    allowedEmails: null,
   });
   expect(await oauthHelpers(stack.env, ORIGIN).lookupClient(client)).toMatchObject({
     clientName: HOST,
@@ -339,7 +434,7 @@ test("an app that says nothing, or whose host does not answer, is its host and i
     icon: null,
     members: false,
     signIn: FOR_ANYONE,
-    emailDomains: null,
+    allowedEmails: null,
   });
   expect(appTile(app)).toBe(`<div class="tile" data-app-mark="initials">GU</div>`);
   await appOf(stack.env, ORIGIN);
@@ -375,8 +470,8 @@ test("the methods of a sign-in are those of the app that its authorization is fo
   expect(await signInOf(stack.env, mcp)).toEqual({
     app: null,
     methods: ["passkey"],
-    // a row that was kept before the issuer read `emailDomains` names none
-    mailedCode: expect.objectContaining({ name: "Guestbook", emailDomains: null }),
+    // a row that was kept before the issuer read `allowedEmails` names none
+    mailedCode: expect.objectContaining({ name: "Guestbook", allowedEmails: null }),
   });
   // the control plane's own sign-in, and one for the mind's API or its MCP server
   for (const next of [
@@ -392,42 +487,82 @@ test("the methods of a sign-in are those of the app that its authorization is fo
     });
 });
 
-test("an app that names domains takes a mailed code's session for an address at one of them alone; a passkey's session counts whatever its address", () => {
+test("an app that names addresses and patterns takes a mailed code's session for an address that one of them names alone, by the rule that says who owns a mind; a passkey's session counts whatever its address", () => {
   const shop = {
     signIn: FOR_ANYONE as SignInMethod[],
-    emailDomains: ["example.com", "second.example"],
+    allowedEmails: {
+      emails: ["guest@elsewhere.test"],
+      patterns: ["*@example.com", "*@second.example"],
+    },
   };
   const takes = (method: SignInMethod, email: string) => appTakes(shop, { method, email });
   expect({
-    atADomain: takes("email", "eve@example.com"),
+    atAPattern: takes("email", "eve@example.com"),
     atTheOther: takes("email", "eve@second.example"),
     inCapitals: takes("email", "Eve@EXAMPLE.com"),
+    named: takes("email", "guest@elsewhere.test"),
+    namedInCapitals: takes("email", "Guest@Elsewhere.test"),
     // a subdomain is another domain, and so is a name that ends as the domain does
     atASubdomain: takes("email", "eve@mail.example.com"),
     atALookalike: takes("email", "eve@notexample.com"),
-    // the address is the text after the last "@"
+    twoAts: takes("email", "eve@elsewhere.test@example.com"),
     quotedLocalPart: takes("email", '"eve@example.com"@elsewhere.test'),
-    elsewhere: takes("email", "eve@elsewhere.test"),
+    // another address at the domain of a named address is not named
+    besideTheNamed: takes("email", "eve@elsewhere.test"),
     passkeyElsewhere: takes("passkey", "ada@elsewhere.test"),
   }).toEqual({
-    atADomain: true,
+    atAPattern: true,
     atTheOther: true,
     inCapitals: true,
+    named: true,
+    namedInCapitals: true,
     atASubdomain: false,
     atALookalike: false,
+    twoAts: false,
     quotedLocalPart: false,
-    elsewhere: false,
+    besideTheNamed: false,
     passkeyElsewhere: true,
   });
+  // THE SAME ANSWER AS THE MIND CONFIG'S OWN MATCHER, for every address above
+  for (const email of [
+    "eve@example.com",
+    "Guest@Elsewhere.test",
+    "eve@mail.example.com",
+    "x@y@example.com",
+  ])
+    expect(takesAddress(shop, email), email).toBe(
+      isOwnerEmail(
+        { ownerEmails: shop.allowedEmails.emails, ownerEmailPatterns: shop.allowedEmails.patterns },
+        email,
+      ),
+    );
   // the list binds the mailed code alone: a method that the app does not name is still refused,
-  // and an app that names no domains takes any address
+  // and an app that names nobody takes any address
   expect(
     appTakes(
-      { signIn: ["passkey"], emailDomains: ["example.com"] },
+      { signIn: ["passkey"], allowedEmails: { emails: [], patterns: ["*@example.com"] } },
       { method: "email", email: "eve@example.com" },
     ),
   ).toBe(false);
-  expect(takesAddress({ emailDomains: null }, "eve@elsewhere.test")).toBe(true);
+  expect(takesAddress({ allowedEmails: null }, "eve@elsewhere.test")).toBe(true);
+  // the pages' words name the domains of the patterns, and no address that the app names
+  expect([
+    allowedEmailsWords({ name: "Shop", ...shop }),
+    allowedEmailsWords({
+      name: "Shop",
+      allowedEmails: { emails: [], patterns: ["*@example.com"] },
+    }),
+    allowedEmailsWords({
+      name: "Shop",
+      allowedEmails: { emails: ["guest@elsewhere.test"], patterns: [] },
+    }),
+    allowedEmailsWords({ name: "Shop", allowedEmails: null }),
+  ]).toEqual([
+    "Shop takes an address at example.com or second.example, and the addresses that it names, only.",
+    "Shop takes an address at example.com only.",
+    "Shop takes only the addresses that it names.",
+    "",
+  ]);
 });
 
 test("the mailed code's page for an app's sign-in names the host it signs in to, under the app's own icon", async () => {
@@ -471,7 +606,7 @@ test("the four pages of an app's sign-in agree: each shows the app's icon and it
     name: "Guestbook",
     icon: `${ORIGIN}/icon.svg`,
     members: false,
-    emailDomains: null,
+    allowedEmails: null,
     signIn: ["email", "passkey"] as SignInMethod[],
   };
   stack.challenge.next = next;
@@ -544,7 +679,7 @@ test("an app for members says in one quiet line that it works as the person; an 
     name: "Dash",
     icon: null,
     members: true,
-    emailDomains: null,
+    allowedEmails: null,
     signIn: ["passkey"] as SignInMethod[],
   };
   expect(appSignIn(dash)).toMatchObject({
@@ -583,7 +718,7 @@ test("the passkey's page, the chooser and a consent for the app's host name the 
     name: HOST,
     icon: null,
     members: false,
-    emailDomains: null,
+    allowedEmails: null,
     signIn: ["email", "passkey"] as SignInMethod[],
   };
   const passkey = await signInPage({
@@ -649,7 +784,7 @@ function stackWith(
       keyOf(host),
       JSON.stringify({
         members: false,
-        emailDomains: null,
+        allowedEmails: null,
         signIn: FOR_ANYONE,
         ...value,
         askAfter: Date.now() + 5 * 60_000,
