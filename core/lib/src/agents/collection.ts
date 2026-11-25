@@ -99,6 +99,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       activity: row.activity || null,
       description: row.description || null,
       title: row.title || null,
+      titleFromWords: !!row.title && !!row.titleFromWords,
       lastActivityAt: row.lastActivityAt || null,
     }));
   }

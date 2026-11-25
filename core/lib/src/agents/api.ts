@@ -72,6 +72,8 @@ export type AgentListing = {
   activity: string | null;
   description: string | null;
   title: string | null;
+  /** True when `title` is only the first line a person sent, and no name the agent has. */
+  titleFromWords: boolean;
   lastActivityAt: string | null;
 };
 
@@ -86,7 +88,7 @@ export interface AgentsApi {
    *  `"claude"`, …) and `host` the machine it runs on. `status` is `working`, `idle`, `waiting` (on
    *  someone) or `ended`; `activity` one line on what it is doing now, and `description` a few
    *  sentences on its purpose or conclusions. `title` is the name it gave itself, or else the first
-   *  line a person sent it. `lastActivityAt` is when it was last active. Each is null until the
+   *  line a person sent it, and then `titleFromWords` is true. `lastActivityAt` is when it was last active. Each is null until the
    *  agent has said it. It reads only `/agents` and wakes no agent, so use it to show many agents
    *  rather than reading each one. */
   list(): Promise<AgentListing[]>;

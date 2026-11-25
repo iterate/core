@@ -73,6 +73,11 @@ agent's place. Two members with the same local part at two domains share one fol
 none of them. Each row is small and the same for every kind of agent: `kind` (what runs it:
 `agent` for the mind's own, `claude`, …), `host`, `status` (`working`, `idle`, `waiting`,
 `ended`), `activity` (one line), `description` (a few sentences), `title` and `lastActivityAt`.
+`title` is the name the agent gave itself (a title a person writes in the Dash's About is such a
+name too: About appends `agent/summary-updated` beside the context's `itx/described`). With no
+name it is the first line a person sent, and `titleFromWords` is then true: words are no name,
+and any name replaces them. A script that writes `metadata.title` of the context alone names
+nothing in this list: it appends `agent/summary-updated { title }` on the agent's log.
 Everything but `createdAt` and `parent` comes from copies of the agent's own events onto `/agents`
 as `agent/listing-updated` (`itx.subscribe` with `target: { path: "/agents", … }`): copies only,
 since only the platform can set `source.copiedFrom`, and an older copy never undoes a newer one,

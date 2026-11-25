@@ -132,6 +132,34 @@ test("an agent cannot create its own ancestor, and the root is no agent", async 
   expect(events).toEqual([]);
 });
 
+test("list says whether a row's title is a name or only the first words a person sent", async () => {
+  const createdAt = "2026-11-24T00:00:00.000Z";
+  const agents = new AgentCollectionRpcTarget(
+    () => ({ cd: () => ({}), [Symbol.dispose]() {} }) as never,
+    async () =>
+      ({
+        offset: 0,
+        state: {
+          agents: {
+            "/agents/named": { createdAt, title: "Engineering manager" },
+            "/agents/words": { createdAt, title: "Please fix the build", titleFromWords: true },
+            "/agents/silent": { createdAt },
+          },
+          deleted: {},
+        },
+      }) as never,
+    "/",
+    OWN,
+  );
+  expect(
+    (await agents.list()).map(({ path, title, titleFromWords }) => [path, title, titleFromWords]),
+  ).toEqual([
+    ["/agents/named", "Engineering manager", false],
+    ["/agents/words", "Please fix the build", true],
+    ["/agents/silent", null, false],
+  ]);
+});
+
 const typesOf = (events: StreamEvent[]) =>
   events.map((event) => event.type.replace("events.iterate.com/", ""));
 

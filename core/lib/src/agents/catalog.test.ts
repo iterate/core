@@ -531,10 +531,6 @@ test("a copy that says another kind starts the row over: the first agent's title
 
 test("a copy of a later version of the context starts the row over, also when the kind stays the same", () => {
   const { processor } = catalog();
-  const ofVersion = (fact: ReturnType<typeof copy>, version: number) => ({
-    ...fact,
-    source: { ...fact.source, copiedFrom: { ...fact.source.copiedFrom, version } },
-  });
   const state = reduceProcessor(processor, [
     announced(path),
     copy({ kind: "agent" }, 3),
@@ -555,6 +551,7 @@ test("a copy of a later version of the context starts the row over, also when th
     titleFromWords: true,
     startedOverAtOffset: 40,
     version: 2,
+    versionSeenAt: at(40),
     fieldAtOffset: { kind: 40, status: 50 },
     lastActivityAt: at(50),
   });
@@ -572,31 +569,97 @@ test("the same kind again starts nothing over, and neither does a row's first ki
   expect(state.agents[path]).not.toHaveProperty("startedOverAtOffset");
 });
 
-test("the first title after a path started over is written alone: the earlier version's metadata is not merged into it", async () => {
-  // the mind's catalog of contexts still lists what the first agent's context held
-  const { processor, appended, reads } = catalog([
-    { path, metadata: { owner: "ada", title: "Old" } },
-  ]);
-  await processAll(processor, [
+test.for<{ name: string; lastEventAt: string; events: Fact[]; titled: unknown[] }>([
+  {
+    // the mind's catalog of contexts is one wake behind: its row is still the first version's
+    name: "a later version, listed as before it: the title alone, as the listed metadata is the earlier version's",
+    lastEventAt: at(30),
+    events: [
+      announced(path),
+      copy({ kind: "agent" }, 3),
+      ofVersion(copy({ kind: "agent" }, 40), 2),
+      ofVersion(title("The new agent", 50), 2),
+    ],
+    titled: [{ metadata: { title: "The new agent" } }],
+  },
+  {
+    // an agent that a person pinned a day after its path started over, and that names itself then
+    name: "a later version, listed since it started: the listed metadata is that version's own, and its pin stays",
+    lastEventAt: at(45),
+    events: [
+      announced(path),
+      copy({ kind: "agent" }, 3),
+      ofVersion(copy({ kind: "agent" }, 40), 2),
+      ofVersion(words("Say KIWI", 44), 2),
+      ofVersion(title("The new agent", 50), 2),
+      ofVersion(title("Its second title", 60), 2),
+    ],
+    titled: [
+      { metadata: { tags: ["pinned-in-dash"], title: "The new agent" } },
+      { metadata: { tags: ["pinned-in-dash"], title: "Its second title" } },
+    ],
+  },
+  {
+    // a take-over in place: the context is the same one, whatever its listed row has seen
+    name: "another kind at the same path: the context's metadata is its own, and its pin stays",
+    lastEventAt: at(30),
+    events: [
+      announced(path),
+      copy({ kind: "iterate" }, 3),
+      copy({ kind: "agent" }, 40),
+      title("The new agent", 50),
+    ],
+    titled: [{ metadata: { tags: ["pinned-in-dash"], title: "The new agent" } }],
+  },
+  {
+    name: "another kind at a path of a later version: the version's border still holds",
+    lastEventAt: at(30),
+    events: [
+      announced(path),
+      ofVersion(copy({ kind: "iterate" }, 40), 2),
+      ofVersion(copy({ kind: "agent" }, 45), 2),
+      ofVersion(title("The new agent", 50), 2),
+    ],
+    titled: [{ metadata: { title: "The new agent" } }],
+  },
+])(
+  "the first title after a path started over keeps the context's other metadata: $name",
+  async ({ lastEventAt, events, titled }) => {
+    const { processor, appended } = catalog([
+      { path, lastEventAt, metadata: { tags: ["pinned-in-dash"], title: "Old" } },
+    ]);
+    await processAll(processor, events);
+    expect(
+      appended
+        .filter(({ event }) => event.idempotencyKey.startsWith("agents/titled:"))
+        .map(({ event }) => event.payload),
+    ).toEqual(titled);
+  },
+);
+
+test("a title a person wrote in About is a name: it replaces the first words, later words leave it, and it goes to the context beside the pin", async () => {
+  // About appends `agent/summary-updated { title }` on the agent's log (packages/ui's
+  // `describeContext`), and the kind's summary row copies it here as any name of the agent's
+  const { processor, appended } = catalog([{ path, metadata: { tags: ["pinned-in-dash"] } }]);
+  const events = [
     announced(path),
-    copy({ kind: "iterate" }, 3),
-    copy({ kind: "agent" }, 40),
-    title("The new agent", 50),
-    title("Its second title", 60),
-  ]);
-  expect({
-    titled: appended
+    words("Please fix the build", 10),
+    title("Engineering manager", 20),
+    words("And the docs", 30),
+  ];
+  await processAll(processor, events);
+  expect(reduceProcessor(processor, events).agents[path]).toEqual({
+    ...born,
+    title: "Engineering manager",
+    titleAtOffset: 20,
+    titleFromWords: undefined,
+    lastActivityAt: at(30),
+  });
+  expect(
+    appended
       .filter(({ event }) => event.idempotencyKey.startsWith("agents/titled:"))
       .map(({ event }) => event.payload),
-    reads,
-  }).toEqual({
-    titled: [
-      { metadata: { title: "The new agent" } },
-      // from the second title on the listed metadata is the new version's, and is merged
-      { metadata: { owner: "ada", title: "Its second title" } },
-    ],
-    reads: ["/"],
-  });
+  ).toEqual([{ metadata: { tags: ["pinned-in-dash"], title: "Engineering manager" } }]);
 });
 
 test("the listed row is read once for each change of an agent's own title, and never for the same title, a description or an activity", async () => {
@@ -642,7 +705,7 @@ test("a mind that refuses the read writes no title, and says so once for each ag
 /** The catalog's processor, with a root that records each append it is asked for and lists
  *  `listed` as the mind's catalog of contexts. */
 function catalog(
-  listed: { path: string; metadata?: Record<string, unknown> }[] = [],
+  listed: { path: string; lastEventAt?: string; metadata?: Record<string, unknown> }[] = [],
   refuse = false,
 ) {
   const appended: { path: string; event: { idempotencyKey: string; payload: unknown } }[] = [];
@@ -702,6 +765,15 @@ function bornAt(n: number) {
 /** When the original event at `offset` happened on the agent's log. */
 function at(offset: number) {
   return new Date(1_800_000_000_000 + offset).toISOString();
+}
+
+/** `fact` as a copy of version `version` of its context: the platform writes the version on every
+ *  copy from version 2 on (`itx.newVersion`). */
+function ofVersion(fact: ReturnType<typeof copy>, version: number) {
+  return {
+    ...fact,
+    source: { ...fact.source, copiedFrom: { ...fact.source.copiedFrom, version } },
+  };
 }
 
 /** A copy of the event at `offset` on `of`'s log, with `copiedFrom` set as the platform sets it. */

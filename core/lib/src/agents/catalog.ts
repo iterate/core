@@ -76,6 +76,11 @@ const AgentCatalogContract = defineProcessorContract({
           /** The version of the agent's context that the row is of (`itx.newVersion`): a copy
            *  says it from version 2 on (`source.copiedFrom.version`). None: the first. */
           version: z.number().optional(),
+          /** When the agent's log said the event whose copy brought that later version here. What
+           *  the mind's catalog of contexts lists from before then can be the earlier version's
+           *  (`processEvent`). A path that started over in place (another kind) has none: its
+           *  context is the same one, and its metadata stays its own. */
+          versionSeenAt: z.string().optional(),
         }),
       )
       .default({}),
@@ -184,6 +189,7 @@ export class AgentCatalogProcessor extends StreamProcessor<
           lastActivityAt: listed.lastActivityAt,
           startedOverAtOffset: from.offset,
           ...(version > 1 && { version }),
+          versionSeenAt: version > (listed.version || 1) ? from.createdAt : listed.versionSeenAt,
         }
       : listed;
     // Copies can land in any order. So each field below is blanked when what the row already has
@@ -251,8 +257,10 @@ export class AgentCatalogProcessor extends StreamProcessor<
    *  copy changes the title the agent gave itself: the first words a person sent are no title. The
    *  append carries `metadata` only, so the description stays the purpose alone. `metadata` is one
    *  record, replaced whole, so the title is merged into the record the mind's catalog lists for
-   *  the agent's context (`contextMetadata`); that row can be one wake behind the log, so a key a
-   *  person wrote in the same wake can be lost. The newest stands: a title a person wrote in About
+   *  the agent's context (`listedContext`): a pin and every other key stay. That row can be one
+   *  wake behind the log, so a key a person wrote in the same wake can be lost, and after
+   *  `itx.newVersion` it can still be the earlier version's, which is not merged
+   *  (`ofEarlierVersion`). The newest stands: a title a person wrote in About
    *  stands until the agent's own title changes again, and then the agent's lands once. The same
    *  rules as for the description hold: keyed by the copied event, reported when it fails, never
    *  holding the catalog. */
@@ -286,14 +294,9 @@ export class AgentCatalogProcessor extends StreamProcessor<
       blockProcessorWhile(async () => {
         using itx = this.#getItx();
         try {
-          // THE FIRST TITLE AFTER A PATH STARTED OVER is written alone: the mind's catalog of
-          // contexts can still list the earlier version's metadata then (it is one wake behind),
-          // and a merge would carry that into the new version.
-          const startedOver =
-            typeof state.agents[from.path]?.startedOverAtOffset === "number" &&
-            !agentTitle(previousState.agents[from.path]);
+          const listed = await listedContext(itx, from.path);
           const metadata = {
-            ...(startedOver ? {} : await contextMetadata(itx, from.path)),
+            ...(ofEarlierVersion(listed, state.agents[from.path]) ? {} : listed?.metadata),
             title,
           };
           // The mind's catalog keeps a record only while it prints this short
@@ -347,11 +350,24 @@ function agentTitle(
   return row.title.slice(0, 80);
 }
 
-/** The metadata the mind's catalog of contexts lists for `path`, read from the first 50 rows under
- *  it, the most recently active first: one bounded read. A context with no row there has none. */
-async function contextMetadata(itx: Pick<IterateContextApi, "cd">, path: string) {
+/** The row the mind's catalog of contexts lists for `path`, read from the first 50 rows under it,
+ *  the most recently active first: one bounded read. A context with no row there has none. */
+async function listedContext(itx: Pick<IterateContextApi, "cd">, path: string) {
   const listed = await itx.cd("/").contexts.list({ under: path, limit: 50 });
-  return listed.find((context) => context.path === path)?.metadata;
+  return listed.find((context) => context.path === path);
+}
+
+/** Whether what the mind's catalog of contexts lists for an agent can be of an earlier version of
+ *  its context (`itx.newVersion`): the listed row is of the context's summary, which starts empty
+ *  with each version (core/itx's context-summary.ts), and it can be one wake behind. So it is the
+ *  earlier version's only while its newest event is from before the first event this catalog saw
+ *  of the row's version. From then on the listed metadata is that version's own, whenever the
+ *  agent names itself: a pin a person set stays. */
+function ofEarlierVersion(
+  listed: { lastEventAt?: string } | undefined,
+  row: Pick<AgentCatalogState["agents"][string], "versionSeenAt"> | undefined,
+): boolean {
+  return !!row?.versionSeenAt && (listed?.lastEventAt || "") < row.versionSeenAt;
 }
 
 /** The rows with `path` added: its parent the nearest ancestor that is a row, and every row below it
