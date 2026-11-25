@@ -14,6 +14,7 @@ import {
   fromBase64url,
   isMindControlPlaneHostname,
   isMindId,
+  MIND_FETCH_STATEMENT_TYPE,
   signedMlDsa65,
   type StackKeyDocument,
   statementText,
@@ -132,7 +133,14 @@ async function stackKeyListing(env: Env): Promise<{ stack: StackKey; listed: boo
  *  the signer (the vault's ask of the Cloud, which reads a hostname there). Refused until the mind's identity
  *  lists the stack's key, with an error that has no code: this ends when a record lists the key,
  *  so a subscription that sends to another mind must try again later. A coded refusal such as
- *  FORBIDDEN would halt its row for good (core/itx subscription-delivery.ts). */
+ *  FORBIDDEN would halt its row for good (core/itx subscription-delivery.ts).
+ *
+ *  A STATEMENT FOR THIS MIND ITSELF is signed for one type alone: a signed request
+ *  (`MIND_FETCH_STATEMENT_TYPE`), which a secret by proxy sends to a service that this mind names
+ *  as its own (iterate's mind is a customer of iterate Cloud, which it runs: Jonas, 25 Nov 2026).
+ *  The service checks it as any mind's. This mind's own door still takes no such statement: a
+ *  mind is no caller of itself (./mind-fetch.ts refuses it). For every other
+ *  type a statement that names this mind is refused, as before. */
 export async function signedByStack(
   env: Env,
   input: Parameters<AuthService["sign"]>[0],
@@ -144,9 +152,11 @@ export async function signedByStack(
     throw new Error(
       "the mind's identity lists no working key of this stack yet, so the mind signs nothing as itself",
     );
+  const requestToItself = type === MIND_FETCH_STATEMENT_TYPE;
   if (
     mind &&
-    ((!isMindId(mind) && !isMindControlPlaneHostname(mind)) || [mindId, own].includes(mind))
+    ((!isMindId(mind) && !isMindControlPlaneHostname(mind)) ||
+      ([mindId, own].includes(mind) && !requestToItself))
   )
     throw codedError(
       "INVALID_INPUT",
@@ -159,8 +169,10 @@ export async function signedByStack(
     throw codedError("INVALID_INPUT", "a statement expires between a second and a day ahead");
   // An id signs at once. A hostname is read once to its id (a minute's cache in the reader): a
   // proxy secret's cell from before holds one until the connect sets it again.
-  const peer = !mind || isMindId(mind) ? mind : await mindIdAt(mind);
-  if (peer === mindId) throw codedError("INVALID_INPUT", `${mind} is this mind`);
+  // (this mind's own hostname is its own id: no log is read for it)
+  const peer = !mind || isMindId(mind) ? mind : mind === own ? mindId : await mindIdAt(mind);
+  if (peer === mindId && !requestToItself)
+    throw codedError("INVALID_INPUT", `${mind} is this mind`);
   const at = Date.now();
   const statement = statementText({
     ...(peer ? { mind: peer, from: mindId, fromHost: own } : { mind: own }),

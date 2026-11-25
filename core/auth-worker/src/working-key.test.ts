@@ -286,6 +286,30 @@ test("a mind's signed request: D signs a GET for E's URL, E's auth Worker answer
   expect(await check(own)).toEqual({
     refused: "the stack's own key signs for others, not for this stack",
   });
+  // A SIGNED REQUEST THAT NAMES E ITSELF, by its id or its hostname, is signed (a service that E
+  // names as its own checks it as any mind's), with no log read; E's own door still refuses it
+  const readsBeforeItself = reads;
+  for (const itself of [e.log.mind, "mind-e.net"]) {
+    const toItself = await signedByStack(e.env, {
+      mind: itself,
+      path: "/",
+      type: MIND_FETCH_STATEMENT_TYPE,
+      payload: { method: "GET", url },
+    });
+    expect(JSON.parse(toItself.statement)).toMatchObject({
+      mind: e.log.mind,
+      from: e.log.mind,
+      fromHost: "mind-e.net",
+    });
+    expect(await check(toItself)).toEqual({
+      refused: "a mind is no caller of itself: the statement is from this mind",
+    });
+    // any other type that names E itself is refused, as before
+    await expect(
+      signedByStack(e.env, { mind: itself, path: "/", type: "events.iterate.com/test/note-added" }),
+    ).rejects.toThrow("a statement for another mind names its id");
+  }
+  expect(reads).toBe(readsBeforeItself);
   // refused on its text before any log is read: an `at` an hour ahead, a URL that is no URL,
   // another URL; whatever key signed it
   const before = reads;
