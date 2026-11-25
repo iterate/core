@@ -180,7 +180,8 @@ member makes a token with "Billing Read" alone, and gives it to the mind.
 
 ## Telemetry
 
-A mind deployed with no telemetry token turns its tables on and reads them itself, with a token
-at `/secrets/cloudflare-telemetry` (telemetry.ts; onboarding/telemetry.md of /repos/onboarding).
+A mind deployed with no telemetry token has no telemetry tables (`events`, `logs`, `spans`). It
+reads Cloudflare's own datasets and `metrics` through `itx.telemetry.query`, with no token
+(onboarding/telemetry.md of /repos/onboarding).
 
 The streams keep what they received since the deploy that made them.

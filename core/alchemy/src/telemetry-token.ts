@@ -1,7 +1,8 @@
 // telemetry-token.ts — THE TELEMETRY TOKEN THAT A STACK ALREADY KEEPS IN STATE. A stack whose
 // tables an earlier deploy made with a token keeps that token: its Pipelines catalog sinks keep
-// the token they were made with. A deploy takes no new token: a mind turns its tables on itself
-// (core/configs/default/telemetry.ts). The mode is read from the stack's state alone.
+// the token they were made with. A deploy takes no new token, so a stack with none has no
+// telemetry tables: its mind reads Cloudflare's own datasets and `metrics` through
+// `itx.telemetry.query`. The mode is read from the stack's state alone.
 //
 // `AccountApiTokenDeleteFallbackProvider` wraps Alchemy's `AccountApiTokenProvider` so deleting
 // an `AccountApiToken` resource succeeds even with a deploy sign-in that lacks API-token write
@@ -45,7 +46,8 @@ export const TelemetryToken = Resource<TelemetryToken>("Iterate.TelemetryToken")
  *    analytics token, which nothing reads since 22 Nov 2026, is not declared: a deploy deletes it.
  *  - `"given"`: state holds `TelemetryToken` — use that one owner-created token.
  *  - `"off"`: neither — the bucket and the streams are made, and no token, catalog, sink or
- *    pipeline: the mind can make those itself (./mind-made-telemetry-tables.ts). */
+ *    pipeline. A destroy removes the ones that the mind's own code made
+ *    (./mind-made-telemetry-tables.ts). */
 export type TelemetryMode = "minted" | "given" | "off";
 
 const isLiveResource = (persisted: PersistedState | undefined): persisted is ResourceState =>
@@ -92,7 +94,7 @@ export const TelemetryTokenProvider = () =>
       output
         ? Effect.succeed({ value: output.value })
         : Effect.die(
-            "This stack holds no telemetry token in its state, and a deploy takes no new one: a mind turns its telemetry tables on itself (onboarding/telemetry.md of /repos/onboarding).",
+            "This stack holds no telemetry token in its state, and a deploy takes no new one: the stack has no telemetry tables, and its mind reads Cloudflare's own datasets and metrics through itx.telemetry.query (onboarding/telemetry.md of /repos/onboarding).",
           ),
     // The token was created by the person in Cloudflare's dashboard, not by the deploy.
     delete: () => Effect.void,

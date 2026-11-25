@@ -1,10 +1,10 @@
-// The default config's telemetry (core/configs/default/telemetry.ts): at each publish, the row that
-// an earlier turn-on wrote, `itx.telemetry.query ⇒ itx.config.telemetryQuery`, goes, so the
-// platform's query keeps one name.
+// The default config's old-rule cleanup (core/configs/default/telemetry-query-rule.ts): at each
+// publish, an old row `itx.telemetry.query ⇒ itx.config.telemetryQuery` goes, so the platform's
+// query keeps one name.
 import { expect, test } from "vitest";
-import { removeOwnTelemetryQueryRule } from "../../configs/default/telemetry.ts";
+import { removeOwnTelemetryQueryRule } from "../../configs/default/telemetry-query-rule.ts";
 
-test("the publish removes the turn-on's row on `itx.telemetry.query`, by a compare-and-set delete", async () => {
+test("the publish removes the old row on `itx.telemetry.query`, by a compare-and-set delete", async () => {
   const { itx, appended } = rootWith({
     match: "itx.telemetry.query",
     target: "itx.config.telemetryQuery",

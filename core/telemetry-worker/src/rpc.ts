@@ -16,9 +16,10 @@ import { type EventsRow, eventsRow } from "./events-row.ts";
 import { MAX_ROWS, scoped } from "./query.ts";
 import { type StoreRun, storeQuery } from "./store-query.ts";
 
-/** Plain sentence returned instead of an error when the stack holds no telemetry token. */
+/** Plain sentence returned instead of an error when the stack holds no telemetry token, so it has
+ *  no telemetry tables. */
 const TELEMETRY_TABLES_OFF =
-  "telemetry tables are off: your mind can turn them on itself (onboarding/telemetry.md of /repos/onboarding)";
+  "telemetry tables are off on this stack: query Cloudflare's own datasets (logs.workersLogs, logs.traces, logs.issues, events.workersInvocations) or metrics";
 
 export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService {
   async query(...[sql, hours]: Parameters<TelemetryService["query"]>) {
@@ -48,13 +49,7 @@ export class Telemetry extends WorkerEntrypoint<Env> implements TelemetryService
       const token = config.catalogToken;
       if (!token) {
         outcome = "off";
-        // where this query goes, so the mind's own code can send it (iterate/api `TelemetrySend`)
-        const send = {
-          engine: "tables" as const,
-          accountId: config.accountId,
-          bucket: config.telemetryBucketName,
-        };
-        return { rows: [], sql: run.sql, notice: TELEMETRY_TABLES_OFF, send };
+        return { rows: [], sql: run.sql, notice: TELEMETRY_TABLES_OFF };
       }
       const rows = await this.#tableRows(run.sql, token.exposeSecret());
       outcome = rows.length;

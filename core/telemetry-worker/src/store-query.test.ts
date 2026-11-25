@@ -264,9 +264,12 @@ void test("Telemetry.query reads `metrics` on the binding with no token, and say
   assert.equal(read.notice, undefined);
   assert.equal(calls.length, 1);
 
-  // a table query with no token answers the notice, and the binding is not asked
+  // a table query with no token answers no rows and the notice, which names Cloudflare's own
+  // datasets, and the binding is not asked
   const tables = await telemetry.query("SELECT count(*) FROM events", 1);
-  assert.match(tables.notice, /telemetry tables are off/);
+  assert.deepEqual(Object.keys(tables).sort(), ["notice", "rows", "sql"]);
+  assert.deepEqual(tables.rows, []);
+  assert.match(tables.notice, /telemetry tables are off on this stack: query Cloudflare's own/);
   assert.equal(calls.length, 1);
 
   answer = async () => ({ data: Array.from({ length: 1_000 }, (_, n) => ({ n })), rows: 1_000 });

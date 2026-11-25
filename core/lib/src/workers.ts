@@ -131,9 +131,7 @@ export interface Door {
 /** As workers-types' `AnalyticsEngineDataPoint` spells it. */
 export type MetricPoint = { indexes?: string[]; blobs?: string[]; doubles?: number[] };
 
-/** It holds the warehouse's tokens, so the mind, which may be hostile, never holds one. A mind
- *  that made its tables itself holds a token of its own: for it the cut of a query is a
- *  convenience, not a boundary (core/configs/default/telemetry.ts). */
+/** It holds the warehouse's tokens, so the mind, which may be hostile, never holds one. */
 export interface TelemetryService {
   /** `hours` is 24 by default and at most 720; at most 1,000 rows. */
   query(sql: string, hours?: number): Promise<TelemetryRows>;

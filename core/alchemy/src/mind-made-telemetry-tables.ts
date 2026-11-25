@@ -1,9 +1,10 @@
 // mind-made-telemetry-tables.ts — THE TELEMETRY TABLES THAT A MIND MADE ITSELF, AS A RESOURCE. A
-// stack with no telemetry token makes the bucket and the streams, and the mind's own code makes
-// the catalog, the sinks and the pipelines (core/configs/default/telemetry.ts). This resource makes
-// nothing. Its delete removes what the mind made, with the deploy's own credential: the pipelines,
-// then the sinks, then the catalog with its tables. It reads the bucket's and the streams' names
-// from their resources, so a destroy runs it before they go.
+// stack with no telemetry token makes the bucket and the streams. The mind's own code, with a
+// token of the account that a member gave it, may have made the catalog, the sinks and the
+// pipelines on them; the default config has no code that makes them. This resource makes
+// nothing. Its delete removes what the mind made, with the deploy's own credential: the
+// pipelines, then the sinks, then the catalog with its tables. It reads the bucket's and the
+// streams' names from their resources, so a destroy runs it before they go.
 import type * as Cloudflare from "@alchemy.run/cloudflare";
 import * as pipelines from "@distilled.cloud/cloudflare/pipelines";
 import * as catalog from "@distilled.cloud/cloudflare/r2-data-catalog";

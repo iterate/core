@@ -11,7 +11,7 @@ import { publishAgentKinds } from "iterate/agents/kinds";
 import { agentKinds } from "./agent-kinds/index.ts";
 import { sayMindForm } from "./cloud-deliveries.ts";
 import { ensureIterateCoreRepo } from "./iterate-core.ts";
-import { removeOwnTelemetryQueryRule } from "./telemetry.ts";
+import { removeOwnTelemetryQueryRule } from "./telemetry-query-rule.ts";
 
 /** One step of the publish hook (the `mind/worker-updated` case). A step that throws is reported
  *  (`config.publish-hook`, in the Workers' log, with the step's name; apps/telemetry/exceptions.ts
@@ -59,8 +59,8 @@ export async function init(itx: IterateConfigProcessEventArgs<"agents">["itx"]) 
   // (cloud-deliveries.ts, and `processMindEvent` in worker.ts). Keep both, or the Cloud sends the
   // key form alone.
   await step("mind-form", () => sayMindForm(itx));
-  // `itx.telemetry.query` is the platform's alone: the row an earlier turn-on wrote, which
-  // pointed it at `itx.config.telemetryQuery`, goes (telemetry.ts).
+  // `itx.telemetry.query` is the platform's alone: an old row that points it at
+  // `itx.config.telemetryQuery` goes (telemetry-query-rule.ts).
   await step("telemetry-query-rule", () => removeOwnTelemetryQueryRule(itx));
   // A local mirror of github.com/iterate/core at /repos/github.com/iterate/core (iterate-core.ts),
   // so every mind's agents can inspect the platform's source locally.

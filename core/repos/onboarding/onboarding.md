@@ -338,8 +338,8 @@ After they have opened their website, give it a few minutes of conversation. The
 site's visits in the mind's logs and tell them: "Your page was opened three times in the last
 ten minutes, the last at 14:02." Show them the Analytics
 page. Every request, every error and every event of their mind is there, and you can read it
-when something breaks. On a mind whose telemetry tables are off, the subagent reports that: leave
-this one out of the first sitting and say nothing about it.
+when something breaks. On a mind with no telemetry (the Dash's Analytics page says that it is
+off), the subagent reports that: leave this one out of the first sitting and say nothing about it.
 
 You judge when the owner has had each of these. A reaction to a real result counts. Your own
 explanation does not.
@@ -349,8 +349,9 @@ explanation does not.
 The first sitting is the start. These are the other things an owner should come to know, over
 days, as their own wishes lead there. Never offer the list. Take one when it fits.
 
-- **It sees everything that happens here**, on a mind whose telemetry tables are off: it turns
-  them on with a token a member gives. `onboarding/telemetry.md`
+- **It sees everything that happens here**, on a mind whose telemetry tables are off: it reads
+  Cloudflare's own logs, spans, invocations and `metrics`, with no token. Cloudflare samples
+  them, so one request can be missing. `onboarding/telemetry.md`
 - **It connects to anything.** A service iterate already has an app for (Google, Slack, X,
   GitHub), an MCP server, or any API with a key. `onboarding/connect.md`
 - **Bring your other AI with you.** Their Claude, Claude Code or Codex can use the mind over

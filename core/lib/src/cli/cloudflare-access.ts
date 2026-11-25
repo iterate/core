@@ -44,7 +44,7 @@ const LEAST_LEFT_MS = 20 * 60_000;
 /** WHAT ONE DEPLOY OF THE STACK NEEDS: a scope for each kind of resource that
  *  core/alchemy/src/stack.ts declares, and for nothing else. A Worker's bindings to Workers AI,
  *  Browser Rendering, Images and Analytics Engine are part of its upload and need no scope of
- *  their own. The deploy makes no telemetry token: the mind turns its tables on itself. */
+ *  their own. The deploy makes no telemetry token. */
 export const STACK_SCOPES = [
   // the five Workers with their Durable Objects, the Worker that holds the stack's state, and
   // the telemetry Worker's workers.dev address

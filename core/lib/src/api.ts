@@ -1622,23 +1622,18 @@ export type EntityCollectionApi<Handle> = {
 export interface InstalledAppRoots {}
 
 /** What `itx.telemetry.query` answers: the rows, the SQL that ran for the mind, and an optional
- *  plain notice (e.g. when telemetry tables are off). `truncated` is there when the answer holds
- *  the 1,000 rows that are the most one query answers: more may match. `dataset` names the
- *  Cloudflare dataset that answered a query over one (`TELEMETRY_DATASETS`); the SQL that ran
- *  holds the cut's values as named parameters (`$itx_since`, `$itx_worker_0`, …). */
+ *  plain notice (a table query on a stack with no telemetry tables answers no rows and a notice).
+ *  `truncated` is there when the answer holds the 1,000 rows that are the most one query
+ *  answers: more may match. `dataset` names the Cloudflare dataset that answered a query over one
+ *  (`TELEMETRY_DATASETS`); the SQL that ran holds the cut's values as named parameters
+ *  (`$itx_since`, `$itx_worker_0`, …). */
 export type TelemetryRows = {
   rows: Record<string, unknown>[];
   sql: string;
   notice?: string;
   truncated?: true;
-  send?: TelemetrySend;
   dataset?: TelemetryDataset;
 };
-
-/** Where a query's SQL goes: there when the stack holds no telemetry token. The mind's own code
- *  can then send the SQL itself, with a token of its own (core/configs/default/telemetry.ts):
- *  R2 SQL over the bucket's data catalog. */
-export type TelemetrySend = { engine: "tables"; accountId: string; bucket: string };
 
 /** Cloudflare's own datasets that `itx.telemetry.query` reads with no token, each by the name
  *  Cloudflare's Analytics SQL gives it; `metrics` is the stack's own Analytics Engine dataset. */
@@ -2246,16 +2241,11 @@ export interface IterateContextApi {
    *  docs write it, with no JOIN, subquery, UNION, CTE, comment or `$`; at most 168 hours over the
    *  three logs and 768 over the other two. It reads the log lines of every Worker of the
    *  mind's stack, and the spans of the mind's and the boundary's alone. Over the tables `events`, `logs` and `spans` (R2 SQL, at most 720
-   *  hours) it needs the stack's telemetry token, and with none it answers a notice. `query` is the
-   *  platform's alone, under this one name: a mind that made its tables with its own token reads
-   *  them by `itx.config.telemetryQuery(sql, { hours })` (core/configs/default/telemetry.ts). */
+   *  hours) it needs the stack's telemetry token. A stack with no telemetry tables answers a
+   *  notice for a table query, with no rows. `query` is the platform's alone, under this one
+   *  name. */
   telemetry: {
     query(sql: string, options?: { hours?: number }): Promise<TelemetryRows>;
-    /** The cut SQL and where it goes, under a name that no rule points away: a mind that turns its
-     *  tables on itself reads them with its own code (`itx.config.telemetryQuery`,
-     *  core/configs/default/telemetry.ts), which calls this. Never rows: on a stack that holds its
-     *  telemetry token it throws TELEMETRY_TOKEN_HELD. */
-    cut(sql: string, options?: { hours?: number }): Promise<{ sql: string; send: TelemetrySend }>;
   };
   /** WHO IS A MEMBER OF THE MIND NOW, as the stack's sign-in knows it: the addresses its config
    *  names and the members an owner added. `has(email)` answers true or false. The mind's own

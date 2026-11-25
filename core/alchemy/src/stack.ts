@@ -18,8 +18,8 @@
 //
 // The stack generates four keys (three with an external mind) and keeps one owner-created
 // telemetry API token in state, when it is given one. With a token it makes the telemetry
-// tables; with none it makes their bucket and streams, and the mind can make the tables itself
-// with a secret of its own (core/configs/default/telemetry.ts). It makes no OAuth client: a
+// tables; with none it makes their bucket and streams and no tables, and the mind reads
+// Cloudflare's own datasets and `metrics` through `itx.telemetry.query`. It makes no OAuth client: a
 // member connects the mind to the account through Cloudflare's MCP server, for which the mind is
 // its own client (core/configs/default/cloudflare.ts).
 // An owner signs in first with a code mailed to their address, by the mind or by Cloudflare
@@ -103,8 +103,8 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     //   - "given": one owner-created TelemetryToken kept in state.
     //   A deploy takes no new token, so a stack's mode never changes from "off".
     //   - "off": no token. The bucket, the streams and the OTLP destinations are made, and no
-    //     catalog, sink or pipeline: the mind can make those itself, with a secret of its own
-    //     (core/configs/default/telemetry.ts). A stream with no pipeline keeps what it is sent,
+    //     catalog, sink or pipeline. A destroy removes the ones that the mind's own code made
+    //     (./mind-made-telemetry-tables.ts). A stream with no pipeline keeps what it is sent,
     //     and a pipeline made later writes it into the table (measured on 20 Nov 2026).
     const telemetryBucket = yield* Cloudflare.R2.Bucket("TelemetryBucket", {
       name: names.telemetryBucket,

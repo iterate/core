@@ -378,7 +378,7 @@ void test("telemetry modes: minted keeps both AccountApiToken resources, given u
   assert.equal(minted.resources.TelemetryTablesOfTheMind, undefined);
 
   // Off mode binds the three streams and declares the bucket, the streams and the destinations,
-  // and no token, catalog, sink or pipeline: the mind can make those itself
+  // and no token, catalog, sink or pipeline
   assert.deepEqual(off.workers.Telemetry, [
     "ANALYTICS:analytics",
     "EVENTS:Cloudflare.Pipelines.Stream Telemetry_events_stream",

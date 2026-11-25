@@ -172,10 +172,11 @@ pnpm run destroy --stage <alchemy.stageName>   # --yes with nobody at the termin
   - **`given`:** the state holds `TelemetryToken`, an owner-created token: the stack keeps using
     it. **Do not delete or roll it:** the sinks keep the token they were made with.
   - **`off`:** neither. The stack makes the telemetry bucket, the three streams and the OTLP
-    destinations, and no catalog, sink, pipeline or token. The mind makes and reads its tables
-    itself, with a token kept as its secret `/secrets/cloudflare-telemetry`
-    (core/configs/default/telemetry.ts); the streams keep what they are sent until then. A
-    destroy removes what the mind made (`src/mind-made-telemetry-tables.ts`).
+    destinations, and no catalog, sink, pipeline or token. The stack has no `events`, `logs` or
+    `spans` table: its mind reads Cloudflare's own datasets and `metrics` through
+    `itx.telemetry.query`, with no token. Until 25 Nov 2026 a mind could turn its tables on with
+    a member's token: a destroy removes what such a mind made
+    (`src/mind-made-telemetry-tables.ts`).
 - The deploy makes a Realtime SFU app and a TURN key (`src/realtime.ts`), which need the
   permission to make Realtime (Calls) resources: "Calls Write" (`calls.write`), which the deploy
   asks for, or "Realtime" or "Realtime Admin". A credential without it is no failure either: the deploy makes neither,

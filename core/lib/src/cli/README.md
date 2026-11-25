@@ -103,10 +103,9 @@ What it does, in order:
    there and asks before it goes on. With your yes (or `--erase-records`) it erases every DNS
    record and Workers route of that domain, right before the deploy and after every other check.
 4. **Telemetry: no token.** The deploy makes the telemetry bucket and its streams, and no tables
-   (`events`, `logs`, `spans`, and `metrics` SQL). The mind turns them on itself: ask its agent to
-   turn on telemetry (`onboarding/telemetry.md` of `/repos/onboarding`). It asks a member for a token of the account and
-   makes the tables with it; no second deploy is needed. A mind whose tables an earlier deploy
-   made with a token keeps that token in the stack's state.
+   (`events`, `logs`, `spans`). The mind reads Cloudflare's own datasets and `metrics` through
+   `itx.telemetry.query`, with no token (`onboarding/telemetry.md` of `/repos/onboarding`). A mind
+   whose tables an earlier deploy made with a token keeps that token in the stack's state.
 5. **Workers Paid, R2 and Zero Trust.** It opens the page for each one that is off and waits
    until it is on. Off means Cloudflare refused the read, and the account's line shows its words.
    A read that failed is not a fact: a 429 or a 5xx is read again, and after three the command
