@@ -14,6 +14,14 @@ import { SignInMethod } from "./principal.ts";
 /** Where an app answers its `AppDescription`, on its own hostname, for anyone. */
 export const APP_DESCRIPTION_PATH = "/.well-known/iterate-app";
 
+/** A mail domain as an app writes it: lowercase, two labels at least, no "@" and no wildcard. */
+const EmailDomain = z
+  .string()
+  .regex(
+    /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
+    'a mail domain in lowercase, as "example.com"',
+  );
+
 /** WHAT AN APP OF A MIND SAYS OF ITSELF, as an object in the app's own code:
  *
  *  ```ts
@@ -35,6 +43,14 @@ export const AppDescription = z.object({
    *  `["passkey"]` for an app for members, `["email", "passkey"]` for any other. A mailed code
    *  signs in no member, so an app for members has no reason to name "email". */
   signIn: z.tuple([SignInMethod], SignInMethod).optional(),
+  /** WHOSE ADDRESS A MAILED CODE SIGNS IN TO THE APP: an address at one of these domains, and no
+   *  other. Each is a whole domain in lowercase, the part after the "@" (`"example.com"`); a
+   *  subdomain is another domain. The issuer mails no code for the app's hostname to any other
+   *  address, and gives no code for the hostname to a session that a mailed code opened for
+   *  another address, whoever asks: the app's own page, or an MCP client. It binds the method
+   *  "email" alone: a passkey's session still counts, so the guard in the app's own code says
+   *  which members come. With none, a mailed code signs in any address. */
+  emailDomains: z.tuple([EmailDomain], EmailDomain).optional(),
 });
 export type AppDescription = z.infer<typeof AppDescription>;
 

@@ -464,7 +464,7 @@ function choiceEnded(requestHash?: string) {
  *  app could not be asked, since too many new hostnames were asked about just now. */
 async function hostTakes(env: Env, hostResource: string, session: SignedIn) {
   const app = await appOf(env, hostResource);
-  return app && appTakes(app, session.method);
+  return app && appTakes(app, session);
 }
 
 /** WHY A SESSION GETS NO GRANT, or null. A mind hostname takes the identity of anyone signed in,

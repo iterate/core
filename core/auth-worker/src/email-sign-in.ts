@@ -12,6 +12,12 @@
 //   or with none                (`memberRefusal`): the passkey, Cloudflare Access for an owner
 //                               (./access-sign-in.ts), an owner's sign-in link for an added member
 //
+// AN APP MAY NAME WHOSE ADDRESS A CODE SIGNS IN (`emailDomains`, ./asking-app.ts). For such an
+// app the address page says which domains, and an address at any other is refused there with
+// that reason, for every such address alike, a member's too: no challenge is made and nothing is
+// mailed, so it spends none of the limits below. The app's description is public, so the words
+// tell nothing that it does not.
+//
 // A SIGN-IN THAT DOES NOT NAME "email" HAS NO SUCH PAGE: an app says how its people sign in
 // (./asking-app.ts `signInOf`), and for one that names the passkey alone, as for the control
 // plane's own sign-in, the address page leads back to the sign-in page, and no code is mailed in
@@ -26,7 +32,7 @@ import { cookieValueOf, reportIssue } from "iterate/lib";
 import { zoneOf } from "iterate/mind-config";
 import { z } from "zod";
 import { AccountFacts } from "./account-facts.ts";
-import { type AskingApp, askingAppOf, signInOf } from "./asking-app.ts";
+import { type AskingApp, askingAppOf, signInOf, takesAddress } from "./asking-app.ts";
 import { isBlocked } from "./blocked.ts";
 import { isOwner } from "./config.ts";
 import { emailSessionCookie, MIND_FORM_PATH, sessionsOverRemoved } from "./cookies.ts";
@@ -170,7 +176,7 @@ export function emailAddressPage(
     imageOrigin: asking?.imageOrigin,
     status: error ? 400 : 200,
     body: `${asking?.heading || `<h1>Sign in to ${text(mind)}</h1>`}
-      <p class="muted">Enter your email. We send you a code to sign in with.</p>
+      <p class="muted">Enter your email. We send you a code to sign in with.${onlyAt(signIn)}</p>
       ${ruleAbove(env, asking)}
       ${error ? `<p role="alert">${text(error)}</p>` : ""}
       <form method="post" action="${EMAIL_SIGN_IN_PATH}" class="stack">
@@ -182,6 +188,16 @@ export function emailAddressPage(
     script: passkey.script,
   });
 }
+
+/** The domains that an app's mailed code is for, as a list in words: "a.com or b.com". */
+const domainsOf = (domains: string[]) =>
+  new Intl.ListFormat("en", { type: "disjunction" }).format(domains);
+
+/** One more sentence on the address page of an app that names domains: whose address it takes. */
+const onlyAt = ({ mailedCode }: SignIn) =>
+  mailedCode?.emailDomains
+    ? ` ${text(mailedCode.name)} takes an address at ${text(domainsOf(mailedCode.emailDomains))} only.`
+    : "";
 
 /** The way to "sign in with your mind" (./mind-sign-in.ts), for an app that names it. */
 const mindWay = (next: string) => `<form method="get" action="${MIND_FORM_PATH}" class="stack">
@@ -202,6 +218,13 @@ async function start(env: Env, request: Request) {
   const email = typed.trim().toLowerCase();
   const again = (error: string) => emailAddressPage(env, next, signIn, error, typed);
   if (!z.email().safeParse(email).success) return again("Enter an email address.");
+  // an app that names domains: no code for an address at any other, and no challenge
+  if (signIn.mailedCode?.emailDomains && !takesAddress(signIn.mailedCode, email)) {
+    console.info({ event: "auth.sign-in-refused", method: "email", reason: "domain" });
+    return again(
+      `${signIn.mailedCode.name} takes an address at ${domainsOf(signIn.mailedCode.emailDomains)} only. Use such an address.`,
+    );
+  }
   const id = crypto.randomUUID();
   const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
   // both are read for every address alike, so the answer's time says nothing

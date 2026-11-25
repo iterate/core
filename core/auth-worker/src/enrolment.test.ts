@@ -898,6 +898,96 @@ test("a mailed code's session at an app that names the passkey alone goes to tha
   expect(stack.mailed).toHaveLength(before);
 });
 
+// AN APP NAMES WHOSE ADDRESS A MAILED CODE SIGNS IN (iterate/app-description `emailDomains`), and
+// the issuer holds the sign-up to the list: at the mail, and at every code for the app's host.
+test("an app that names domains: no code is mailed to an address at another domain and no challenge is made, from the app's own page and from an MCP client alike; a session of such an address gets no code for the host; a passkey's session passes", async () => {
+  const stack = stackOf();
+  const shop = "https://shop.example.com";
+  const inside = "eve@shop-people.dev";
+  stack.described.set("shop.example.com", {
+    name: "Shop",
+    signIn: ["email", "passkey"],
+    emailDomains: ["shop-people.dev"],
+  });
+  const mcp = await oauthHelpers(stack.env).createClient({
+    clientName: "An MCP client",
+    redirectUris: [MCP_CALLBACK],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code", "refresh_token"],
+    responseTypes: ["code"],
+  });
+  const nextOf = async (client?: string) =>
+    new URL((await authorized(stack.env, "", shop, client)).location).searchParams.get("next")!;
+  const own = await nextOf();
+  const fromMcp = await nextOf(mcp.clientId);
+
+  // the address page says whose address the app takes, on the app's page and on the mind's
+  for (const next of [own, fromMcp])
+    expect(
+      await (await ask(stack.env, `/sign-in/email?${new URLSearchParams({ next })}`)).text(),
+    ).toContain("Shop takes an address at shop-people.dev only.");
+
+  const challenges = () =>
+    stack.db.prepare("select count(*) as n from email_challenges").get() as { n: number };
+  const asked = async (email: string, next: string) => {
+    const before = { mailed: stack.mailed.length, challenges: challenges().n };
+    const answer = await ask(stack.env, "/sign-in/email", {
+      method: "POST",
+      body: new URLSearchParams({ email, next: `${ISSUER}${next}` }),
+    });
+    return {
+      status: answer.status,
+      mailed: stack.mailed.length - before.mailed,
+      challenges: challenges().n - before.challenges,
+      says: answer.status === 400 ? /role="alert">([^<]*)</.exec(await answer.text())?.[1] : "",
+    };
+  };
+  const refused = {
+    status: 400,
+    mailed: 0,
+    challenges: 0,
+    says: "Shop takes an address at shop-people.dev only. Use such an address.",
+  };
+  expect({
+    // an address at another domain, a subdomain of the app's, and a member's: one answer for all
+    outsider: await asked(GUEST, own),
+    outsiderFromMcp: await asked(GUEST, fromMcp),
+    subdomain: await asked("eve@mail.shop-people.dev", own),
+    member: await asked(MEMBER, own),
+    insider: await asked(inside, own),
+    insiderInCapitals: await asked("Bo@Shop-People.dev", fromMcp),
+  }).toEqual({
+    outsider: refused,
+    outsiderFromMcp: refused,
+    subdomain: refused,
+    member: refused,
+    insider: { status: 303, mailed: 1, challenges: 1, says: "" },
+    insiderInCapitals: { status: 303, mailed: 1, challenges: 1, says: "" },
+  });
+
+  // A SESSION THAT A MAILED CODE OPENED ELSEWHERE, at an app that takes any address, is no
+  // session at the shop for an address outside its list.
+  const outsider = (await codeRedeemed(stack, GUEST)).cookie;
+  const insider = (await codeRedeemed(stack, inside)).cookie;
+  const member = await passkeyAdded(stack, MEMBER);
+  const ends = async (cookie: string) => ({
+    own: (await authorized(stack.env, cookie, shop)).ends,
+    mcp: (await authorized(stack.env, cookie, shop, mcp.clientId)).ends,
+  });
+  expect({
+    outsider: await ends(outsider),
+    insider: await ends(insider),
+    // a passkey's session counts at every app: which members come is the app's own guard
+    member: await ends(member.cookie),
+    outsiderAtAnother: (await authorized(stack.env, outsider, GUESTBOOK)).ends,
+  }).toEqual({
+    outsider: { own: "the sign-in page", mcp: "the sign-in page" },
+    insider: { own: "a code for the host", mcp: "the consent page" },
+    member: { own: "a code for the host", mcp: "the consent page" },
+    outsiderAtAnother: "a code for the host",
+  });
+});
+
 test("a consent that a session of another method approves gives no code for an app that does not take that method", async () => {
   const stack = stackOf();
   const letters = "https://letters.second.example";

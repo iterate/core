@@ -20,7 +20,9 @@
 // no redirect, and asks again after five minutes. An icon counts only from the app's own origin,
 // so the page's policy allows that one origin. An app that says nothing is shown by its host and
 // its initials. An app that DOES NOT ANSWER (no answer in two seconds, or a 5xx) has said nothing
-// new: it is still what it last said, and it is asked again after a minute.
+// new: it is still what it last said, and it is asked again after a minute. So is an app whose
+// description is a JSON object that is wrong. With nothing kept of such an app, the issuer takes
+// the passkey alone for it until it says (`UNHEARD`): it never opens an app that it has not heard.
 //
 // "For members" changes the page's words and the default of `signIn`, and nothing else: who may
 // come is the guard in the app's own code (the mind's worker.ts), which this Worker does not
@@ -31,6 +33,12 @@
 // names, or to a passkey's (./authorize.ts, `appTakes`), and the sign-in pages offer those
 // methods alone, in the app's order (`signInOf`). It is read from the app, never from the
 // request, so an MCP client that signs a person in to the app gets the same list.
+//
+// WHOSE ADDRESS A MAILED CODE SIGNS IN (`emailDomains`) is enforced with it: for an app that
+// names domains, no code is mailed to an address at any other (./email-sign-in.ts), and a session
+// that a mailed code opened for such an address gets no code for the app's host (`appTakes`). So
+// the list holds at the sign-up, and not only at the app's own guard. It binds the method
+// "email" alone; a list that changes binds the grants made after it.
 //
 // AN APP IS AN OAUTH CLIENT, as Codex is: the host's client holds the app's name and icon (its
 // `clientName` and `logoUri`), written here whenever the description is read and says something
@@ -62,6 +70,8 @@ export type AskingApp = {
   /** How the app's people sign in, in the app's order: what it names, or the default for whom it
    *  is for (`saidIn`). The sign-in page opens on the first. */
   signIn: SignInMethod[];
+  /** The domains whose addresses a mailed code signs in to the app, or null: any address. */
+  emailDomains: string[] | null;
 };
 
 const text = (value: string) =>
@@ -81,12 +91,22 @@ const CONTROL_PLANE_SIGN_IN: SignInMethod[] = ["passkey"];
 export async function signInOf(
   env: Env,
   next: string,
-): Promise<{ app: AskingApp | null; methods: SignInMethod[] } | null> {
+): Promise<{
+  app: AskingApp | null;
+  methods: SignInMethod[];
+  /** For a mind hostname's sign-in: the app's name, and whose address a mailed code signs in to
+   *  it (`takesAddress`). The pages' refusal names the app by it, whichever client asks. */
+  mailedCode: Pick<AskingApp, "name" | "emailDomains"> | null;
+} | null> {
   const authorization = hostAuthorizationIn(env, next);
-  if (!authorization) return { app: null, methods: CONTROL_PLANE_SIGN_IN };
+  if (!authorization) return { app: null, methods: CONTROL_PLANE_SIGN_IN, mailedCode: null };
   const app = await appOf(env, authorization.origin);
   if (!app) return null;
-  return { app: (await isOwnSignIn(env, authorization)) ? app : null, methods: app.signIn };
+  return {
+    app: (await isOwnSignIn(env, authorization)) ? app : null,
+    methods: app.signIn,
+    mailedCode: app,
+  };
 }
 
 /** The app whose own sign-in `next` goes on to (a path of this issuer), or null: for any other
@@ -97,10 +117,22 @@ export async function askingAppOf(env: Env, next: string): Promise<AskingApp | n
   return appOf(env, authorization.origin);
 }
 
-/** WHETHER AN APP TAKES A SESSION THAT `method` OPENED, for a code for the app's host: a
- *  passkey's counts at every app, and any other when the app names its method. */
-export const appTakes = (app: Pick<AskingApp, "signIn">, method: SignInMethod) =>
-  method === "passkey" || app.signIn.includes(method);
+/** WHETHER AN APP TAKES A SESSION, for a code for the app's host: a passkey's counts at every
+ *  app, and any other when the app names its method. A mailed code's counts only for an address
+ *  that the app takes (`takesAddress`). */
+export const appTakes = (
+  app: Pick<AskingApp, "signIn" | "emailDomains">,
+  session: { method: SignInMethod; email: string },
+) =>
+  session.method === "passkey" ||
+  (app.signIn.includes(session.method) &&
+    (session.method !== "email" || takesAddress(app, session.email)));
+
+/** WHETHER A MAILED CODE SIGNS `email` IN TO THE APP: the app names no domains, or the address is
+ *  at one of them, whole (the text after its last "@", in lowercase). */
+export const takesAddress = (app: Pick<AskingApp, "emailDomains">, email: string) =>
+  !app.emailDomains ||
+  app.emailDomains.includes(email.slice(email.lastIndexOf("@") + 1).toLowerCase());
 
 /** `next` as an authorization request of this issuer for a mind hostname: the hostname's origin,
  *  and the request's parameters. Null for anything else. */
@@ -146,19 +178,21 @@ export async function appOf(env: Env, origin: string): Promise<AskingApp | null>
       redirect: "manual",
       signal: AbortSignal.timeout(2000),
     })
-      // an answer of the app: its description's text, which is empty for an app that has none
-      // (a 404, a sign-in). Null: the app did not answer, or its answer broke off.
+      // What the app says: its description's text is empty for an app that has none (a 404, a
+      // sign-in). Null: the app did not answer, its answer broke off, or its description is
+      // wrong (`saidIn`). None of those is the app's word.
       .then(async (answer) => {
-        if (answer.status >= 500) return null;
-        return { description: answer.status === 200 ? await answer.text() : "" };
+        // a 5xx, and a 4xx that says "not now" (408, 425, 429), are no answer
+        if (answer.status >= 500 || [408, 425, 429].includes(answer.status)) return null;
+        return saidIn(answer.status === 200 ? await answer.text() : "", document);
       })
       .catch(() => null);
-    const last = kept || NOTHING;
     kept = heard
       ? // "nothing" is kept too: an app with no description is not asked at each page
-        { ...saidIn(heard.description, document), askAfter: Date.now() + 5 * 60_000 }
-      : // it did not answer: it is what it last said, and is asked again after a minute
-        { ...last, askAfter: Date.now() + 60_000 };
+        { ...heard, askAfter: Date.now() + 5 * 60_000 }
+      : // no word of the app: it is what it last said, or `UNHEARD`, and is asked again after a
+        // minute
+        { ...(kept || UNHEARD), askAfter: Date.now() + 60_000 };
     // The row goes a day after it was last written: an app that is asked about is written again
     // within five minutes, and a hostname that nobody asks about any more leaves no row.
     await env.OAUTH_KV.put(key, JSON.stringify(kept), { expirationTtl: 24 * 3600 });
@@ -171,11 +205,13 @@ export async function appOf(env: Env, origin: string): Promise<AskingApp | null>
     icon: kept.icon,
     members: kept.members,
     signIn: kept.signIn,
+    // a row that was kept before the issuer read this field has none
+    emailDomains: kept.emailDomains || null,
   };
 }
 
 /** What an app said of itself (`saidIn`), and when to ask it again. */
-type Kept = ReturnType<typeof saidIn> & { askAfter: number };
+type Kept = typeof NOTHING & { askAfter: number };
 
 /** The host's own client says what the app says: written when it says something else. */
 async function keepOnClient(env: Env, origin: string, said: { name: string; icon: string | null }) {
@@ -195,25 +231,40 @@ const NOTHING: {
   icon: string | null;
   members: boolean;
   signIn: SignInMethod[];
-} = { name: null, icon: null, members: false, signIn: ["email", "passkey"] };
+  emailDomains: string[] | null;
+} = { name: null, icon: null, members: false, signIn: ["email", "passkey"], emailDomains: null };
+
+/** AN APP THAT THE ISSUER HAS NO WORD OF YET: it did not answer, or its description is wrong, and
+ *  nothing that it said before is kept. The issuer does not know whom the app takes, so it takes
+ *  the passkey alone until the app says: a code that is mailed meanwhile, or a grant for an
+ *  address, could be one that the app's own list refuses (`signIn`, `emailDomains`). */
+const UNHEARD: typeof NOTHING = { ...NOTHING, signIn: ["passkey"] };
 
 /** WHAT THE TEXT OF AN APP'S DESCRIPTION SAYS (iterate/app-description `AppDescription`): a name
  *  of at most sixty characters, its icon when that is on the description's own origin, over
  *  https, whether the app is for members, and how its people sign in: the list it names, as it is
  *  written, or the passkey alone for an app for members (a member signs in with nothing else),
- *  and email then passkey for any other. A text that is no `AppDescription` says nothing: one
- *  that names a method this issuer does not know is such a text, so no app is held to a list that
- *  it did not write. */
-export function saidIn(descriptionText: string, descriptionUrl: string): typeof NOTHING {
-  if (!descriptionText || descriptionText.length > 20_000) return NOTHING;
+ *  and email then passkey for any other, and whose address a mailed code signs in. A text that is
+ *  no JSON object says nothing: an app with no description answers with a page, or with none.
+ *  NULL: A JSON OBJECT THAT IS NO `AppDescription`, such as one that names a method this issuer
+ *  does not know, or a domain that is none, and one that broke off or is over 20,000 characters. The app wrote a description and it is wrong, so it is
+ *  held to no list that it did not write, and it is not opened to anyone either: the caller keeps
+ *  what the app last said (`appOf`). */
+export function saidIn(descriptionText: string, descriptionUrl: string): typeof NOTHING | null {
+  // An object that is too long to read, or that broke off, is a description that did not arrive
+  // whole. Any other text (a page, of any length) is none.
+  const unread = descriptionText.trimStart().startsWith("{") ? null : NOTHING;
+  if (!descriptionText) return NOTHING;
+  if (descriptionText.length > 20_000) return unread;
   let json: unknown;
   try {
     json = JSON.parse(descriptionText);
   } catch {
-    return NOTHING;
+    return unread;
   }
+  if (typeof json !== "object" || !json || Array.isArray(json)) return NOTHING;
   const parsed = AppDescription.safeParse(json);
-  if (!parsed.success) return NOTHING;
+  if (!parsed.success) return null;
   const name = parsed.data.name
     // a name is one line of text
     .replace(/[\p{Cc}\p{Cf}]/gu, " ")
@@ -230,6 +281,7 @@ export function saidIn(descriptionText: string, descriptionUrl: string): typeof 
     signIn: [
       ...new Set<SignInMethod>(parsed.data.signIn || (members ? ["passkey"] : NOTHING.signIn)),
     ],
+    emailDomains: parsed.data.emailDomains ? [...new Set(parsed.data.emailDomains)] : null,
   };
 }
 

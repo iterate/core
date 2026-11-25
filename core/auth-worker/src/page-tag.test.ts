@@ -198,7 +198,13 @@ test("the pages that keep the tag: /sessions, the not-a-member page at /, and an
     ),
   ).toBe(false);
   expect(
-    await tagged(emailAddressPage(env, "/", { app: null, methods: ["email", "passkey"] })),
+    await tagged(
+      emailAddressPage(env, "/", {
+        app: null,
+        methods: ["email", "passkey"],
+        mailedCode: null,
+      }),
+    ),
   ).toBe(false);
   expect(await tagged(chooserPage({ mind: MIND, email: "a@example.org", here: "/x" }))).toBe(false);
   expect(

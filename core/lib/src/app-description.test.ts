@@ -39,6 +39,20 @@ test("a sign-in method that the issuer does not know is refused by the type, and
   expect(() => serveAppDescription(ask(APP_DESCRIPTION_PATH), everyone)).toThrow(/for/);
 });
 
+test("the mail domains of an app's people are served as they are written, and anything that is no whole lowercase domain is refused as it is served", async () => {
+  const shop: AppDescription = { name: "Shop", emailDomains: ["example.com", "second.example"] };
+  expect(await serveAppDescription(ask(APP_DESCRIPTION_PATH), shop)!.json()).toEqual(shop);
+  for (const domain of ["@example.com", "*.example.com", "Example.com", "example"])
+    expect(
+      () =>
+        serveAppDescription(ask(APP_DESCRIPTION_PATH), { name: "Shop", emailDomains: [domain] }),
+      domain,
+    ).toThrow(/emailDomains/);
+  // @ts-expect-error -- a list names one domain at least
+  const none: AppDescription = { name: "Shop", emailDomains: [] };
+  expect(() => serveAppDescription(ask(APP_DESCRIPTION_PATH), none)).toThrow(/emailDomains/);
+});
+
 const GUESTBOOK: AppDescription = {
   name: "Guestbook",
   icon: "/icon.svg",
