@@ -102,6 +102,8 @@ type Declared = {
   observability: Record<string, any>;
   /** each Access application's name, by its logical id */
   accessNames: Record<string, string>;
+  /** whom each Access application's policies include, by its logical id */
+  accessIncludes: Record<string, unknown[]>;
 };
 
 /** Each Worker's bindings and declared resources, as the program declares them for one config. */
@@ -158,7 +160,15 @@ const declaredOf = (config: MindConfig, options?: { telemetryMode?: TelemetryMod
         .filter((r) => r.Type === "Cloudflare.Access.Application")
         .map((r) => [r.LogicalId, r.Props.name]),
     );
-    return { workers, resources, texts, observability, accessNames };
+    const accessIncludes = Object.fromEntries(
+      Object.values(stack.resources)
+        .filter((r) => r.Type === "Cloudflare.Access.Application")
+        .map((r) => [
+          r.LogicalId,
+          (r.Props.policies as { include: unknown[] }[]).flatMap((policy) => policy.include),
+        ]),
+    );
+    return { workers, resources, texts, observability, accessNames, accessIncludes };
   });
 
 void test("each Worker of the stack holds what stack-bindings.snapshot.json says", async () => {
@@ -198,6 +208,34 @@ void test("the one Access application is named by the control plane's hostname",
     controlPlaneHostname: "iterate.example.com",
   });
   assert.deepEqual(accessNames, { OwnerEmailProof: "iterate.example.com" });
+});
+
+// Cloudflare mails a code to an owner alone. An owner email pattern adds its whole domain to
+// that policy, and each Worker's config; a stack with no pattern, or an empty list, has neither.
+void test("an owner email pattern adds its domain to the Access policy and to each Worker's config, and a stack with none is as it was", async () => {
+  const config = CASES["full-cloudflare, no mail forward"];
+  const owner = { email: "owner@owner.example" };
+  for (const ownerEmailPatterns of [undefined, []]) {
+    const { accessIncludes, texts } = await declared({ ...config, ownerEmailPatterns });
+    assert.deepEqual(accessIncludes, { OwnerEmailProof: [owner] });
+    assert.doesNotMatch(texts.Boundary!.ITERATE!, /ownerEmailPatterns/);
+  }
+  const { accessIncludes, texts } = await declared({
+    ...config,
+    ownerEmailPatterns: ["*@company.example", "*@second.example"],
+  });
+  assert.deepEqual(accessIncludes, {
+    OwnerEmailProof: [
+      owner,
+      { emailDomain: { domain: "company.example" } },
+      { emailDomain: { domain: "second.example" } },
+    ],
+  });
+  for (const worker of ["Secrets", "Boundary"])
+    assert.deepEqual(JSON.parse(texts[worker]!.ITERATE!).ownerEmailPatterns, [
+      "*@company.example",
+      "*@second.example",
+    ]);
 });
 
 // A STACK THAT NAMES NO GATEWAY IS AS IT WAS BEFORE THE GATEWAY'S FIELD EXISTED. Its config

@@ -125,6 +125,29 @@ void test("an egress gateway's name that is empty is refused", () => {
   ]);
 });
 
+void test("owner email patterns are optional, each *@<domain>, and at no zone of the mind", () => {
+  assert.equal(MindConfig.parse(config()).ownerEmailPatterns, undefined);
+  assert.deepEqual(
+    MindConfig.parse({ ...config(), ownerEmailPatterns: ["*@company.example"] }).ownerEmailPatterns,
+    ["*@company.example"],
+  );
+  for (const pattern of [
+    "*@*",
+    "company.example",
+    "ada@company.example",
+    "*@Company.example",
+    // the mind's own zones, and a name under one
+    "*@example.com",
+    "*@mail.sub.example.net",
+  ])
+    assert.deepEqual(
+      MindConfig.safeParse({ ...config(), ownerEmailPatterns: [pattern] }).error?.issues[0]
+        ?.path[0],
+      "ownerEmailPatterns",
+      pattern,
+    );
+});
+
 function config() {
   return {
     mindId: "a".repeat(64),

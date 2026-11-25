@@ -81,6 +81,17 @@ mind starts from it, so a field that no Worker holds, such as `cloudflare.contai
 
 A mind takes each of its zones whole: nothing else may use them.
 
+`"ownerEmailPatterns": ["*@company.example"]` names more owners by pattern: every address at
+exactly that domain (no sub-domain) is an owner, with all that an owner may do. Such a person
+proves the address through Cloudflare Access, whose policy then names the whole domain, and adds a
+passkey. So whoever holds a mailbox at the domain, or runs its mail, can become an owner: name a
+domain only when its mail is the company's own, and never a zone of the mind. Each person who
+proves an address takes a seat of the account's Zero Trust team. A person who left keeps the
+passkey that they added, whatever their mail provider does: an owner blocks that address on
+`/members`, which ends that one person (no member, no session, no way back in) while the block is
+there. `iterate deploy --owner-email-patterns none` takes the pattern away for everyone. A mail or a Slack message from a verified address
+at the domain counts as a member's. Absent: the owners are `ownerEmails` alone.
+
 Every Worker of the stack keeps every log line and, by default, every trace in Cloudflare's own
 Workers Logs. `"telemetry": { "traceSampling": 0.1 }` keeps the trace of one request in ten (from 0
 to 1; Cloudflare's head sampling rate). `iterate deploy --trace-sampling 0.1` writes it, and

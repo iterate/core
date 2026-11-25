@@ -92,3 +92,41 @@ test("the token audiences are the API and the MCP server, and the external mind'
     "https://iterate.example.com/api/provide-connect",
   ]);
 });
+
+test("an owner is also an address at the exact domain of an owner email pattern", () => {
+  const config = { ownerEmails: ["owner@example.net"], ownerEmailPatterns: ["*@company.example"] };
+  expect([
+    isOwner(config, "owner@example.net"),
+    isOwner(config, " Bo@Company.example"),
+    isOwner(config, "bo@sub.company.example"),
+    isOwner(config, "bo@company.example.evil.example"),
+    isOwner(config, "bo@example.net"),
+  ]).toEqual([true, true, false, false, false]);
+});
+
+test.for([
+  ["at a zone", "*@example.com"],
+  ["under a zone", "*@mail.example.com"],
+  ["at the second zone", "*@second.example"],
+])(
+  "an owner email pattern %s of the mind is refused: the mind receives its mail",
+  ([, pattern]) => {
+    const vars = configVars({
+      zones: ["example.com", "second.example"],
+      ownerEmailPatterns: [pattern!],
+    });
+    expect(() => authConfigOf(vars)).toThrow(
+      /ITERATE__OWNER_EMAIL_PATTERNS.*names a zone of the mind/,
+    );
+  },
+);
+
+test("a config whose owner email pattern is no pattern is refused, and one with a pattern elsewhere is taken", () => {
+  expect(() => authConfigOf(configVars({ ownerEmailPatterns: ["*@*"] }))).toThrow(
+    "ownerEmailPatterns",
+  );
+  expect(authConfigOf(configVars({ ownerEmailPatterns: ["*@company.example"] }))).toMatchObject({
+    ownerEmailPatterns: ["*@company.example"],
+  });
+  expect(authConfigOf(configVars())).not.toHaveProperty("ownerEmailPatterns");
+});

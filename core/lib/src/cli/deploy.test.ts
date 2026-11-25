@@ -17,6 +17,7 @@ import {
   deployArgsOf,
   deployStack,
   deployConfigOf,
+  patternsRefusalOf,
   deployedMind,
   domainPickerOptions,
   earlierDeployOf,
@@ -177,6 +178,61 @@ test("a deploy over a mind keeps what the mind has, its id among it, and a flag 
     ownerEmails: ["grace@example.org"],
     alchemy: { stageName: "ada" },
   });
+});
+
+test("the owner email patterns are what --owner-email-patterns says, else what the mind has; none takes them away", () => {
+  const { accountId } = answers;
+  expect(deployConfigOf(answers)).not.toHaveProperty("ownerEmailPatterns");
+  expect(
+    deployConfigOf({ ...answers, ownerEmailPatterns: "*@company.example, *@second.example" }),
+  ).toMatchObject({ ownerEmailPatterns: ["*@company.example", "*@second.example"] });
+  // as the config is written to its file and to the boundary: JSON
+  expect(
+    JSON.parse(JSON.stringify(deployConfigOf({ ...answers, ownerEmailPatterns: "none" }))),
+  ).not.toHaveProperty("ownerEmailPatterns");
+  // a mind that has patterns keeps them with no flag, and loses them by `none` alone
+  const withPatterns = {
+    ...deployed,
+    deployConfig: {
+      alchemy: { stageName: "ada" },
+      cloudflare: { accountId, zones: deployed.zones },
+      ownerEmailPatterns: ["*@company.example"],
+    },
+  };
+  const over = (ownerEmailPatterns?: string) =>
+    deployConfigOf({ accountId, domain: "ada.example", deployed: withPatterns, ownerEmailPatterns })
+      .ownerEmailPatterns;
+  expect(over()).toEqual(["*@company.example"]);
+  expect(over("*@second.example")).toEqual(["*@second.example"]);
+  expect(over("none")).toBe(undefined);
+  for (const refused of [
+    "",
+    "company.example",
+    "*@*",
+    "*@Company.example",
+    "ada@company.example",
+    "*@company.example,",
+    // the mind's own zone, and a name under it
+    "*@ada-labs.com",
+    "*@mail.ada-labs.com",
+  ])
+    expect(() => deployConfigOf({ ...answers, ownerEmailPatterns: refused }), refused).toThrow(
+      /owner.email.pattern/i,
+    );
+});
+
+test("a source from before the owner email patterns is refused for a config that has some, and for no other", () => {
+  const before = "export const MindConfig = z.strictObject({ ownerEmails: z.array(z.email()) })";
+  const now = `${before} // ownerEmailPatterns`;
+  const withPatterns = deployConfigOf({ ...answers, ownerEmailPatterns: "*@company.example" });
+  expect(patternsRefusalOf(before, withPatterns)).toMatch(
+    /owner email patterns \(\*@company\.example\).*was not deployed.*--owner-email-patterns none/,
+  );
+  expect([
+    patternsRefusalOf(now, withPatterns),
+    patternsRefusalOf(before, deployConfigOf(answers)),
+    patternsRefusalOf(before, deployConfigOf({ ...answers, ownerEmailPatterns: "none" })),
+  ]).toEqual([null, null, null]);
 });
 
 test("the trace sampling is what --trace-sampling says, else what the mind has; default keeps every trace", () => {
@@ -971,6 +1027,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     mindId: "cd".repeat(32),
     controlPlaneHostname: "iterate.ada-labs.com",
     ownerEmails: ["ada@example.org"],
+    ownerEmailPatterns: ["*@company.example"],
     topology: "full-cloudflare",
     alchemy: { stageName: "ada-labs-com" },
     cloudflare: {

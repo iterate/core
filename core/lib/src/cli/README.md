@@ -125,6 +125,10 @@ What it does, in order:
      domain itself, or one label under it.
    - `ownerEmails`: the owner, who is the Cloudflare login unless `--owner` names another address.
      The address must not be at the mind's own domain.
+   - `ownerEmailPatterns`: none, unless `--owner-email-patterns '*@company.example'` names some
+     (a comma between two; `none` takes them away). A pattern makes every address at exactly
+     that domain an owner: the person proves the address with Cloudflare Access and adds a
+     passkey. The domain must not be the mind's own.
    - `alchemy.stageName`, the middle of every resource's name (`iterate-<stage>-auth`): never
      asked. It is the domain with `-` for each dot, cut to 32 characters, with `z` first when
      the domain starts with a digit.

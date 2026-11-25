@@ -34,6 +34,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
+import { domainOfOwnerEmailPattern } from "iterate/mind-config";
 import { z } from "zod";
 import { AccessTeam } from "./access-team.ts";
 import { ArtifactsNamespace } from "./artifacts-namespace.ts";
@@ -67,6 +68,8 @@ const sharedConfigOf = (config: MindConfig) => ({
   controlPlaneHostname: config.controlPlaneHostname,
   zones: config.cloudflare.zones,
   ownerEmails: config.ownerEmails,
+  // absent with no pattern: JSON leaves it out, so such a mind's variable is as it was
+  ownerEmailPatterns: config.ownerEmailPatterns?.length ? config.ownerEmailPatterns : undefined,
   topology: config.topology,
 });
 /** A stream's fields, as a file of core/telemetry-worker/schemas lists them. */
@@ -300,8 +303,9 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
     // ── Cloudflare Access proves an owner's address: one application, at one path ──
     // An owner with no passkey yet opens that path. Cloudflare mails a code to the address, from
     // its own domain, and then signs a token that names the address. The auth Worker checks the
-    // token itself (core/auth-worker/src/access-sign-in.ts). The policy names the owners alone:
-    // nobody else gets a code, so no other person ever takes a seat of the account's team.
+    // token itself (core/auth-worker/src/access-sign-in.ts). The policy names the owners alone,
+    // each by address, and every address at the domain of an owner email pattern: nobody else
+    // gets a code, so no other person ever takes a seat of the account's team.
     // Its name is the control plane's hostname: Cloudflare's code page says "Log in to <name>"
     // to the owner. A new name changes the application in place, and its `aud` stays.
     const accessTeam = yield* AccessTeam("AccessTeam");
@@ -321,7 +325,12 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
         {
           name: "owners",
           decision: "allow",
-          include: config.ownerEmails.map((email) => ({ email })),
+          include: [
+            ...config.ownerEmails.map((email) => ({ email })),
+            ...(config.ownerEmailPatterns || []).map((pattern) => ({
+              emailDomain: { domain: domainOfOwnerEmailPattern(pattern) },
+            })),
+          ],
           require: [{ loginMethod: accessTeam.pinLoginId }],
         },
       ],

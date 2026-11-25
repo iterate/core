@@ -244,6 +244,12 @@ const launcherProcedures = {
           .describe(
             "The owner's email address (default: the Cloudflare login's; for a mind that is there already: the owners it has)",
           ),
+        ownerEmailPatterns: z
+          .string()
+          .optional()
+          .describe(
+            "More owners by pattern: *@<domain> makes EVERY address at exactly that domain an owner, who proves the address with Cloudflare and adds a passkey; a comma between two; none takes them away. Name a domain only when its mail is the company's own (default: none; for a mind that is there already: what it has)",
+          ),
         controlPlaneHostname: z
           .string()
           .optional()

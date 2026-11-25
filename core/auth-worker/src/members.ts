@@ -3,7 +3,7 @@ import type { TokenIdentity } from "iterate/workers";
 import { z } from "zod";
 import { base64url } from "iterate/signed";
 import { AccountFacts } from "./account-facts.ts";
-import { atMindsZone, isOwner } from "./config.ts";
+import { atMindsZone, isOwner, isOwnerByPattern } from "./config.ts";
 import { sha256Hex } from "./device/protocol.ts";
 import {
   endSessions,
@@ -14,7 +14,7 @@ import {
 } from "./cookies.ts";
 import { ENROLMENT_MS, FIRST_PASSKEY_PATH } from "./enrolment.ts";
 import { configOf, type Env, issuerOf } from "./env.ts";
-import { blockedOf } from "./blocked.ts";
+import { blockedOf, isBlocked } from "./blocked.ts";
 import { clientsWithAccess, endFields, type Ends, endsOf, logoOriginsOf } from "./access-list.ts";
 import { type ClientWithAccess, endAccess, endGrantsOf, sessionsByClientOf } from "./oauth.ts";
 import { errorPage, notMemberPage, page, text } from "./pages.ts";
@@ -36,16 +36,31 @@ const MEMBERS_PATH = "/members";
 
 type Added = { email: string; addedBy: string; addedAt: number };
 
-/** WHO IS A MEMBER: an owner, whom the config names, and whoever an owner or a member added on
- *  `/members`, whose row is in D1. */
+/** WHO IS A MEMBER: an owner, whom the config names by address, whoever an owner or a member
+ *  added on `/members`, whose row is in D1, and an owner by an owner email pattern whom no owner
+ *  blocked. A BLOCK ENDS ONE PERSON OF A PATTERN (`block`): the config cannot name them, so the
+ *  `blocked` row does, and every reader of this function then answers them as no member: a
+ *  passkey's sign-in, a session, a grant, a key, the first passkey's proofs and the recovery
+ *  command's link. An owner by address and an added member are never blocked. */
 export async function isMember(env: Env, email: string): Promise<boolean> {
+  if (await isMemberByName(env, email)) return true;
+  // a key that is no address is nobody's, and an address at a zone of the mind is no member
+  if (!email.includes("@")) return false;
+  const config = configOf(env);
+  if (atMindsZone(config, email) || !isOwnerByPattern(config, email)) return false;
+  return !(await isBlocked(env, email));
+}
+
+/** A MEMBER WHOM SOMETHING NAMES BY ADDRESS: an owner in `ownerEmails`, or a row of `/members`.
+ *  Never one by a pattern. What predates the patterns asks this (./oauth.ts `grantIsMembers`). */
+export async function isMemberByName(env: Env, email: string): Promise<boolean> {
   // a key that is no address (a guest's row, ./cookies.ts `GUEST_KEY_PREFIX`) is nobody's
   if (!email.includes("@")) return false;
   const config = configOf(env);
   // An address at a zone of the mind is no member: `add` refuses one, and a deploy that gives the
   // mind another zone ends the members whose address is there.
   if (atMindsZone(config, email)) return false;
-  return isOwner(config, email) || (await isAdded(env, email));
+  return config.ownerEmails.includes(email.trim().toLowerCase()) || (await isAdded(env, email));
 }
 
 /** WHETHER A SESSION ACTS AS A MEMBER: a passkey opened it, and its address is a member's now. A
@@ -186,12 +201,20 @@ async function addedBySignature(env: Env, request: Request) {
   return outcome.facts.on(json(await membersOf(env), 200));
 }
 
-/** The members: the owners, whom the config names, and those added here. */
-async function membersOf(env: Env): Promise<{ owners: string[]; added: Added[] }> {
+/** The members: the owners, whom the config names by address or by pattern, and those added
+ *  here. `ownerPatterns` names no person: who signed in by one is not listed. */
+async function membersOf(
+  env: Env,
+): Promise<{ owners: string[]; ownerPatterns: string[]; added: Added[] }> {
   const { results } = await env.DB.prepare(
     "select email, added_by as addedBy, added_at as addedAt from members order by added_at",
   ).all<Added>();
-  return { owners: configOf(env).ownerEmails, added: results };
+  const config = configOf(env);
+  return {
+    owners: config.ownerEmails,
+    ownerPatterns: config.ownerEmailPatterns || [],
+    added: results,
+  };
 }
 
 type Outcome = { facts: AccountFacts } | { error: string; status: number };
@@ -281,6 +304,12 @@ async function accessOfMembers(
 
 async function remove(env: Env, actor: Actor, typed: string): Promise<Outcome> {
   const email = typed.trim().toLowerCase();
+  // a removed row would leave an owner by a pattern an owner: the block is what ends them
+  if (isOwnerByPattern(configOf(env), email))
+    return {
+      error: `${email} is an owner by an owner email pattern, so a removal would change nothing. Block this address: that ends it for this one person.`,
+      status: 400,
+    };
   const removed = await env.DB.prepare("delete from members where email = ?1 returning email")
     .bind(email)
     .first();
@@ -419,13 +448,21 @@ async function block(
   const email = await blockKeyOf(env, typed);
   if (!email.includes("@") && !email.startsWith(GUEST_KEY_PREFIX))
     return { error: "Type the address to block, or a guest's id (user_…)." };
-  if (await isMember(env, email))
+  // AN OWNER BY A PATTERN IS ENDED BY A BLOCK, and by nothing else that an owner can do: the
+  // row below is what `isMember` reads. A row of `/members` for the address goes with it, so the
+  // person is no member by it either. Anyone else who is a member is removed, not blocked.
+  const byPattern = isOwnerByPattern(configOf(env), email);
+  if (!byPattern && (await isMember(env, email)))
     return { error: `${email} is a member. Remove the member first; a member is never blocked.` };
-  await env.DB.prepare(
+  const blocking = env.DB.prepare(
     "insert into blocked (email, blocked_by, blocked_at) values (?1, ?2, ?3) on conflict do nothing",
-  )
-    .bind(email, actor.email, Date.now())
-    .run();
+  ).bind(email, actor.email, Date.now());
+  // one batch, which D1 runs as one transaction: never blocked and still a member by a row
+  await env.DB.batch(
+    byPattern
+      ? [blocking, env.DB.prepare("delete from members where email = ?1").bind(email)]
+      : [blocking],
+  );
   const facts = new AccountFacts();
   const person = await env.DB.prepare("select id from users where email = ?1")
     .bind(email)
@@ -439,9 +476,11 @@ async function block(
   console.info({ event: "auth.person-blocked", by: actor.userId, known: Boolean(person) });
   return {
     facts,
-    notice: email.startsWith(GUEST_KEY_PREFIX)
-      ? `The guest ${typed.trim()} is blocked, and is signed out of every app. A person who comes back as a new guest is a new guest: end the link they came by.`
-      : `${email} is blocked: no sign-in code goes to it, and it is signed out of every app.`,
+    notice: byPattern
+      ? `${email} is blocked: it is no owner and no member now, its passkeys sign nobody in, and it is signed out of every app and device. It stays so while the block is there, whatever the owner email patterns say.`
+      : email.startsWith(GUEST_KEY_PREFIX)
+        ? `The guest ${typed.trim()} is blocked, and is signed out of every app. A person who comes back as a new guest is a new guest: end the link they came by.`
+        : `${email} is blocked: no sign-in code goes to it, and it is signed out of every app.`,
   };
 }
 
@@ -481,10 +520,14 @@ async function membersPage(
   { owner, error, notice }: { owner: boolean; error?: string; notice?: string },
 ) {
   const mind = configOf(env).controlPlaneHostname;
-  const { owners, added } = await membersOf(env);
-  const ownerRows = owners
-    .map((email) => `<li>${text(email)} <span class="muted">(an owner)</span></li>`)
-    .join("");
+  const { owners, ownerPatterns, added } = await membersOf(env);
+  const ownerRows = [
+    ...owners.map((email) => `<li>${text(email)} <span class="muted">(an owner)</span></li>`),
+    ...ownerPatterns.map(
+      (pattern) =>
+        `<li>${text(pattern)} <span class="muted">(every address at this domain is an owner)</span></li>`,
+    ),
+  ].join("");
   const addedRows = added
     .map(
       (row) => `<li>${text(row.email)} <span class="muted">(added by ${text(row.addedBy)})</span>
@@ -566,8 +609,8 @@ async function membersPage(
         <button type="submit">Make a sign-in link</button>
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
-      <h2>Block a person who is not a member</h2>
-      <p>Anyone can sign in to this mind's apps with a code by email. A blocked address gets no code, and is signed out of every app at once.</p>
+      <h2>Block a person</h2>
+      <p>Anyone can sign in to this mind's apps with a code by email. A blocked address gets no code, and is signed out of every app at once. A person who is an owner by a pattern is ended here too: blocked, they are no member, and their passkeys sign nobody in.</p>
       <ul>${blockedRows}</ul>
       <form method="post" action="${MEMBERS_PATH}" class="stack">
         <input type="hidden" name="action" value="block">

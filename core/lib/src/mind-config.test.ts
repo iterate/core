@@ -4,12 +4,14 @@ import { z } from "zod";
 import { Redacted, redacted } from "./app-config.ts";
 import {
   isControlPlaneHostname,
+  isOwnerEmail,
   mindConfigOf,
   controlPlaneOriginOf,
   zoneCoversControlPlaneHostname,
   zoneOf,
   zoneOfMailAddress,
   MindConfig,
+  OwnerEmailPattern,
 } from "./mind-config.ts";
 
 const shared = {
@@ -162,4 +164,98 @@ test.for([
   expect(MindConfig.safeParse({ ...shared, mindId: "ab".repeat(32) })).toMatchObject({
     success: true,
   });
+});
+
+test("an owner email pattern is *@<one whole domain> in lower case, and nothing else is read as one", () => {
+  expect(OwnerEmailPattern.safeParse("*@elsewhere.example")).toMatchObject({ success: true });
+  expect(
+    [
+      "elsewhere.example",
+      "@elsewhere.example",
+      "*elsewhere.example",
+      "ada@elsewhere.example",
+      "a*@elsewhere.example",
+      "**@elsewhere.example",
+      "*@*.elsewhere.example",
+      "*@*",
+      "*@",
+      "*",
+      "",
+      "*@example",
+      "*@elsewhere..example",
+      "*@-elsewhere.example",
+      "*@elsewhere.example.",
+      "*@Elsewhere.example",
+      " *@elsewhere.example",
+      "*@elsewhere.example ",
+      "*@elsewhere.example,*@other.example",
+      "*@@elsewhere.example",
+      "*@elsewhere.example/x",
+      "*@10.0.0.1",
+      7,
+      null,
+      ["*@elsewhere.example"],
+    ].filter((pattern) => OwnerEmailPattern.safeParse(pattern).success),
+  ).toEqual([]);
+});
+
+test("a config with no owner email patterns, or an empty list, is as before; one that is no pattern is refused, naming the field", () => {
+  expect(MindConfig.parse(shared)).not.toHaveProperty("ownerEmailPatterns");
+  expect(MindConfig.parse({ ...shared, ownerEmailPatterns: [] })).toMatchObject({
+    ownerEmailPatterns: [],
+  });
+  for (const ownerEmailPatterns of [["*@*"], ["elsewhere.example"], "*@elsewhere.example", [7]])
+    expect(MindConfig.safeParse({ ...shared, ownerEmailPatterns }).error?.issues[0]?.path[0]).toBe(
+      "ownerEmailPatterns",
+    );
+});
+
+test("with no pattern an owner is an address the config names, and no other", () => {
+  for (const config of [
+    { ownerEmails: ["ada@elsewhere.example"] },
+    { ownerEmails: ["ada@elsewhere.example"], ownerEmailPatterns: [] },
+  ])
+    expect(
+      ["ada@elsewhere.example", " Ada@Elsewhere.example ", "bo@elsewhere.example", ""].map(
+        (email) => isOwnerEmail(config, email),
+      ),
+    ).toEqual([true, true, false, false]);
+});
+
+test("a pattern names every address at exactly its domain, and no other address", () => {
+  const config = {
+    ownerEmails: ["ada@owner.example"],
+    ownerEmailPatterns: ["*@elsewhere.example", "*@second.example"],
+  };
+  expect(
+    [
+      "bo@elsewhere.example",
+      " Bo.B+tag@ELSEWHERE.example ",
+      "cy@second.example",
+      // the exact address still counts beside the patterns
+      "ada@owner.example",
+    ].filter((email) => !isOwnerEmail(config, email)),
+  ).toEqual([]);
+  expect(
+    [
+      "bo@owner.example",
+      "bo@sub.elsewhere.example",
+      "bo@evilelsewhere.example",
+      "bo@elsewhere.example.evil.example",
+      "bo@elsewhere.exampl",
+      "bo@elsewhere.example.",
+      "bo@elsewhere.example@evil.example",
+      "bo@evil.example@elsewhere.example",
+      '"bo@elsewhere.example"@evil.example',
+      "bo@evil.example (bo@elsewhere.example)",
+      "bo b@elsewhere.example",
+      "bo@elsewhere.example\nx",
+      "bö@elsewhere.example",
+      "*@elsewhere.example@elsewhere.example",
+      "@elsewhere.example",
+      "elsewhere.example",
+      "guest:abc",
+      "",
+    ].filter((email) => isOwnerEmail(config, email)),
+  ).toEqual([]);
 });

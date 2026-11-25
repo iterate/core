@@ -39,9 +39,12 @@ import * as p from "@clack/prompts";
 import { z } from "zod";
 import { mindAddressAsTyped } from "../mind-api.ts";
 import {
+  domainOfOwnerEmailPattern,
   Hostname,
   MindConfig,
+  OwnerEmailPattern,
   zoneCoversControlPlaneHostname,
+  zoneOf as zoneOfMind,
   zoneOfMailAddress,
 } from "../mind-config.ts";
 import { isCodingAgent } from "./coding-agent.ts";
@@ -79,6 +82,9 @@ export type DeployInput = {
   newAccount?: boolean;
   newSignIn?: boolean;
   owner?: string;
+  /** more owners by pattern, `*@<domain>` with commas between; `none` takes them away
+   *  (`deployConfigOf`) */
+  ownerEmailPatterns?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
   /** where each mail is forwarded as it arrived; `none` stops the forward (`deployConfigOf`) */
@@ -145,7 +151,8 @@ type DeployedMind = z.infer<typeof DeployedConfig> & {
  *  what a flag said, and each replaces what the mind has. So does `mailForwardTo`, the config's
  *  `mail.forwardTo`, and `none` there removes it: with no flag the mind keeps its forward. So does
  *  `traceSampling`, the config's `telemetry.traceSampling` (a number from 0 to 1), and `default`
- *  there removes it, so that every trace is kept.
+ *  there removes it, so that every trace is kept. So does `ownerEmailPatterns`, the config's
+ *  field of that name (`*@<domain>`, commas or spaces between), and `none` there removes it.
  *
  *  `mindId` is the deployed mind's own, and nothing here ever gives a mind that has an id
  *  another. A mind with none gets the hash of the genesis that the command signs right before
@@ -155,6 +162,7 @@ export function deployConfigOf(answers: {
   domain: string;
   owner?: string;
   extraOwners?: readonly string[];
+  ownerEmailPatterns?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
   mailForwardTo?: string;
@@ -190,6 +198,24 @@ export function deployConfigOf(answers: {
     throw new Error(
       `The owner is an email address, and ${ownerEmails.join(", ") || "none"} is not.`,
     );
+  // an empty flag is an error, never "no patterns" by accident
+  const patterns = answers.ownerEmailPatterns;
+  if (patterns === "")
+    throw new Error(
+      "--owner-email-patterns is empty: give *@<domain>, or none to take the patterns away.",
+    );
+  const named = !patterns || patterns === "none" ? [] : [...new Set(patterns.split(/[\s,]+/))];
+  if (named.some((pattern) => !OwnerEmailPattern.safeParse(pattern).success))
+    throw new Error(
+      `--owner-email-patterns ${patterns}: each pattern is *@<domain> in lower case, with one comma between two, or none to take the patterns away.`,
+    );
+  const patternAtTheMind = named.find((pattern) =>
+    zoneOfMind({ zones }, domainOfOwnerEmailPattern(pattern)),
+  );
+  if (patternAtTheMind)
+    throw new Error(
+      `The owner email pattern ${patternAtTheMind} is at a domain of the mind, and the mind takes that domain's mail. Name a domain elsewhere.`,
+    );
   // a mind that is there starts from its deploy's whole config: only what a flag names changes
   const kept = deployed?.deployConfig;
   const forwardTo = answers.mailForwardTo;
@@ -223,6 +249,8 @@ export function deployConfigOf(answers: {
     mindId: deployed?.mindId,
     controlPlaneHostname,
     ownerEmails,
+    // the patterns are what the flag says, else what the mind has; `none` takes them away
+    ...(patterns && { ownerEmailPatterns: named.length ? named : undefined }),
     topology: deployed?.topology || ("full-cloudflare" as const),
     alchemy: { ...kept?.alchemy, stageName: deployed?.stageName || stageNameOf(answers.domain) },
     cloudflare: {
@@ -1948,6 +1976,22 @@ export function assertSupportedNodeVersion(version = process.versions.node): voi
   );
 }
 
+/** The owner email patterns of a deploy's config, or none: of one this run made, or of the one
+ *  that a mind's boundary keeps, where every field is as it was written. */
+const patternsOf = (config: unknown) =>
+  z.object({ ownerEmailPatterns: z.array(z.string()) }).safeParse(config).data
+    ?.ownerEmailPatterns || [];
+
+/** WHY A SOURCE CANNOT DEPLOY A CONFIG THAT HAS OWNER EMAIL PATTERNS, or null: `scriptConfig` is
+ *  the text of the source's core/alchemy/src/config.ts, and one from before the patterns names
+ *  no `ownerEmailPatterns` and refuses the field. Said here, before the script runs, in words
+ *  that name the two ways on. The patterns are never dropped to make an older source deploy:
+ *  that would end every owner by a pattern with no word of it. */
+export const patternsRefusalOf = (scriptConfig: string, config: unknown) =>
+  patternsOf(config).length > 0 && !scriptConfig.includes("ownerEmailPatterns")
+    ? `This mind has owner email patterns (${patternsOf(config).join(", ")}), and the source to deploy is a version of iterate from before them: it would refuse the config. The mind was not deployed. Deploy a source that has them (--source or --ref), or pass --owner-email-patterns none to take the patterns away, which ends every owner by a pattern.`
+    : null;
+
 /** Parses optional comma- or space-separated additional owner email addresses into a clean,
  *  deduplicated lowercase list. */
 export function parseExtraOwnerEmails(raw: string): string[] {
@@ -2208,6 +2252,7 @@ export async function deployMind(input: DeployInput) {
       extraOwners,
       controlPlaneHostname: input.controlPlaneHostname,
       egressGateway: input.egressGateway,
+      ownerEmailPatterns: input.ownerEmailPatterns,
       mailForwardTo: input.mailForwardTo,
       traceSampling: input.traceSampling,
       deployed: mind,
@@ -2238,11 +2283,13 @@ export async function deployMind(input: DeployInput) {
         [
           `A mind is at ${domain} already. Its own config, from Cloudflare:`,
           `  control plane   ${deployed.controlPlaneHostname}`,
-          `  owners          ${deployed.ownerEmails.join(", ")}`,
+          `  owners          ${[...deployed.ownerEmails, ...patternsOf(deployed.deployConfig)].join(", ")}`,
           `  domains         ${deployed.zones.join(", ")}`,
           `  the mind runs   ${deployed.topology === "full-cloudflare" ? "in Cloudflare" : "elsewhere, and connects in"}`,
         ].join("\n"),
       );
+      const patternsBefore = patternsOf(deployed.deployConfig).join(", ");
+      const patternsAfter = patternsOf(config).join(", ");
       const changes = [
         ...(controlPlaneHostname === deployed.controlPlaneHostname
           ? []
@@ -2250,6 +2297,13 @@ export async function deployMind(input: DeployInput) {
         ...(config.ownerEmails.join() === deployed.ownerEmails.join()
           ? []
           : [`${config.ownerEmails.join(", ")} as its only owner`]),
+        ...(patternsBefore === patternsAfter
+          ? []
+          : [
+              patternsAfter
+                ? `EVERY address at ${patternsAfter} as an owner`
+                : `no owner by a pattern (was ${patternsBefore})`,
+            ]),
       ];
       const forwardBefore = forwardOf(deployed.deployConfig?.mail);
       const forwardAfter = forwardOf(config.mail);
@@ -2340,6 +2394,11 @@ export async function deployMind(input: DeployInput) {
       throw error;
     });
     waiting.done(`iterate's source is ready (${seconds(sourceBegan)}): ${ready.dir}`);
+    const tooOld = patternsRefusalOf(
+      readFileSync(join(ready.dir, "core/alchemy/src/config.ts"), "utf8"),
+      config,
+    );
+    if (tooOld) throw new Error(tooOld);
     if (seedReposEnvOf(ready.dir).ITERATE_SEED_REPOS)
       p.log.info(
         "A new mind starts with the repo /repos/onboarding: its onboarding page, guides and cards.",

@@ -17,7 +17,7 @@ import { CALLBACK_PATH as DEVICE_CALLBACK_PATH } from "./device/protocol.ts";
 import { isBlocked } from "./blocked.ts";
 import type { Reach } from "./cookies.ts";
 import { tokenAudiencesOf } from "./config.ts";
-import { isMember } from "./members.ts";
+import { isMember, isMemberByName } from "./members.ts";
 import { configOf, type Env, issuerOf } from "./env.ts";
 
 export const AUTHORIZE_ENDPOINT = "/oauth2/auth";
@@ -311,11 +311,15 @@ export async function tokenIdentity(
 
 /** Whether a grant acts as a member now: a passkey's session got it, and its address is a
  *  member's. And, BY A RULE TO REMOVE (`GrantProps.standingByMethod`), a grant that the old stack
- *  made with no mark, for a mailed code or with no method at all: its address is a member's. */
+ *  made with no mark, for a mailed code or with no method at all: its address is one that the
+ *  config or `/members` names. Never one by an owner email pattern: a pattern is newer than every
+ *  such grant, so no passkey stood behind one for a person whom only a pattern names. */
 const grantIsMembers = async (env: Env, grant: GrantProps) =>
-  (grant.method === "passkey" ||
-    (!grant.standingByMethod && (grant.method === "email" || !grant.method))) &&
-  (await isMember(env, grant.email));
+  grant.method === "passkey"
+    ? isMember(env, grant.email)
+    : !grant.standingByMethod &&
+      (grant.method === "email" || !grant.method) &&
+      isMemberByName(env, grant.email);
 
 /** The instant a let-in grant, or a member of another mind's, ends: when their cookie does
  *  (./cookies.ts `mindSessionCookie`). One with none ended at its making. */

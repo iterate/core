@@ -371,6 +371,21 @@ test("the old stack's grant of a member by a mailed code, with no mark, acts as 
   expect((await exchanged(stack, API, stranger)).answer).toMatchObject({ status: 400 });
 });
 
+// A pattern is newer than every unmarked grant: no passkey stood behind one for such a person.
+test("the old stack's unmarked grant of an address that only an owner email pattern names acts as no member; a passkey's grant of it does", async () => {
+  const stack = stackOf({ ownerEmailPatterns: ["*@company.test"] });
+  const person = { ...owner, userId: "user_pattern", email: "cy@company.test" };
+  expect(
+    await whoIs(stack, (await granted(stack, person, "device")).api!.tokens.access_token, API),
+  ).toMatchObject({ member: true });
+  const { method: _method, ...bare } = person;
+  for (const unmarked of [{ ...person, method: "email" } as const, bare]) {
+    const host = TokenAnswer.parse(await (await exchanged(stack, HOST, unmarked)).answer.json());
+    expect(await whoIs(stack, host.access_token, HOST)).toMatchObject({ member: false });
+    expect((await exchanged(stack, API, unmarked)).answer).toMatchObject({ status: 400 });
+  }
+});
+
 // The old stack's grants before 13 Nov 2026 kept no method (git show 0cef1cd95:core/auth-worker/src/oauth.ts):
 // the Beelink bridges' device sign-in of 12 Nov is one. Main's rule: a member while the address is.
 test("the old stack's grant with no method at all acts as a member while the address is one, and gains nothing", async () => {

@@ -29,6 +29,20 @@ export const zoneCoversControlPlaneHostname = (config: {
         !config.controlPlaneHostname.slice(0, -zone.length - 1).includes(".")),
   );
 
+/** AN OWNER EMAIL PATTERN: `*@<domain>`, and nothing else. It names every address whose domain
+ *  is exactly that one: no sub-domain, no star in the domain, no part of a local part. Lower-case
+ *  ASCII as written, so the config says exactly who it admits; a pattern in any other spelling is
+ *  refused, never read loosely. */
+export const OwnerEmailPattern = z
+  .string()
+  .regex(
+    /^\*@(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/,
+    "an owner email pattern: *@<domain>, in lower case",
+  );
+
+/** The domain that an owner email pattern names. */
+export const domainOfOwnerEmailPattern = (pattern: string) => pattern.slice(2);
+
 export const MindConfig = z
   .object({
     /** The mind's id: the SHA-256 of its signed genesis, 64 lowercase hex characters
@@ -44,6 +58,10 @@ export const MindConfig = z
     zones: z.array(Hostname).min(1),
     /** The mind's owners, each by email address: a member from the first deploy. */
     ownerEmails: z.array(z.email().toLowerCase()).min(1),
+    /** More owners, by pattern: each `*@<domain>` makes every address at exactly that domain an
+     *  owner (`isOwnerEmail`). Absent or empty: the owners are `ownerEmails` alone. Only a
+     *  deploy sets it, as it sets the owners. */
+    ownerEmailPatterns: z.array(OwnerEmailPattern).optional(),
     /** Where the mind Worker runs: in the stack, or elsewhere, connecting in through the
      *  boundary. */
     topology: z.enum(["full-cloudflare", "external-mind-connects-into-cloudflare-boundary"]),
@@ -105,6 +123,25 @@ export function zoneOf(config: Pick<MindConfig, "zones">, hostname: string): str
 export function zoneOfMailAddress(config: Pick<MindConfig, "zones">, address: string) {
   const at = address.lastIndexOf("@");
   return at > 0 ? zoneOf(config, address.slice(at + 1).toLowerCase()) : null;
+}
+
+/** WHO IS AN OWNER: an address that `ownerEmails` names, or one that an owner email pattern
+ *  names. A pattern names an address that has one "@", a local part with no space and no
+ *  control character, and after the "@" exactly the pattern's domain, in any letter case: so
+ *  `ada@sub.example.org`, `ada@example.org.evil.example` and `ada@evil.example@example.org` are
+ *  not at `*@example.org`. The one rule for the auth Worker and for the recovery command. */
+export function isOwnerEmail(
+  config: Pick<MindConfig, "ownerEmails" | "ownerEmailPatterns">,
+  email: string,
+) {
+  const address = email.trim().toLowerCase();
+  if (config.ownerEmails.includes(address)) return true;
+  const at = address.indexOf("@");
+  if (at < 1 || at !== address.lastIndexOf("@") || !/^[!-~]+$/.test(address)) return false;
+  const domain = address.slice(at + 1);
+  return (config.ownerEmailPatterns || []).some(
+    (pattern) => domainOfOwnerEmailPattern(pattern) === domain,
+  );
 }
 
 /** `https://<controlPlaneHostname>`: the issuer, and the origin of the API and the MCP server. */

@@ -17,6 +17,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import * as p from "@clack/prompts";
 import { z } from "zod";
+import { isOwnerEmail } from "../mind-config.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
   type Cloudflare,
@@ -105,9 +106,9 @@ export async function recoverOwner(input: {
       .find(Boolean);
     const mind = stageName && (await deployedMind(cf, account.id, stageName));
     if (!mind) throw new Error(`No mind is at ${domain}: no route there names a mind's boundary.`);
-    if (!mind.ownerEmails.includes(owner))
+    if (!isOwnerEmail(mind, owner))
       throw new Error(
-        `${owner} is no owner of the mind at ${mind.controlPlaneHostname}. Its owners: ${mind.ownerEmails.join(", ")}. The command is for an owner alone: an owner makes a link for another member on the mind's page /members.`,
+        `${owner} is no owner of the mind at ${mind.controlPlaneHostname}. Its owners: ${[...mind.ownerEmails, ...(mind.ownerEmailPatterns || [])].join(", ")}. The command is for an owner alone: an owner makes a link for another member on the mind's page /members.`,
       );
     const databaseName = `iterate-${mind.stageName}-auth-db`;
     const database = resultOf(

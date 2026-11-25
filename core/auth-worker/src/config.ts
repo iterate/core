@@ -4,7 +4,15 @@
 // is the mind's own. Pure: ./env.ts reads it out of the Worker's variables.
 import { fieldNameOf, redacted } from "iterate/app-config";
 import { mindApiUrlOf, mindMcpUrlOf, mindProvideConnectResourceOf } from "iterate/mind-api";
-import { Hostname, type MindConfig, mindConfigOf, zoneOfMailAddress } from "iterate/mind-config";
+import {
+  domainOfOwnerEmailPattern,
+  Hostname,
+  isOwnerEmail,
+  type MindConfig,
+  mindConfigOf,
+  zoneOf,
+  zoneOfMailAddress,
+} from "iterate/mind-config";
 import { z } from "zod";
 
 const ownFields = {
@@ -30,6 +38,14 @@ export function authConfigOf(env: object) {
     throw new Error(
       `${fieldNameOf(["ownerEmails"], { prefix: "ITERATE" })}: ${own} is at a zone of the mind, which receives that address's mail, so the mind could sign in as that owner`,
     );
+  // the same for a pattern: every address that it names is one the mind receives the mail of
+  const ownPattern = (config.ownerEmailPatterns || []).find((pattern) =>
+    zoneOf(config, domainOfOwnerEmailPattern(pattern)),
+  );
+  if (ownPattern)
+    throw new Error(
+      `${fieldNameOf(["ownerEmailPatterns"], { prefix: "ITERATE" })}: ${ownPattern} names a zone of the mind, which receives that domain's mail, so the mind could sign in as an owner`,
+    );
   return config;
 }
 
@@ -38,10 +54,21 @@ export function authConfigOf(env: object) {
 export const atMindsZone = (config: Pick<MindConfig, "zones">, email: string) =>
   zoneOfMailAddress(config, email.trim()) !== null;
 
-/** An owner is a member the config names: the people a deploy lets in, so the only ones who let
- *  another member in again. */
-export const isOwner = (config: Pick<MindConfig, "ownerEmails">, email: string) =>
-  config.ownerEmails.includes(email.trim().toLowerCase());
+/** An owner is a member the config names, by address (`ownerEmails`) or by an owner email
+ *  pattern (`ownerEmailPatterns`, `*@<domain>`): the people a deploy lets in, so the only ones
+ *  who let another member in again. */
+export const isOwner = (
+  config: Pick<MindConfig, "ownerEmails" | "ownerEmailPatterns">,
+  email: string,
+) => isOwnerEmail(config, email);
+
+/** AN OWNER BY A PATTERN ALONE: at the domain of an owner email pattern, and not named by
+ *  address. Such a person's standing is the one that an owner can end for one address: by a
+ *  block (./members.ts `isMember`, `block`). An owner by address is ended by a deploy alone. */
+export const isOwnerByPattern = (
+  config: Pick<MindConfig, "ownerEmails" | "ownerEmailPatterns">,
+  email: string,
+) => !config.ownerEmails.includes(email.trim().toLowerCase()) && isOwnerEmail(config, email);
 
 /** THE AUDIENCES OF THE TOKENS THIS WORKER ISSUES TO MEMBERS (RFC 8707 resources), each a
  *  canonical URI: the mind's API and its MCP server, and the address an external mind connects in
