@@ -319,6 +319,27 @@ function Meeting({ stub, session, me, title, member, start, share }) {
     [stub.stub],
   );
   const said = useMemo(() => saidLines(context.events), [context.events]);
+  // A GUEST'S VIEW takes no append of words (core/itx/src/person-context.ts): the chat sends a
+  // person's words as one `agent-ui/message-received`, and for a guest that one goes through
+  // `message()`, which the view allows. Everything else is appended as it is.
+  const append = useCallback(
+    (events) => {
+      const [words] = events;
+      if (
+        !member &&
+        events.length === 1 &&
+        words?.type === "events.iterate.com/agent-ui/message-received"
+      )
+        return session.agents
+          .get(AGENT)
+          .message(
+            { message: words.payload.message, files: words.payload.files },
+            { key: words.idempotencyKey?.replace("agent-ui/message-received:", "") },
+          );
+      return stub.stub.append(...events);
+    },
+    [member, session, stub.stub],
+  );
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const look = useLook({ stub: stub.stub, page: context.subscription, member, call, ui, rawLive });
   // a guest sees that a picture was taken, never the picture: its file is no guest's to read
@@ -445,7 +466,7 @@ function Meeting({ stub, session, me, title, member, start, share }) {
           asideIn=${aside}
           onMessage=${({ message, files, key }) =>
             session.agents.get(AGENT).message({ message, files }, { key })}
-          onAppend=${stub.stub ? (events) => stub.stub.append(...events) : undefined}
+          onAppend=${stub.stub ? append : undefined}
           signedUrl=${signedUrl}
           me=${me}
           presence=${true}
