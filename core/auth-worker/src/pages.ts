@@ -328,6 +328,9 @@ export function otherAccountForm(next: string, label = "Use another account") {
       </form>`;
 }
 
+/** The chooser's own field, in its POST: "mind" or "person" (./authorize.ts `chosen`). */
+export const CHOICE_FIELD = "continue-as";
+
 /** THE ACCOUNT CHOOSER: who this browser is signed in as, before an authorization goes on. `here`
  *  is the authorization request without its `prompt`, a path of this origin. With `app`, the
  *  request is that app's own sign-in, and the page says so (`appSignIn`). */
@@ -338,6 +341,12 @@ export function chooserPage(input: {
   app?: AskingApp | null;
   /** The host whose own sign-out sent the person here: the chooser says they left it. */
   signedOutOf?: string;
+  /** THE MIND THAT JUST VOUCHED FOR THIS BROWSER, for this app: the chooser then offers two
+   *  people, the member of that mind first, and each button is a POST of one form with `here`,
+   *  which ./authorize.ts `chosen` takes once. So no address chooses the mind's person, and one
+   *  page makes one code. */
+  mindHostname?: string;
+  headers?: Headers;
 }) {
   const url = new URL(input.here, "https://issuer.invalid");
   // a GET form sends its fields as the query, so each parameter of the request is one
@@ -345,23 +354,35 @@ export function chooserPage(input: {
     .map(([name, value]) => `<input type="hidden" name="${text(name)}" value="${text(value)}">`)
     .join("");
   const asking = input.app ? appSignIn(input.app) : null;
-  return page({
-    title: asking?.title || `Sign in to ${input.mind}`,
-    mark: asking?.mark,
-    centered: true,
-    imageOrigin: asking?.imageOrigin,
-    body: `${asking?.heading || `<h1>Sign in to ${text(input.mind)}</h1>`}
+  return page(
+    {
+      title: asking?.title || `Sign in to ${input.mind}`,
+      mark: asking?.mark,
+      centered: true,
+      imageOrigin: asking?.imageOrigin,
+      body: `${asking?.heading || `<h1>Sign in to ${text(input.mind)}</h1>`}
       <p class="center">${
         input.signedOutOf
           ? `You are signed out of ${text(input.signedOutOf)}. You are still signed in to ${text(input.mind)} as`
           : "You are signed in as"
       } <strong>${text(input.email)}</strong>.</p>
-      <form method="get" action="${text(url.pathname)}" class="stack">
+      ${
+        input.mindHostname
+          ? `<p class="center">You just signed in with your mind, <strong>${text(input.mindHostname)}</strong>. Choose who you are here.</p>
+      <form method="post" action="${text(url.pathname)}" class="stack">
+        <input type="hidden" name="here" value="${text(input.here)}">
+        <button type="submit" name="${CHOICE_FIELD}" value="mind">Continue as a member of ${text(input.mindHostname)}</button>
+        <button type="submit" name="${CHOICE_FIELD}" value="person" class="secondary">Continue as ${text(input.email)}</button>
+      </form>`
+          : `<form method="get" action="${text(url.pathname)}" class="stack">
         ${fields}
         <button type="submit">Continue as ${text(input.email)}</button>
-      </form>
+      </form>`
+      }
       <div class="center">${otherAccountForm(input.here)}</div>${asking?.about || ""}`,
-  });
+    },
+    input.headers,
+  );
 }
 
 export function notMemberPage(input: { mind: string; email: string; here?: string }) {

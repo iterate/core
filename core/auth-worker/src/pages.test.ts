@@ -363,6 +363,27 @@ test("the account chooser says who is signed in, goes on as them, or signs out a
   expect(signedOut).toContain(
     `<p class="center">You are signed out of &#60;b&#62;guestbook.example.com&#60;/b&#62;. You are still signed in to ${MIND} as <strong>guest@example.net</strong>.</p>`,
   );
+  // beside a mind sign-in that just completed: two people, one POST form, and the page keeps the
+  // policy of every page here (no frame, no script)
+  const answer = chooserPage({
+    mind: MIND,
+    email: "owner@example.net",
+    here: "/oauth2/auth?client_id=c&state=s",
+    signedOutOf: "cloud.example.com",
+    mindHostname: "<b>iterate.other.example</b>",
+    headers: new Headers({ "set-cookie": "a=b" }),
+  });
+  expect(answer.headers.get("set-cookie")).toBe("a=b");
+  expect(answer.headers.get("x-frame-options")).toBe("DENY");
+  expect(answer.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+  const twoPeople = await kept("chooser-mind", answer);
+  expect(twoPeople).toContain(
+    `<button type="submit" name="continue-as" value="mind">Continue as a member of &#60;b&#62;iterate.other.example&#60;/b&#62;</button>`,
+  );
+  expect(twoPeople).toContain(
+    `<input type="hidden" name="here" value="/oauth2/auth?client_id=c&#38;state=s">`,
+  );
+  expect(twoPeople).not.toContain(`<form method="get"`);
 });
 
 test("a page's own style is allowed by the page's nonce, beside the shared stylesheet's hash", async () => {

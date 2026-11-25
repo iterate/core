@@ -510,6 +510,251 @@ test("after a sign-out at the app, a mind sign-in that just completed answers th
   expect(await chooser.text()).toContain(`Continue as ${OWNER}`);
 });
 
+test("beside a member's session, a mind sign-in that just completed is a choice on the chooser: one press from that page, for that request, once", async () => {
+  const { a, b } = await twoMinds();
+  const member = await a.ownerCookie();
+  const asking = await hostSignInOf(a.env, APP, "passkey mind", "select_account");
+  /** The mind's cookie and the fresh mark of a sign-in for APP that just completed. */
+  const signedIn = async () => {
+    const { form, ask } = await a.started(encodeURIComponent(`${APP}/mind?signin=mind`));
+    const back = await a.back(
+      await signedByStack(b.env, {
+        mind: a.log.mind,
+        path: "/",
+        type: SIGN_IN_VOUCHED_TYPE,
+        payload: { ...ask, user: "user_b", member: true, to: `https://${A}` },
+        expiresInSeconds: 60,
+      }),
+      form,
+    );
+    const [session, , , fresh] = back.headers.getSetCookie();
+    return { mind: session!.split(";")[0]!, fresh: fresh!.split(";")[0]! };
+  };
+  /** The chooser for `request`, in a browser that holds the member's session and a mind sign-in
+   *  that just completed: the mind's cookie, the page's `here`, and its choice. */
+  const chooserOf = async (
+    request: { ask: (cookie: string) => Promise<Response> },
+    person = member,
+  ) => {
+    const { mind, fresh } = await signedIn();
+    const answer = await request.ask(`${person}; ${mind}; ${fresh}`);
+    expect(answer).toMatchObject({ status: 200 });
+    const page = await answer.text();
+    const choice = answer.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith("__Secure-iterate-auth-mind-choice-"));
+    return {
+      answer,
+      page,
+      mind,
+      here: unescaped(/name="here" value="([^"]*)"/.exec(page)?.[1] || ""),
+      choice,
+      cookies: `${person}; ${mind}; ${choice?.split(";")[0]}`,
+    };
+  };
+  const press = (
+    here: string,
+    as: string,
+    cookie: string,
+    origin: string | null = `https://${A}`,
+  ) => {
+    const headers = new Headers({ cookie });
+    if (origin) headers.set("origin", origin);
+    return authResponse(
+      new Request(`https://${A}/oauth2/auth`, {
+        method: "POST",
+        headers,
+        body: new URLSearchParams({ here, "continue-as": as }),
+      }),
+      a.env,
+      ctx,
+    );
+  };
+  const identityOf = async (
+    request: { tokenFor: (answer: Response) => Promise<string> },
+    answer: Response,
+  ) => {
+    expect(answer).toMatchObject({ status: 302 });
+    return tokenIdentity(a.env, await request.tokenFor(answer), APP);
+  };
+  const ended = async (answer: Response) => {
+    expect(answer).toMatchObject({ status: 403 });
+    expect(await answer.text()).toContain("This choice ended.");
+  };
+
+  // the page names both people, the mind's first, and both buttons are one POST form
+  const first = await chooserOf(asking);
+  expect(first.page).toContain(
+    `You are signed out of cloud.${ZONE}. You are still signed in to ${A} as <strong>${OWNER}</strong>.`,
+  );
+  expect(first.page).toContain(`You just signed in with your mind, <strong>${B}</strong>.`);
+  expect(first.page).toMatch(
+    new RegExp(
+      `<form method="post" action="/oauth2/auth" class="stack">\\s*<input type="hidden" name="here" value="[^"]+">\\s*<button type="submit" name="continue-as" value="mind">Continue as a member of ${B}</button>\\s*<button type="submit" name="continue-as" value="person" class="secondary">Continue as ${OWNER}</button>\\s*</form>`,
+    ),
+  );
+  expect(first.page).not.toContain(`<form method="get"`);
+  expect(first).toMatchObject({ here: asking.path.replace("&prompt=select_account", "") });
+  // the choice is this page's own: two minutes, sent by the issuer's own form to this path alone
+  expect(first.choice).toMatch(
+    /^__Secure-iterate-auth-mind-choice-[0-9a-f]{16}=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/oauth2\/auth; Max-Age=120$/,
+  );
+  // the fresh mark is spent with the page
+  expect(first.answer.headers.getSetCookie()).toContainEqual(
+    expect.stringMatching(/^__Host-iterate-auth-mind-fresh=; .*Max-Age=0$/),
+  );
+
+  // the press: a code for the mind's person, who is no member, and the choice is gone
+  const chose = await press(first.here, "mind", first.cookies);
+  expect(await identityOf(asking, chose)).toMatchObject({
+    member: false,
+    method: "mind",
+    mind: { id: b.log.mind, hostname: B },
+  });
+  expect(chose.headers.getSetCookie()).toContainEqual(
+    expect.stringMatching(/^__Secure-iterate-auth-mind-choice-[0-9a-f]{16}=; .*Max-Age=0$/),
+  );
+  // ONE PAGE MAKES ONE CODE: neither button works a second time
+  await ended(await press(first.here, "mind", first.cookies));
+  await ended(await press(first.here, "person", first.cookies));
+  // the member's session at the issuer lives on: another host's sign-in takes it with no question
+  const notes = await hostSignInOf(a.env, `https://notes.${ZONE}`, "passkey");
+  expect(await notes.ask(member)).toMatchObject({ status: 302 });
+
+  // the other button: the member, and then the mind's button is gone too
+  const second = await chooserOf(asking);
+  expect(
+    await identityOf(asking, await press(second.here, "person", second.cookies)),
+  ).toMatchObject({ member: true, method: "passkey" });
+  await ended(await press(second.here, "mind", second.cookies));
+
+  // THE PRESS COMES FROM THE PAGE: another origin, no origin, no choice
+  const third = await chooserOf(asking);
+  for (const origin of [APP, `https://${B}`, null])
+    expect(await press(third.here, "mind", third.cookies, origin)).toMatchObject({ status: 403 });
+  await ended(await press(third.here, "mind", `${member}; ${third.mind}`));
+  // no address chooses the mind's person: a GET with the field is the request without it
+  const byAddress = await a.get(`${third.here}&continue-as=mind`, `${member}; ${third.mind}`);
+  expect((await identityOf(asking, byAddress))?.member).toBe(true);
+  // A CHOICE IS FOR THE REQUEST ON ITS PAGE: a second request for the same host cannot use it
+  const other = await hostSignInOf(a.env, APP, "passkey mind", "select_account");
+  await ended(await press(other.path.replace("&prompt=select_account", ""), "mind", third.cookies));
+  // "person" is the session that the page named: without it nothing is chosen
+  await ended(await press(third.here, "person", third.cookies.replace(`${member}; `, "")));
+
+  // TWO PAGES, TWO CHOICES: a chooser for another request, in another tab, has a cookie of its
+  // own, and a press on either page leaves the other's choice as it was
+  const tabOne = await chooserOf(asking);
+  const tabTwo = await chooserOf(other);
+  const bothTabs = `${tabOne.cookies}; ${tabTwo.choice?.split(";")[0]}`;
+  expect(tabTwo).not.toMatchObject({ here: tabOne.here });
+  expect((await identityOf(asking, await press(tabOne.here, "mind", bothTabs)))?.method).toBe(
+    "mind",
+  );
+  expect((await identityOf(other, await press(tabTwo.here, "mind", bothTabs)))?.method).toBe(
+    "mind",
+  );
+
+  // THE PERSON ON THE PAGE, and no other: the browser signed in as someone else meanwhile
+  await hostSignInOf(a.env, APP, "email passkey mind");
+  const someone = await userOf(a.env.DB, "someone@other.test");
+  const mailed = (
+    await emailSessionCookie(a.env, new Request(`https://${A}`), someone)
+  ).setCookie.split(";")[0]!;
+  const named = await chooserOf(asking);
+  await ended(await press(named.here, "person", named.cookies.replace(member, mailed)));
+  // the app stops taking the way that the page's person signed in: no code for them, and never
+  // the mind's person in their place
+  const byMail = await chooserOf(asking, mailed);
+  expect(byMail.page).toContain(`Continue as someone@other.test</button>`);
+  await hostSignInOf(a.env, APP, "passkey mind");
+  await ended(await press(byMail.here, "person", byMail.cookies));
+
+  // the app's ways are read again at the press: an app that no longer names "mind"
+  const fourth = await chooserOf(asking);
+  await hostSignInOf(a.env, APP, "passkey");
+  await ended(await press(fourth.here, "mind", fourth.cookies));
+  await hostSignInOf(a.env, APP, "passkey mind");
+
+  // WITH NO PROMPT, as with a live session on the host, the member's session answers as before
+  const plain = await hostSignInOf(a.env, APP, "passkey mind");
+  const { mind, fresh } = await signedIn();
+  expect((await identityOf(plain, await plain.ask(`${member}; ${mind}; ${fresh}`)))?.member).toBe(
+    true,
+  );
+  // THE WAY BACK: after a sign-out with no mind sign-in, the chooser offers the member alone
+  const back = await asking.ask(`${member}; ${mind}`);
+  const backPage = await back.text();
+  expect(backPage).toContain(`<button type="submit">Continue as ${OWNER}</button>`);
+  expect(backPage).not.toContain("Continue as a member of");
+  expect(back.headers.get("set-cookie") || "").not.toContain("mind-choice");
+});
+
+test("an app that names mind alone takes a mind's person beside a mailed code's session, which it does not take", async () => {
+  const { a, b } = await twoMinds();
+  const only = await hostSignInOf(a.env, APP, "mind");
+  const someone = await userOf(a.env.DB, "someone@other.test");
+  const { setCookie } = await emailSessionCookie(a.env, new Request(`https://${A}`), someone);
+  const mailed = setCookie.split(";")[0]!;
+  // the session alone: the sign-in for this request, as before
+  const signedOut = await only.ask(mailed);
+  expect([signedOut.status, new URL(signedOut.headers.get("location")!).pathname]).toEqual([
+    302,
+    "/sign-in",
+  ]);
+  const { form, ask } = await a.started(only.next);
+  const back = await a.back(
+    await signedByStack(b.env, {
+      mind: a.log.mind,
+      path: "/",
+      type: SIGN_IN_VOUCHED_TYPE,
+      payload: { ...ask, user: "user_b", member: true, to: `https://${A}` },
+      expiresInSeconds: 60,
+    }),
+    form,
+  );
+  const [mind, , , fresh] = back.headers.getSetCookie().map((cookie) => cookie.split(";")[0]!);
+  // a mind's cookie from before answers nothing beside the session: the sign-in for this request
+  const before = await only.ask(`${mailed}; ${mind}`);
+  expect(new URL(before.headers.get("location")!)).toMatchObject({ pathname: "/sign-in" });
+  // THE SIGN-IN WAS BEGUN FOR ONE REQUEST: another request for the same app, pending in the
+  // same browser, gets no code from it and does not spend its mark
+  const pending = await hostSignInOf(a.env, APP, "mind");
+  const elsewhere = await pending.ask(`${mailed}; ${mind}; ${fresh}`);
+  expect(new URL(elsewhere.headers.get("location")!)).toMatchObject({ pathname: "/sign-in" });
+  expect(elsewhere.headers.get("set-cookie") || "").not.toContain("mind-fresh");
+  // with their mind's word for this app, just given: the app's code, for the mind's person
+  const answered = await only.ask(`${mailed}; ${mind}; ${fresh}`);
+  expect(answered).toMatchObject({ status: 302 });
+  expect(await tokenIdentity(a.env, await only.tokenFor(answered), APP)).toMatchObject({
+    member: false,
+    method: "mind",
+  });
+  // A SIGN-IN THAT THE APP'S OWN PAGE BEGAN names no request: beside the session it answers
+  // nothing, and no pending request for the host gets a code from it
+  const begun = await a.started(encodeURIComponent(`${APP}/mind?signin=mind`));
+  const byPage = await a.back(
+    await signedByStack(b.env, {
+      mind: a.log.mind,
+      path: "/",
+      type: SIGN_IN_VOUCHED_TYPE,
+      payload: { ...begun.ask, user: "user_b", member: true, to: `https://${A}` },
+      expiresInSeconds: 60,
+    }),
+    begun.form,
+  );
+  const unbound = byPage.headers.getSetCookie().map((cookie) => cookie.split(";")[0]!);
+  const fromPage = await pending.ask(`${mailed}; ${unbound[0]}; ${unbound[3]}`);
+  expect(new URL(fromPage.headers.get("location")!)).toMatchObject({ pathname: "/sign-in" });
+  // and once: the same mark again answers nothing
+  const again = await only.ask(`${mailed}; ${mind}; ${fresh}`);
+  expect(new URL(again.headers.get("location")!)).toMatchObject({ pathname: "/sign-in" });
+  // a guest's cookie still counts only where nobody is signed in: the order for guests is as it was
+  const guests = await hostSignInOf(a.env, `https://notes.${ZONE}`, "guest");
+  const refused = await guests.ask(mailed);
+  expect(new URL(refused.headers.get("location")!)).toMatchObject({ pathname: "/sign-in" });
+});
+
 test("A names its app to B only for an app of A that names mind, and B's page says so as A's word", async () => {
   const { a, b, app } = await twoMinds();
   const named = async (name: string) => {

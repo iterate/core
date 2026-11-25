@@ -489,12 +489,20 @@ export const clearMindCookie = cookie(MIND_COOKIE, "", 0);
 // the authorization endpoint at once. There it answers that host's `prompt=select_account` once
 // (./authorize.ts): a host that the person signed out of asks who they are, and they just said.
 // Any authorization clears it, and its `jti` is taken once (`statements`), so it answers one
-// prompt at most.
+// prompt at most. `request`: when the sign-in was begun for one authorization request (the
+// sign-in page's `next`), a hash of that request (`requestHashOf`), and the mark answers no
+// other. A sign-in that an app's page began (iterate/sdk `auth.mindSignIn`) has none: its
+// request does not exist yet.
 export const MIND_FRESH_COOKIE = "__Host-iterate-auth-mind-fresh";
 const MIND_FRESH_SECONDS = 30;
 
-export async function mindFreshCookie(env: Env, fresh: { user: string; app: string }) {
-  const token = await signed(env, "mind-fresh", fresh)
+export async function mindFreshCookie(
+  env: Env,
+  fresh: { user: string; app: string; request: string | null },
+) {
+  const claims: Record<string, string> = { user: fresh.user, app: fresh.app };
+  if (fresh.request) claims.request = fresh.request;
+  const token = await signed(env, "mind-fresh", claims)
     .setJti(crypto.randomUUID())
     .setExpirationTime(`${MIND_FRESH_SECONDS}s`)
     .sign(keyOf(env));
@@ -506,6 +514,7 @@ export async function mindFreshOf(env: Env, request: Request) {
     .object({
       user: z.string().min(1),
       app: z.string().min(1),
+      request: z.string().min(1).optional(),
       jti: z.string().min(1),
       exp: z.number(),
     })
@@ -514,6 +523,63 @@ export async function mindFreshOf(env: Env, request: Request) {
 }
 
 export const clearMindFreshCookie = cookie(MIND_FRESH_COOKIE, "", 0);
+
+/** A hash of an authorization request, as its path and query without `prompt` (./authorize.ts
+ *  `promptOf`, `here`): what a fresh mark and a chooser's choice are bound to. */
+export async function requestHashOf(here: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(here));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// THE CHOICE THAT THE CHOOSER OFFERS between a person's session here and a mind sign-in that just
+// completed (./authorize.ts `chosen`): set with the chooser's page, for the two people that the
+// page names (`person`, `user`), the app's host and that one authorization request (`request`, a
+// hash of it), for two minutes. The chooser's POST takes it once (`jti`, `statements`), so one
+// page makes one code. `SameSite=Strict` and the authorization endpoint's path: only that page's
+// own form sends it. The cookie's name ends with the start of the request's hash, so a chooser
+// for another request, in another tab, has a choice of its own.
+const MIND_CHOICE_SECONDS = 120;
+
+const mindChoiceNameOf = (requestHash: string) =>
+  `__Secure-iterate-auth-mind-choice-${requestHash.slice(0, 16)}`;
+
+export async function mindChoiceCookie(
+  env: Env,
+  choice: { person: string; user: string; app: string; request: string },
+  path: string,
+) {
+  const token = await signed(env, "mind-choice", choice)
+    .setJti(crypto.randomUUID())
+    .setExpirationTime(`${MIND_CHOICE_SECONDS}s`)
+    .sign(keyOf(env));
+  return mindChoiceCookieOf(choice.request, token, MIND_CHOICE_SECONDS, path);
+}
+
+/** The choice that this browser holds for the request with the hash `requestHash`. */
+export async function mindChoiceOf(env: Env, request: Request, requestHash: string) {
+  const choice = z
+    .object({
+      person: z.string().min(1),
+      user: z.string().min(1),
+      app: z.string().min(1),
+      request: z.literal(requestHash),
+      jti: z.string().min(1),
+      exp: z.number(),
+    })
+    .safeParse(await claimsOf(env, request, mindChoiceNameOf(requestHash), "mind-choice"));
+  return choice.success ? choice.data : null;
+}
+
+const mindChoiceCookieOf = (
+  requestHash: string,
+  value: string,
+  maxAgeSeconds: number,
+  path: string,
+) =>
+  `${mindChoiceNameOf(requestHash)}=${value}; HttpOnly; Secure; SameSite=Strict; Path=${path}; Max-Age=${maxAgeSeconds}`;
+
+export const clearMindChoiceCookie = (requestHash: string, path: string) =>
+  mindChoiceCookieOf(requestHash, "", 0, path);
 
 const signed = (env: Env, audience: string, claims: Record<string, string>) =>
   new SignJWT(claims)

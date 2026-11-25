@@ -32,7 +32,9 @@
 // LOGIN CSRF. Another site can start this in a visitor's browser with ITS OWN mind, and finish it:
 // the visitor is then a member of the attacker's mind here. The state binds the return to the
 // browser that started, which bounds it to that; an app that shows what belongs to a mind says
-// whose mind it is first (iterate/sdk `auth.person`).
+// whose mind it is first (iterate/sdk `auth.person`). It replaces nobody: beside a person's
+// session that the app takes, this sign-in is one of two choices on the chooser's page, and only
+// the person's press there makes them the mind's person (./authorize.ts `chosen`).
 //
 // A STRANGER TYPES THE HOSTNAME, so this Worker fetches what anyone names: https alone, a 5-second
 // limit, counted for each visitor's address (`admitted`, "mind"), and the page answers one of three
@@ -59,12 +61,13 @@ import {
   mindFormOf,
   mindFreshCookie,
   mindSessionCookie,
+  requestHashOf,
 } from "./cookies.ts";
 import { admitted, TOO_MANY } from "./device/limits.ts";
 import { configOf, type Env, issuerOf } from "./env.ts";
 import { honouredNext } from "./key-rules.ts";
 import { mindSignerOf } from "./minds.ts";
-import { mindHostResourceOf } from "./oauth.ts";
+import { AUTHORIZE_ENDPOINT, mindHostResourceOf } from "./oauth.ts";
 import { appSignIn, errorPage, page, text } from "./pages.ts";
 import { stackKeyOf } from "./stack-key.ts";
 import { userOf } from "./users.ts";
@@ -263,8 +266,25 @@ async function returned(env: Env, request: Request): Promise<Response> {
   // the app's next authorization takes this sign-in as the answer to a prompt, once
   // (./authorize.ts): it was the person's answer, made after any sign-out
   if (form.app)
-    headers.append("set-cookie", await mindFreshCookie(env, { user: user.id, app: form.app }));
+    headers.append(
+      "set-cookie",
+      await mindFreshCookie(env, {
+        user: user.id,
+        app: form.app,
+        request: await requestBegunFor(env, form.next),
+      }),
+    );
   return facts.on(new Response(null, { status: 303, headers }));
+}
+
+/** The hash of the authorization request that a sign-in was begun for, when `next` is one of
+ *  this issuer (the sign-in page's): as ./authorize.ts reads it, without `prompt`. Null for an
+ *  app's own page, whose request ingress makes after the return. */
+async function requestBegunFor(env: Env, next: string) {
+  const url = new URL(next);
+  if (url.origin !== issuerOf(env) || url.pathname !== AUTHORIZE_ENDPOINT) return null;
+  url.searchParams.delete("prompt");
+  return requestHashOf(url.pathname + url.search);
 }
 
 /** THE PERSON B VOUCHES FOR in `sent`, the envelope as JSON text, or why not. Every field is
