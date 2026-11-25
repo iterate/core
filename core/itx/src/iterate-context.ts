@@ -46,7 +46,7 @@ import {
   normalizeRewriteRuleConfigured,
   type ItxExpressionResolver,
 } from "./context/itx-expression-rewriting.ts";
-import type { LentFetchHolder } from "./context/fetch-upgrade.ts";
+import { FETCH_UPGRADE_CONTEXT_HEADER, type LentFetchHolder } from "./context/fetch-upgrade.ts";
 import { lendRefusal } from "./context/lent-names.ts";
 import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
@@ -183,8 +183,8 @@ export class IterateContextRpcTarget extends RpcTarget {
     );
   }
 
-  // A terminal `fetch(request)` rides the DO's fetch channel, the only hop that carries a
-  // socket-bearing Response back.
+  // A terminal `fetch(request)` rides the DO's fetch channel, which carries a socket-bearing
+  // Response back to this invocation. Workers RPC from here on does not: `fetchUpgradeDial`.
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     // the context it was reached through has read its answer already
     if (this.#reachedThrough)
@@ -221,13 +221,43 @@ export class IterateContextRpcTarget extends RpcTarget {
         (expression) => this.invoke(expression),
       );
     }
-    if (terminalFetch) {
-      const headers = new Headers(terminalFetch.request.headers);
-      stampCallerHeaders(headers, this.#caller);
-      headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
-      return this.#durableObject.fetch(new Request(terminalFetch.request, { headers }));
-    }
+    if (terminalFetch)
+      return this.#durableObject.fetch(
+        this.#contextFetchRequest(terminalFetch.steps, terminalFetch.request),
+      );
     return this.#invokeOnDurableObject(itxExpression, args);
+  }
+
+  /** What this context's Durable Object answers as `<steps>.fetch(request)` by this caller. */
+  #contextFetchRequest(steps: ItxExpression, request: Request): Request {
+    const headers = new Headers(request.headers);
+    stampCallerHeaders(headers, this.#caller);
+    headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(steps));
+    return new Request(request, { headers });
+  }
+
+  /** THE DIAL OF `itx.fetch(request)` THAT OPENS A WEBSOCKET, for the Worker that holds this
+   *  context over Workers RPC: the boundary, which ends a session of the API
+   *  (core/boundary-worker/src/session-mind.ts `SessionMind.fetch`). A Response that holds a
+   *  WebSocket cannot be returned over Workers RPC ("Could not serialize object of type
+   *  "WebSocket"", workerd 1.20261116.1), so `fetch` would open the upstream and then fail. The
+   *  holder sends this Request through the mind Worker's own `fetch` instead, which carries the
+   *  socket, to this context's Durable Object (../serve-host.ts `fetchUpgradeLegResponse`). It is
+   *  the Request that `fetch` sends there, stamped with this caller, so the context answers it as
+   *  it answers `fetch`: its rows, the gate and the egress all hold. Not for loaded code, whose
+   *  calls go through its own table (`ItxEntrypoint.fetch` carries its socket). */
+  fetchUpgradeDial(request: Request): Request {
+    if (this.#reachedThrough || this.#statelessResolverOf)
+      throw codedError(
+        "FORBIDDEN",
+        "fetchUpgradeDial: loaded code opens a socket through env.ITX.fetch(request)",
+      );
+    if (!(request instanceof Request))
+      throw codedError("INVALID_INPUT", "fetchUpgradeDial(request): one Request");
+    const dial = this.#contextFetchRequest(["itx"], request);
+    const headers = new Headers(dial.headers);
+    headers.set(FETCH_UPGRADE_CONTEXT_HEADER, this.#durableObjectAddress.name);
+    return new Request(dial, { headers });
   }
 
   async provide(

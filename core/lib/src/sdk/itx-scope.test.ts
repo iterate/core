@@ -2,6 +2,7 @@
 // record EVERY call a scope reached and change nothing else about the stub (itx-scope.ts says why).
 import { expect, test, vi } from "vitest";
 import { runCausedBy } from "../cause.ts";
+import { ITERATE_CAUSE_HEADER } from "../lib.ts";
 import { itxScope, recordPipelinedSteps } from "./itx-scope.ts";
 
 test.for([
@@ -81,6 +82,36 @@ test("`using itx = itxScope(…)` gets the scope under the running cause and rel
     "dispose handle(/r)",
     "dispose open(/r)",
     "dispose root",
+  ]);
+});
+
+test("a WebSocket upgrade of the scope's `fetch` goes by the entrypoint's own `fetch`, under the scope's cause; any other fetch is the scope's call", async () => {
+  const sent: { by: string; url: string; cause: string | null }[] = [];
+  const answer = (by: string) => (request: Request) => {
+    sent.push({ by, url: request.url, cause: request.headers.get(ITERATE_CAUSE_HEADER) });
+    return Promise.resolve(new Response(by));
+  };
+  const entrypoint = {
+    get: () => ({ fetch: answer("the scope") }),
+    fetch: answer("the entrypoint"),
+  };
+  const upgrade = new Request("https://upstream.example/socket", {
+    headers: { Upgrade: "websocket" },
+  });
+  await runCausedBy({ chain: "a test's chain", depth: 1 }, async () => {
+    using itx: any = itxScope(entrypoint);
+    expect(await (await itx.fetch(upgrade)).text()).toBe("the entrypoint");
+    expect(await (await itx.fetch(new Request("https://upstream.example/plain"))).text()).toBe(
+      "the scope",
+    );
+  });
+  expect(sent).toEqual([
+    {
+      by: "the entrypoint",
+      url: "https://upstream.example/socket",
+      cause: JSON.stringify({ chain: "a test's chain", depth: 1 }),
+    },
+    { by: "the scope", url: "https://upstream.example/plain", cause: null },
   ]);
 });
 

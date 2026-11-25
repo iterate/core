@@ -8,8 +8,16 @@
 // unit tests run it in node (itx-scope.test.ts). Lint refuses the raw `env.ITX.get()`, and a
 // `getItx()` no `using` binds (iterate/no-raw-itx-get).
 
-import { currentCause } from "../cause.ts";
-import { releaseRpcSessions } from "../lib.ts";
+import { causeMarkOf, currentCause } from "../cause.ts";
+import { ITERATE_CAUSE_HEADER, loopLimitOf, releaseRpcSessions } from "../lib.ts";
+
+/** What hands a scope over: `env.ITX`, the loopback of the code's context (core/itx
+ *  `ItxEntrypoint`). `get` answers the scope over Workers RPC; `fetch` sends a Request through the
+ *  context's own table, and its answer may hold a WebSocket. */
+type ItxEntrypointOf<Scope> = {
+  get(): Scope;
+  fetch?(request: Request): Promise<Response>;
+};
 
 /** ONE get on `entrypoint`, under the cause running when the scope is made, for a `using`
  *  declaration, made on the scope's first use: a block that never touches its context (most
@@ -22,7 +30,7 @@ import { releaseRpcSessions } from "../lib.ts";
  *    using itx = this.getItx();
  *    const { mindSlug } = await itx.whoami();
  */
-export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposable {
+export function itxScope<Scope>(entrypoint: ItxEntrypointOf<Scope>): Scope & Disposable {
   const steps: unknown[] = [];
   const cause = currentCause();
   let opened: { itx: Scope; scope: Scope } | undefined;
@@ -41,7 +49,11 @@ export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposabl
     get: (_, key) =>
       key === Symbol.dispose
         ? () => opened && releaseRpcSessions([opened.itx, ...steps])
-        : Reflect.get(open() as object, key),
+        : key === "fetch" && entrypoint.fetch
+          ? scopeFetch(entrypoint.fetch.bind(entrypoint), cause, () =>
+              Reflect.get(open() as object, key),
+            )
+          : Reflect.get(open() as object, key),
     apply: (_, thisArg, args) => Reflect.apply(open() as () => unknown, thisArg, args),
   });
   scopeRoots.set(root, () => {
@@ -49,6 +61,37 @@ export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposabl
     return opened!.itx;
   });
   return root as Scope & Disposable;
+}
+
+/** THE SCOPE'S `itx.fetch`, but a WebSocket upgrade goes by `entrypoint.fetch`. A Response that
+ *  holds a WebSocket cannot be returned over Workers RPC ("Could not serialize object of type
+ *  "WebSocket"", workerd 1.20261116.1), and the scope is a Workers RPC stub: its `fetch` would open
+ *  the upstream and then fail. A Worker's `fetch` carries the socket. The context answers it as
+ *  the scope's `fetch`, through the code's table, under the cause of the scope; a refusal is an
+ *  answer there, not a throw, but past the loop limit it throws, as the scope's `fetch` does.
+ *  Anything else, `fetch(request, { signFor })` too, is the scope's own call. */
+function scopeFetch(
+  entrypointFetch: (request: Request) => Promise<Response>,
+  cause: unknown,
+  scopeFetchOf: () => (...args: unknown[]) => unknown,
+) {
+  const upgrade = async (request: Request) => {
+    const headers = new Headers(request.headers);
+    const mark = causeMarkOf(cause);
+    if (mark) headers.set(ITERATE_CAUSE_HEADER, mark);
+    const answer = await entrypointFetch(new Request(request, { headers }));
+    const refused = await loopLimitOf(answer);
+    if (refused) throw refused;
+    return answer;
+  };
+  return (...args: unknown[]) => {
+    const [request] = args;
+    return args.length === 1 &&
+      request instanceof Request &&
+      request.headers.get("upgrade")?.toLowerCase() === "websocket"
+      ? upgrade(request)
+      : scopeFetchOf()(...args);
+  };
 }
 
 /** Each scope `itxScope` made, to the stub it opens: a recorded call handed the scope crosses the

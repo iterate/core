@@ -14,7 +14,7 @@ import {
 } from "./context/fetch-upgrade.ts";
 import { implicitRootsAt, resolveItxExpression } from "./context/itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
-import { itxExpressionEndingInFetch } from "./context/rpc-stubs.ts";
+import { ITX_EXPRESSION_FETCH_HEADER, itxExpressionEndingInFetch } from "./context/rpc-stubs.ts";
 import { contextReach, statelessResolverFor } from "./context/stateless-context.ts";
 import { matchFetchRoute } from "./fetch-routes.ts";
 import { contexts } from "./host.ts";
@@ -23,14 +23,22 @@ import { personItxSession } from "./person-context.ts";
 import { serveSession } from "./session.ts";
 import { expressionFetchErrorAnswer, failedPageAnswer } from "./unavailable.ts";
 
-/** THE LEG OF A LENT STUB'S UPGRADE, DIALLED FROM OUTSIDE THE MIND'S WORKER
- *  (./context/fetch-upgrade.ts `LentFetchHolder`), or null when `request` is none: it goes to the
- *  context that the dial names, whose answer holds the leg's socket. The upgrade's id, which the
- *  context made and gave to the holder alone, is what admits a leg there. Ask before any routing
- *  by hostname or path: a leg has neither. */
+/** A SOCKET DIALLED INTO A CONTEXT FROM OUTSIDE THE MIND'S WORKER, or null when `request` is none:
+ *  it goes to the context that the dial names, and its answer holds the socket. Two dials:
+ *    - the leg of a lent stub's upgrade (./context/fetch-upgrade.ts `LentFetchHolder`). The
+ *      upgrade's id, which the context made and gave to the holder alone, admits a leg there;
+ *    - the upgrade of a session's `itx.fetch` (./iterate-context.ts `fetchUpgradeDial`), which
+ *      the context answers as that `fetch`, for the caller that the dial names.
+ *  Only the boundary sends either: it removes every `x-itx-*` header from a request that comes
+ *  from outside. Ask before any routing by hostname or path: a dial has neither. */
 export function fetchUpgradeLegResponse(request: Request): Promise<Response> | null {
   const context = request.headers.get(FETCH_UPGRADE_CONTEXT_HEADER);
-  if (!context || !request.headers.has(FETCH_UPGRADE_SOCKET_HEADER)) return null;
+  if (!context) return null;
+  const leg = request.headers.has(FETCH_UPGRADE_SOCKET_HEADER);
+  const fetchUpgrade =
+    request.headers.has(ITX_EXPRESSION_FETCH_HEADER) &&
+    request.headers.get("upgrade")?.toLowerCase() === "websocket";
+  if (!leg && !fetchUpgrade) return null;
   return contexts().getByName(context).fetch(request);
 }
 

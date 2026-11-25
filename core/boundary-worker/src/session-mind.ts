@@ -15,6 +15,23 @@
 //
 //   visitor ─► boundary ─fetch─► mind ─► context ─► mind's `api` invocation ─holder.fetch─► HERE
 //   HERE ─capnweb─► client: 101 and a socket          HERE ─`mind.fetch` (the leg)─► context
+//
+// THE CLIENT'S OWN `itx.fetch` THAT OPENS A WEBSOCKET (an upstream that speaks one, such as
+// OpenAI's realtime API) fails the same way on the way back: its 101 would come from the mind's
+// `api` invocation over Workers RPC. So `fetch` asks the mind for the Request that its context
+// answers (core-itx `fetchUpgradeDial`), and sends it through the mind's own `fetch`:
+//
+//   client ─capnweb─► HERE ─fetchUpgradeDial─► mind's `api` invocation: the Request, stamped
+//   HERE ─`mind.fetch`─► mind ─► context's Durable Object ─egress─► boundary's Door ─► upstream
+//   upstream's 101 ─► every hop's `fetch` answer, unaccepted ─► HERE ─capnweb─► client
+//
+// Each hop hands on the socket it was answered, and a close of either end closes the other: workerd
+// joins a socket that a `fetch` answers unaccepted, and the one hop that accepts it, the mind
+// Worker's trace of a model's socket in the context (core/mind-worker agent-spans.ts), relays
+// each close. For the socket's life these stay open: this invocation (the client's session, whose
+// end closes the socket), the mind Worker's invocation that answered the dial, the context's
+// Durable Object (`/`, or the path of a `cd`), the Door's invocation, and for a secret's
+// placeholder the secret's Durable Object in the secrets Worker, which makes the upstream's fetch.
 import { RpcStub, RpcTarget } from "capnweb";
 import {
   dialRpcStubFetch,
@@ -22,13 +39,16 @@ import {
   type LentFetchHolder,
 } from "core-itx/fetch-upgrade";
 import { RESERVED_SEGMENT_NAMES, walkStepsOnRpcStub } from "iterate/expression";
-import { codedError } from "iterate/lib";
+import { codedError, loopLimitOf } from "iterate/lib";
 
 /** What the mind answered to `api(who)`, as this file calls it: a Workers RPC stub, which answers
  *  every other name too. */
 export type MindApiStub = Partial<Disposable> & {
   provide(match: unknown, target: unknown, options: unknown, lentFetch?: object): unknown;
   cd(path: unknown): MindApiStub;
+  fetch(...args: unknown[]): Promise<unknown>;
+  /** The Request that opens `fetch(request)`'s WebSocket through the mind's own `fetch`. */
+  fetchUpgradeDial(request: Request): Promise<Request>;
   /** Whether the mind's part of the session lives (core-itx `sessionLives`): the boundary's own
    *  question, whose failure says that the stub broke. */
   sessionLives(): unknown;
@@ -38,7 +58,7 @@ export type MindApiStub = Partial<Disposable> & {
  *  framework or capnweb probes on any object (iterate/expression says which, and why: `then` and
  *  `dup` are among them), and the boundary's own watch of the stub. */
 const neverForwarded = (name: string) =>
-  RESERVED_SEGMENT_NAMES.has(name) || name === "sessionLives";
+  RESERVED_SEGMENT_NAMES.has(name) || name === "sessionLives" || name === "fetchUpgradeDial";
 
 /** A request into the mind, through its `fetch` (./http.ts `MindTransport.fetch`). */
 type FetchInMind = (request: Request) => Promise<Response>;
@@ -78,6 +98,23 @@ export class SessionMind extends RpcTarget {
       options || {},
       new LentFetch(target.dup(), this.#fetchInMind),
     );
+  }
+
+  /** The mind's `fetch`, but for a WebSocket upgrade: see the head of this file. Anything else,
+   *  `fetch(request, { signFor })` too, goes to the mind's stub as it came. */
+  async fetch(...args: unknown[]) {
+    if (this.#ofKey) throw keysNames("fetch");
+    const [request] = args;
+    const upgrade =
+      args.length === 1 &&
+      request instanceof Request &&
+      request.headers.get("upgrade")?.toLowerCase() === "websocket";
+    if (!upgrade) return this.#mind.fetch(...args);
+    const answer = await this.#fetchInMind(await this.#mind.fetchUpgradeDial(request));
+    // past the loop limit the context answers a marked 508, which the RPC `fetch` throws
+    const refused = await loopLimitOf(answer);
+    if (refused) throw refused;
+    return answer;
   }
 
   cd(path: unknown) {

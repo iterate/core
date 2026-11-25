@@ -55,21 +55,9 @@ function newCarrier(): Carrier {
       loaded = true;
       const outbound = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
-        // the cause is carried unread, so `current()` is `unknown`: the mark reads its fields alone
-        const cause = current() as
-          | { chain?: unknown; depth?: unknown; at?: unknown; hops?: unknown; parent?: unknown }
-          | undefined;
         const request = new Request(input, init);
-        // the mark alone, never what only a call needs (the delivery its writes are keyed by); a
-        // header is bytes, so a parent in other characters than printable ASCII stays behind
-        if (cause) {
-          const { chain, depth, at, hops, parent } = cause;
-          const ascii = typeof parent === "string" && /^[\x20-\x7e]*$/.test(parent);
-          request.headers.set(
-            ITERATE_CAUSE_HEADER,
-            JSON.stringify({ chain, depth, at, hops, ...(ascii && { parent }) }),
-          );
-        }
+        const mark = causeMarkOf(current());
+        if (mark) request.headers.set(ITERATE_CAUSE_HEADER, mark);
         const answer = await outbound(request);
         // a request refused past the loop limit answers 508, marked: it throws as the refusal it is
         const refused = await loopLimitOf(answer);
@@ -78,6 +66,21 @@ function newCarrier(): Carrier {
       };
     },
   };
+}
+
+/** THE MARK OF `cause` that a Request carries in `ITERATE_CAUSE_HEADER`, or none. The cause is
+ *  carried unread, so its fields are read here alone: the mark, never what only a call needs (the
+ *  delivery its writes are keyed by). A header is bytes, so a parent in other characters than
+ *  printable ASCII stays behind. */
+export function causeMarkOf(cause: unknown): string | undefined {
+  // the cast: a cause is the platform's object, carried unread (`Carrier.current`)
+  const carried = cause as
+    | { chain?: unknown; depth?: unknown; at?: unknown; hops?: unknown; parent?: unknown }
+    | undefined;
+  if (!carried) return undefined;
+  const { chain, depth, at, hops, parent } = carried;
+  const ascii = typeof parent === "string" && /^[\x20-\x7e]*$/.test(parent);
+  return JSON.stringify({ chain, depth, at, hops, ...(ascii && { parent }) });
 }
 
 /** Run `code` under `cause` — the platform's word for why, or none (the platform then begins a

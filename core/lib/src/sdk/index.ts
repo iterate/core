@@ -221,7 +221,7 @@ export abstract class FacetDurableObject<
    *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
    *  inside a facet (test/vitest/os-workers/facets.test.ts). The casts name what workers-types cannot:
    *  this worker's own `ItxEntrypoint` export, and the scope its `get` answers, which `Scope` is. */
-  #itxEntrypoint(): { get(): Scope } {
+  #itxEntrypoint(): { get(): Scope; fetch(request: Request): Promise<Response> } {
     return (this.env.ITX ??
       (
         this.ctx.exports as unknown as {
@@ -234,6 +234,7 @@ export abstract class FacetDurableObject<
         props: { iterateContextName: this.ctx.props.iterateContextName, platform: true },
       })) as unknown as {
       get(): Scope;
+      fetch(request: Request): Promise<Response>;
     };
   }
 }
