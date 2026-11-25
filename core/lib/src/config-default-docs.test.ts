@@ -34,7 +34,7 @@ import {
 } from "../../configs/default/apps/docs/processors/frames.ts";
 import { DocsProcessor } from "../../configs/default/apps/docs/processors/root.ts";
 import { isNotePath, noteResponse } from "../../configs/default/apps/docs/notes.ts";
-import { diff3 } from "../../configs/default/apps/docs/processors/merge.ts";
+import { diff3, textEdits } from "../../configs/default/apps/docs/processors/merge.ts";
 import type { IterateContextApi } from "./api.ts";
 import { ProcessorEngine, type StreamEventInput } from "./stream/processor.ts";
 import {
@@ -431,6 +431,46 @@ test("the merge finds diff3Merge on globalThis.Diff3 when the package's default 
   expect(diff3()).toMatchObject({ diff3Merge: nodeDiff3.diff3Merge });
 });
 
+// ── the edits that take a commit into the live text ──
+
+test("a typo fixed in one line is an edit of that word, so a person typing in the same line keeps their keystrokes", () => {
+  const from = "# Plan\n\nWe fly in on Wendesday.\n\n## Agenda\n";
+  const to = "# Plan\n\nWe fly in on Wednesday.\n\n## Agenda\n";
+  const edits = textEdits(from, to);
+  expect(applied(from, edits)).toBe(to);
+  expect(edits.every((edit) => ("insert" in edit ? edit.insert.length : edit.delete) <= 2)).toBe(
+    true,
+  );
+});
+
+test("a commit that changes 50 places of a 30,000-character file costs milliseconds of CPU, not the seconds that ended the processor's invocation", () => {
+  // the shape of /docs/config/AGENTS.md on iterate.com, 24 Nov 2026: 26,000 characters, and a
+  // commit that rewrote 50 groups of lines and added 5,000 characters
+  const lines = Array.from({ length: 400 }, (_, index) => `- line ${index}: ${"words ".repeat(9)}`);
+  const from = lines.join("\n");
+  const to = lines
+    .flatMap((line, index) =>
+      index % 8 === 0 ? [`- line ${index}, rewritten: ${"other words ".repeat(12)}`, ""] : [line],
+    )
+    .join("\n");
+  const before = process.cpuUsage();
+  const edits = textEdits(from, to);
+  const spent = process.cpuUsage(before);
+  expect(applied(from, edits)).toBe(to);
+  expect((spent.user + spent.system) / 1000).toBeLessThan(500);
+});
+
+test("lines replaced by wholly different text are replaced whole: the comparison by character has a bound", () => {
+  const from = `intro\n${"a".repeat(3_000)}\noutro\n`;
+  const to = `intro\n${"b".repeat(3_000)}\noutro\n`;
+  const edits = textEdits(from, to);
+  expect(applied(from, edits)).toBe(to);
+  expect(edits).toEqual([
+    { at: 6, delete: 3_001 },
+    { at: 6, insert: `${"b".repeat(3_000)}\n` },
+  ]);
+});
+
 // ── a stored HTML note ──
 
 test("a note is the mind's file inline, fenced so it cannot act as the member; any other name, method or a missing file is not found", async () => {
@@ -720,4 +760,15 @@ function joinPath(from: string, specifier: string) {
     else if (part !== ".") parts.push(part);
   }
   return parts.join("/");
+}
+
+/** `from` after `edits`, applied one by one as a `Y.Text` applies them. */
+function applied(from: string, edits: ReturnType<typeof textEdits>) {
+  return edits.reduce(
+    (text, edit) =>
+      "insert" in edit
+        ? text.slice(0, edit.at) + edit.insert + text.slice(edit.at)
+        : text.slice(0, edit.at) + text.slice(edit.at + edit.delete),
+    from,
+  );
 }
