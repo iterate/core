@@ -95,6 +95,15 @@ lists the parts).
   option writes it into the answer box. An ask that is no choice (a thing that only the person
   can do or see) takes `noChoice: "<why>"`. An ask with neither is taken, and the call's answer
   holds `warning`: read it. One call adds one ask with a decision.
+- An ask whose answer another agent acts on names that agent. Never write an ask that tells a
+  person to go and write somewhere else: where a person answers makes no difference. Add
+  `tell: { agent: "/agents/…", words: "<the answer that you wait for>" }` to the call that adds
+  the ask (`words` may be left out). The person answers in the one box, which starts with those
+  words; a line above it says where the answer goes; and the page sends the answer to that agent
+  as the person's own message, beside the card's commit. Whether such a message releases a step
+  is that agent's own rule. An ask has a `decision` or a `tell`, not both.
+- When a person answers your ask somewhere else (your chat, a call), record it at once with
+  `answerTask`: the ask then leaves the board, and nobody asks them twice.
 - Which model recommended is never yours to write. The page reads it from your own log, at the
   turn that asked (`itx.config.taskAskers`, `model`), and says "model unrecorded" when no event
   says. So add each ask with `taskUpdate` from your own turn, never by a hand-made commit.

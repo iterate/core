@@ -6,6 +6,7 @@ import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { z } from "zod";
+import { framedSignIn } from "../../configs/default/apps/dash/framed-sign-in.ts";
 import { dashLink, DashLinkInput, dashLinks } from "../../configs/default/apps/dash/links.ts";
 import { CALL_FACET } from "../../configs/default/call.ts";
 import {
@@ -223,6 +224,43 @@ test.for(z.array(FixtureRow).parse(fixture))(
     expect(dashLink("example.com", link)).toBe(`https://dash.example.com${href}`);
   },
 );
+
+test("a signed-out frame of the Dash gets the guard's refusal with words that say what to do; any other request gets the guard's answer as it is", async () => {
+  const refusal = () =>
+    new Response("Sign in\n", {
+      status: 401,
+      headers: { "WWW-Authenticate": 'Bearer realm="iterate"', "Cache-Control": "no-store" },
+    });
+  const ask = (headers: Record<string, string>, method = "GET") =>
+    new Request("https://dash.example.com/agents/agents/main?embed=1", { method, headers });
+  const framed = framedSignIn(
+    ask({ "sec-fetch-dest": "iframe", "sec-fetch-mode": "navigate" }),
+    refusal(),
+  );
+  // the same refusal: the status and the challenge that the boundary reads
+  expect(framed?.status).toBe(401);
+  expect(framed?.headers.get("www-authenticate")).toBe('Bearer realm="iterate"');
+  expect(framed?.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  const page = await framed!.text();
+  expect(page).toContain("This browser is not signed in to the Dash yet.");
+  // one link, to this host's own root, in a tab of its own
+  expect([...page.matchAll(/href="([^"]+)"/g)].map((found) => found[1])).toEqual([
+    "https://dash.example.com/",
+  ]);
+  expect(page).toContain('target="_blank" rel="noopener"');
+  // a member's request is not touched, and neither is any refusal that is no frame's page load
+  expect(framedSignIn(ask({ "sec-fetch-dest": "iframe" }), null)).toBeNull();
+  const tab = refusal();
+  expect(
+    framedSignIn(ask({ "sec-fetch-dest": "document", "sec-fetch-mode": "navigate" }), tab),
+  ).toBe(tab);
+  const script = refusal();
+  expect(framedSignIn(ask({ "sec-fetch-dest": "script" }), script)).toBe(script);
+  const write = refusal();
+  expect(framedSignIn(ask({ "sec-fetch-dest": "iframe" }, "POST"), write)).toBe(write);
+  const forbidden = new Response("Cross-site request refused", { status: 403 });
+  expect(framedSignIn(ask({ "sec-fetch-dest": "iframe" }), forbidden)).toBe(forbidden);
+});
 
 test("dashLinks and dashLink validate structured inputs and reject unsafe destinations", () => {
   const dash = dashLinks("example.com");

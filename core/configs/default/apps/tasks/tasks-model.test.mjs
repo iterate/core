@@ -17,6 +17,10 @@ import {
   staleOf,
   stillNeededMessage,
   decisionsOf,
+  addTell,
+  tellFault,
+  tellMessage,
+  tellsOf,
   answerMessage,
   receiversOf,
   askedOf,
@@ -1467,4 +1471,132 @@ test("an ask that may be outdated, whom the page asks, and with what words", () 
   );
   assert.match(said, /The question: "Ship it\?"/);
   assert.match(said, /withdraw: \{ ask: "<its beginning>", why: "…" \}/);
+});
+
+test("an ask whose answer another agent acts on keeps that agent and the words, beside the options of other asks", () => {
+  const file =
+    '---\nstatus: todo\nhuman-ask:\n  - "Jonas: release the move of Jeeves."\n  - "Jonas: a or b?"\n---\n\n# A\n';
+  const tell = {
+    ask: "Jonas: release the move of Jeeves.",
+    agent: "/agents/sysadmin",
+    words: "Move Jeeves  after the\nlocal test.",
+  };
+  const one = addTell(file, tell);
+  assert.match(
+    one,
+    /\n## Decisions\n\n- \*\*Jonas: release the move of Jeeves\.\*\*\n {2}- Tell: \/agents\/sysadmin: Move Jeeves after the local test\.\n$/,
+  );
+  assert.deepEqual(
+    [...tellsOf(one)],
+    [
+      [
+        "Jonas: release the move of Jeeves.",
+        { agent: "/agents/sysadmin", words: "Move Jeeves after the local test." },
+      ],
+    ],
+  );
+  // it is no decision, and written once
+  assert.deepEqual([...decisionsOf(one)], []);
+  assert.equal(addTell(one, tell), one);
+  // the options of another ask stand beside it; an ask has the one or the other
+  const decision = {
+    ask: "Jonas: a or b?",
+    options: [
+      { name: "a", tradeoff: "x" },
+      { name: "b", tradeoff: "y" },
+    ],
+    recommend: "a",
+    why: "z",
+  };
+  const two = addDecision(one, decision);
+  assert.deepEqual(
+    [[...tellsOf(two).keys()], [...decisionsOf(two).keys()]],
+    [["Jonas: release the move of Jeeves."], ["Jonas: a or b?"]],
+  );
+  assert.equal(addTell(two, { ...tell, ask: "Jonas: a or b?" }), two);
+  assert.equal(addDecision(one, { ...decision, ask: tell.ask }), one);
+  // words with a colon are kept whole; an agent's path has none
+  assert.deepEqual(tellsOf(addTell(file, { ...tell, words: "Go: now" })).get(tell.ask), {
+    agent: "/agents/sysadmin",
+    words: "Go: now",
+  });
+  // a tell that is not whole changes nothing, and says what it lacks
+  assert.equal(addTell(file, { ...tell, agent: "sysadmin" }), file);
+  // with no words the card names the agent alone
+  assert.match(
+    addTell(file, { ask: tell.ask, agent: "/agents/sysadmin" }),
+    / {2}- Tell: \/agents\/sysadmin\n$/,
+  );
+  assert.deepEqual(
+    tellsOf(addTell(file, { ask: tell.ask, agent: "/agents/sysadmin" })).get(tell.ask),
+    { agent: "/agents/sysadmin", words: "" },
+  );
+  assert.equal(tellFault(tell), "");
+  assert.match(
+    tellFault({ agent: "sysadmin", words: "x" }),
+    /tell\.agent is the path of the agent/,
+  );
+  assert.equal(tellFault({ agent: "/agents/a" }), "");
+  assert.match(tellFault({ agent: "/agents/a", words: 3 }), /tell\.words is a text/);
+  assert.match(tellFault("x"), /tell is \{ agent/);
+  // as a change like the others, named in the commit's message
+  const [written] = commitOf({ "tasks/a.md": file }, [
+    { kind: "tell", path: "tasks/a.md", ...tell },
+  ]);
+  assert.equal(written.content, one);
+  assert.equal(
+    messageOf([{ kind: "tell", path: "tasks/a.md", ...tell }]),
+    'tasks: tasks/a.md: "Jonas: release the move of Jeeves." is answered by a message to /agents/sysadmin',
+  );
+});
+
+test("the agent that acts on an answer hears it first, by the person's own message with the answer as its first line", () => {
+  const task = parseTask("tasks/a.md", "---\nagent: /agents/worker\n---\n# A\n");
+  const followers = [{ agent: "/agents/asker", follows: "tasks/a.md", only: null }];
+  const tell = { agent: "/agents/sysadmin", words: "Go." };
+  assert.deepEqual(receiversOf({ task, asker: { agent: "/agents/asker" }, followers, tell }), [
+    { agent: "/agents/sysadmin", why: "acts on it", hears: "message" },
+    { agent: "/agents/asker", why: "asked", hears: "card" },
+  ]);
+  // it gets the message also when it follows the card, and once when it is the asker too
+  assert.deepEqual(
+    receiversOf({
+      task,
+      asker: { agent: "/agents/sysadmin" },
+      followers: [{ agent: "/agents/sysadmin", follows: "every task", only: null }],
+      tell,
+    }),
+    [{ agent: "/agents/sysadmin", why: "acts on it", hears: "message" }],
+  );
+  // with no asker known, the task's agent is still told
+  assert.deepEqual(receiversOf({ task, asker: {}, followers: [], tell }), [
+    { agent: "/agents/sysadmin", why: "acts on it", hears: "message" },
+    { agent: "/agents/worker", why: "has the task", hears: "message" },
+  ]);
+  // a line that a hand wrote into the card with a path outside /agents/ is no route
+  const forged = "# A\n\n## Decisions\n\n- **Jonas: go?**\n  - Tell: /repos/config: Go.\n";
+  assert.deepEqual([...tellsOf(forged)], []);
+  assert.deepEqual(
+    receiversOf({
+      task,
+      asker: { agent: "/agents/asker" },
+      followers,
+      tell: { agent: "/secrets/x", words: "" },
+    }),
+    [{ agent: "/agents/asker", why: "asked", hears: "card" }],
+  );
+  const said = tellMessage({
+    domain: "example.com",
+    path: "tasks/a.md",
+    title: "A",
+    ask: "Jonas: release it.",
+    answer: " Move it\n now. ",
+    by: "jo@example.com",
+    asker: "/agents/asker",
+  });
+  assert.equal(said.split("\n")[0], "Move it now.");
+  assert.match(
+    said,
+    /\n\n\(jo@example\.com wrote this on the task board, in answer to: "Jonas: release it\.", which \/agents\/asker asked\. The task: "A", https:\/\/tasks\.example\.com\/\?task=tasks%2Fa\.md\. The answer is on the card too, under ## Answers\.\)$/,
+  );
 });

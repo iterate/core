@@ -35,6 +35,7 @@ import {
   newTask,
   parseTask,
   TASKS_DIR,
+  tellFault,
 } from "./public/tasks-model.js";
 
 const oneLine = (value) =>
@@ -120,22 +121,50 @@ async function writeTask(itx, tool, { repo, file, changes, via }) {
  *  (tasks/decision-asks-options-recommendation-and-model-provenance.md, 11:28 UTC). A decision
  *  that is given and is not whole is still refused: the agent meant one, and reads what it lacks.
  *  One call, one ask with a decision. `askRuleOf` answers the decisions to write; `askWarningOf`
- *  the warning, or undefined. */
+ *  the warning, or undefined.
+ *  AN ASK WHOSE ANSWER ANOTHER AGENT ACTS ON names it: `tell: { agent, words? }`, the agent that
+ *  must hear the person's answer (one that acts only on a member's own message) and the words
+ *  that you wait for. The person answers in the one box, which starts with those words, and the
+ *  page sends the answer to that agent as the person's own message. Never write an ask that
+ *  sends a person to another chat. It is no choice, so it takes no decision and gets no warning. */
 const ASK_WARNING =
   'This ask has no options. An ask that is a choice names them: add decision: { options: [{ name: "…", tradeoff: "what it costs or gives" }, …at least two], recommend: "<the name of one>", why: "<why that one>" } to the call that adds the ask. The person then sees the options, your recommendation and, from your own log, which model made it. For an ask that is no choice between options (a thing that only the person can do or see), add noChoice: "<why>" instead. To add them to this ask now: take it off (withdraw) and add it again with its decision. tasks.md of /repos/config, "Asks and answers".';
 const askWarningOf = (input) =>
   [input.ask ?? []].flat().map(oneLine).some(Boolean) &&
   input.decision === undefined &&
+  input.tell === undefined &&
   !oneLine(input.noChoice)
     ? ASK_WARNING
     : undefined;
 function askRuleOf(tool, input) {
   const asks = [input.ask ?? []].flat().map(oneLine).filter(Boolean);
   const decided = Object.hasOwn(input, "decision") && input.decision !== undefined;
+  const told = Object.hasOwn(input, "tell") && input.tell !== undefined;
   if (asks.length === 0) {
-    if (decided || oneLine(input.noChoice))
-      throw new Error(`${tool}: decision and noChoice go with an ask, and this call adds none.`);
+    if (decided || told || oneLine(input.noChoice))
+      throw new Error(
+        `${tool}: decision, tell and noChoice go with an ask, and this call adds none.`,
+      );
     return [];
+  }
+  if (told) {
+    if (decided)
+      throw new Error(
+        `${tool}: an ask has a decision or a tell, not both: the person answers a choice on the card.`,
+      );
+    if (asks.length !== 1)
+      throw new Error(`${tool}: a tell is of ONE ask. Add each such ask in a call of its own.`);
+    const fault = tellFault(input.tell);
+    if (fault) throw new Error(`${tool}: ${fault}`);
+    if (asks[0].includes("**")) throw new Error(`${tool}: an ask with a tell holds no "**".`);
+    return [
+      {
+        kind: "tell",
+        ask: asks[0],
+        agent: input.tell.agent.trim(),
+        words: oneLine(input.tell.words),
+      },
+    ];
   }
   if (decided) {
     if (asks.length !== 1)
@@ -145,7 +174,7 @@ function askRuleOf(tool, input) {
     const fault = decisionFault(input.decision);
     if (fault) throw new Error(`${tool}: ${fault}`);
     if (asks[0].includes("**")) throw new Error(`${tool}: an ask with a decision holds no "**".`);
-    return [{ ask: asks[0], ...input.decision }];
+    return [{ kind: "decision", ask: asks[0], ...input.decision }];
   }
   return [];
 }
@@ -183,7 +212,7 @@ export async function taskOpen(itx, input, deps) {
       { kind: "field", path, field: "owner", value: oneLine(input.owner) },
       { kind: "field", path, field: "agent", value: oneLine(input.agent) },
       ...[input.ask ?? []].flat().map((ask) => ({ kind: "ask", path, ask })),
-      ...decisions.map((decision) => ({ kind: "decision", path, ...decision })),
+      ...decisions.map((decision) => ({ path, ...decision })),
     ]);
     try {
       const { commitOid } = await handle.commitFiles({
@@ -225,7 +254,7 @@ function changesOf(path, input, by, now) {
     ...(named("effort") ? [{ kind: "key", path, key: "effort", value: input.effort }] : []),
     ...(named("blockedOn") ? [{ kind: "blocked", path, blockedOn: input.blockedOn }] : []),
     ...[input.ask ?? []].flat().map((ask) => ({ kind: "ask", path, ask })),
-    ...askRuleOf("taskUpdate", input).map((decision) => ({ kind: "decision", path, ...decision })),
+    ...askRuleOf("taskUpdate", input).map((decision) => ({ path, ...decision })),
     ...(oneLine(input.note)
       ? [{ kind: "note", path, note: input.note, by: by || "someone", at: now.toISOString() }]
       : []),
@@ -352,7 +381,7 @@ export function briefOf({ repo, file, agent, by, words, rules = [] }) {
     "",
     `1. Read it with your \`run\` tool (in a Claude Code or Codex session: the iterate MCP tool \`run\`): async (itx) => await itx.repos.get(${JSON.stringify(repo)}).readFile(${JSON.stringify(file)}). Read tasks.md of /repos/config first: it has the rules for a card.`,
     `2. Follow your card, so that a person's answer reaches you as a message: async (itx) => await itx.config.followTasks({ file: ${JSON.stringify(file)}, agent: ${JSON.stringify(agent)}${also} }).`,
-    `3. Keep the card true while you work, with one call: async (itx) => await itx.config.taskUpdate({ file: ${JSON.stringify(file)}, by: ${JSON.stringify(agent)}, note: "…"${also} }). The same call takes status ("in-progress", "in-review", "done"), blockedOn (what holds you; "" when it is gone) and ask (one question that a person answers in one line: they answer on the board, and the answer comes to you by your follow; name a thing as a Markdown link, [its name](https://…), when it has an address that is safe to share: tasks.md, "Asks and answers"). An ask that is a choice goes with decision: { options: [{ name, tradeoff }, …], recommend, why }: explore the options first, and recommend one. An ask that is no choice goes with noChoice: "<why>". The call takes an ask with neither, and its answer then holds a warning: read it.`,
+    `3. Keep the card true while you work, with one call: async (itx) => await itx.config.taskUpdate({ file: ${JSON.stringify(file)}, by: ${JSON.stringify(agent)}, note: "…"${also} }). The same call takes status ("in-progress", "in-review", "done"), blockedOn (what holds you; "" when it is gone) and ask (one question that a person answers in one line: they answer on the board, and the answer comes to you by your follow; name a thing as a Markdown link, [its name](https://…), when it has an address that is safe to share: tasks.md, "Asks and answers"). An ask that is a choice goes with decision: { options: [{ name, tradeoff }, …], recommend, why }: explore the options first, and recommend one. An ask that is no choice goes with noChoice: "<why>". The call takes an ask with neither, and its answer then holds a warning: read it. Never ask a person to write to another agent: when another agent must hear the answer, add tell: { agent: "/agents/…", words: "<the answer that you wait for>" }, and the board sends the person's answer on to it. When the person answers you anywhere else (your chat, Slack), record it at once with itx.config.answerTask.`,
     "4. Send no status messages: whoever needs your state reads the card or follows it.",
     '5. Close out your own card: ONE call with status "done" (or "in-review" when a person must look first) and a note that says what is done and how you proved it. What is left of THIS card\'s work keeps the card open: write it on the card. A fault or a job that you found and that is no part of this card gets a card of its own (taskOpen) BEFORE you close, and your last note names it.',
     ...rules,

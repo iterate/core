@@ -1553,3 +1553,9 @@ a.needs-asker:hover {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.75rem;
 }
+
+/* Above the box of an ask whose answer another agent acts on (app.js `Ask`): where it goes. */
+.needs-tell {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+}

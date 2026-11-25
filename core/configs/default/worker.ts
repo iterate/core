@@ -18,6 +18,7 @@ import type { EmailHookArgs } from "iterate/email";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { ConfigApi, TASKS_BOARD_REPO } from "./api.ts";
 import { dashApp } from "./apps/dash/app.ts";
+import { framedSignIn } from "./apps/dash/framed-sign-in.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { meetApp } from "./apps/meet/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
@@ -59,7 +60,11 @@ export default class extends ConfigApi {
     const route = async (request: Request): Promise<Response> => {
       switch (new URL(request.url).hostname.split(".")[0]) {
         case "dash": // the Dash, for members: the mind seen from above, and a chat with every agent
-          return dash.open(request) || this.auth.require(request) || dash.fetch(request, this);
+          return (
+            dash.open(request) ||
+            framedSignIn(request, this.auth.require(request)) ||
+            dash.fetch(request, this)
+          );
         case "docs": // Docs, for members: the files of the mind's repos, written together
           return docs.open(request) || this.auth.require(request) || docs.fetch(request, this);
         case "meet": // Meet, for members and their guests: its own routes ask for who they need

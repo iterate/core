@@ -87,6 +87,8 @@ import {
   agoOf,
   answerMessage,
   decisionsOf,
+  tellMessage,
+  tellsOf,
   keeperOf,
   PRIORITIES,
   pressOf,
@@ -521,8 +523,15 @@ const showEverything = () =>
   });
 
 /** A value as a person reads it: an agent is its path's last part. */
-const valueLabel = (dimension, value) =>
-  dimension.id === "agent" ? value.split("/").filter(Boolean).at(-1) || value : value;
+const valueLabel = (dimension, value) => {
+  if (dimension.id !== "agent") return value;
+  const last = value.split("/").filter(Boolean).at(-1) || value;
+  // a coding session that a person started is named by its id alone: its first eight characters
+  // tell it from the others, and the whole path is in each link's title
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(last)
+    ? `session ${last.slice(0, 8)}`
+    : last;
+};
 
 // ── a status's mark ──
 // A ring that fills as the work goes on, as issue trackers draw it: dashed for the backlog, open
@@ -1230,10 +1239,10 @@ const useAnswered = () =>
  *  person answered, and for an asker that does not follow the card a message to it
  *  (tasks-model.js `receiversOf`, `answerMessage`). The message goes from this person's own
  *  session to the agent that asked, and through no other agent. */
-function sendAnswer({ task, ask, answer, asker, followers }) {
+function sendAnswer({ task, ask, answer, asker, followers, tell }) {
   const by = principal?.email || principal?.actor || "someone";
   const at = new Date().toISOString();
-  const receivers = receiversOf({ task, asker, followers: followers ?? [] });
+  const receivers = receiversOf({ task, asker, followers: followers ?? [], tell });
   board.change({ kind: "answer", path: task.path, ask, answer, by, at });
   answeredStore.add({
     at,
@@ -1248,7 +1257,7 @@ function sendAnswer({ task, ask, answer, asker, followers }) {
     itx.agents
       .get(agent)
       .message(
-        answerMessage({
+        (why === "acts on it" ? tellMessage : answerMessage)({
           domain,
           repo: REPO_NAME,
           path: task.path,
@@ -1257,6 +1266,7 @@ function sendAnswer({ task, ask, answer, asker, followers }) {
           answer,
           by,
           why,
+          asker: asker?.agent,
         }),
       )
       .then(
@@ -1373,7 +1383,7 @@ function Blocking({ asker }) {
  *  MODEL made the turn that asked, by the asker's own log (`itx.config.taskAskers`, `model`), or
  *  "model unrecorded" when no event says. A click on an option writes its name into the answer
  *  box; the person still sends it. An ask with no options shows the model's line alone. */
-function Decision({ decision, asker, onPick }) {
+function Decision({ decision, asker, onPick, bare = false }) {
   const model = asker?.model;
   const by = !asker
     ? null
@@ -1390,8 +1400,7 @@ function Decision({ decision, asker, onPick }) {
           title="No event of the asker's own log says which model made this turn. The card's model key and an agent's own words are not read as evidence."
           >model unrecorded</span
         >`;
-  if (!decision)
-    return by && html`<div class="needs-decision" data-bare>The turn that asked: ${by}</div>`;
+  if (!decision) return bare ? by : null;
   return html`
     <div class="needs-decision">
       <ul aria-label="Options">
@@ -1604,7 +1613,23 @@ function AnsweredRow({ row, path }) {
  *  task's text (tasks-model.js `answerAsk`). The agent that follows the task hears of that commit
  *  (apps/tasks/feed.js), so nobody has to tell it. */
 function Ask({ task, ask, asker, followers }) {
-  const [answer, setAnswer] = useState("");
+  // an ask whose answer ANOTHER AGENT acts on (the card's text says so: tasks-model.js `tellsOf`):
+  // the answer given here goes to that agent too, as the person's own message, and the box
+  // starts with the words that the asker waits for. Jonas, 25 Nov 2026, of an ask that sent him
+  // to another agent's chat: "i am the same person with the same level of authentication in both
+  // places. it should make zero difference where i post"
+  const tell = useMemo(() => tellsOf(task.source).get(ask), [task.source, ask]);
+  const [answer, setAnswer] = useState(() => tell?.words || "");
+  // A DRAFT IS OF ONE ROUTE. When the card changes where the answer goes, or the words that it
+  // waits for, what stands in the box was written for the route before: it is dropped, and the
+  // box starts again with the new words, under the line that names the new agent.
+  const route = tell ? `${tell.agent}\n${tell.words}` : "";
+  const routed = useRef(route);
+  useEffect(() => {
+    if (routed.current === route) return;
+    routed.current = route;
+    setAnswer(tell?.words || "");
+  }, [route]);
   // the box grows with what is typed: a long answer is read whole before it is sent
   const box = useRef(null);
   useEffect(() => {
@@ -1618,7 +1643,6 @@ function Ask({ task, ask, asker, followers }) {
   return html`
     <li>
       <span class="needs-question"><${Linked} text=${ask} /></span>
-      <${Blocking} asker=${asker} />
       <${Decision}
         decision=${decision}
         asker=${asker}
@@ -1627,20 +1651,29 @@ function Ask({ task, ask, asker, followers }) {
           box.current?.focus();
         }}
       />
-      <div class="needs-who">
-        <${Asker} task=${task} asker=${asker} />
-        <${AskMessage} asker=${asker} />
-        ${asker?.at && html`<span class="needs-ago" title=${`Asked on ${asker.at.slice(0, 16).replace("T", " ")} UTC`}>${agoWords(asker.at)}</span>`}
-        <${Huh} task=${task} ask=${ask} asker=${asker} />
-        ${chatAgent && html`<${ChatButton} agent=${chatAgent} about=${task.title} />`}
-      </div>
-      <${Stale} task=${task} ask=${ask} asker=${asker} />
+      ${
+        // WHERE THE ANSWER GOES IS SAID BEFORE IT CAN BE SENT: from the card's own text, so it
+        // stands here while the asker and the followers are still being read
+        tell &&
+        html`<p class="needs-tell">
+          Your answer goes to${" "}
+          <a
+            class="needs-link"
+            href=${agentHref(tell.agent)}
+            target="_blank"
+            rel="noreferrer"
+            title=${`${tell.agent} acts on your answer. Opens its chat in the Dash.`}
+            >${tell.agent}</a
+          >
+          ${" "}as a message from you, and onto the card.
+        </p>`
+      }
       <form
         class="needs-answer"
         onSubmit=${(event) => {
           event.preventDefault();
           if (!answer.trim()) return;
-          sendAnswer({ task, ask, answer, asker, followers });
+          sendAnswer({ task, ask, answer, asker, followers, tell });
         }}
       >
         <textarea
@@ -1664,23 +1697,36 @@ function Ask({ task, ask, asker, followers }) {
             event.currentTarget.form.requestSubmit();
           }}
         ></textarea>
-        <${Button} type="submit" variant="outline" size="sm" disabled=${!answer.trim()}>Answer<//>
+        <${Button} type="submit" variant="outline" size="sm" disabled=${!answer.trim()}
+          >${tell ? `Send to ${valueLabel(DIMENSION.agent, tell.agent)}` : "Answer"}<//
+        >
       </form>
-      ${asker && followers && html`<${Receivers} receivers=${receiversOf({ task, asker, followers })} />`}
+      ${asker && followers && html`<${Receivers} receivers=${receiversOf({ task, asker, followers, tell })} />`}
+      <div class="needs-who">
+        <${Asker} task=${task} asker=${asker} />
+        ${!decision && html`<${Decision} asker=${asker} bare />`}
+        <${AskMessage} asker=${asker} />
+        ${asker?.at && html`<span class="needs-ago" title=${`Asked on ${asker.at.slice(0, 16).replace("T", " ")} UTC`}>${agoWords(asker.at)}</span>`}
+        <${Huh} task=${task} ask=${ask} asker=${asker} />
+        ${chatAgent && html`<${ChatButton} agent=${chatAgent} about=${task.title} />`}
+      </div>
+      <${Stale} task=${task} ask=${ask} asker=${asker} />
+      <${Blocking} asker=${asker} />
     </li>
   `;
 }
 
 /** UNDER A TASK OF "Needs a person": what a person reads before they answer, from the task's own
- *  file (tasks-model.js `contextOf`): the newest note of its log, always shown, and behind "Context"
- *  the text under its title and the notes before that one. The agent that has the task is a link
- *  to its chat. So a person decides here, and opens the task or the chat only for more. */
+ *  file (tasks-model.js `contextOf`), all behind "Context": what holds the task (`blocked-on:`),
+ *  the notes of its log, the newest first, and the text under its title. The agent that has the
+ *  task is a link to its chat. Closed until the person opens it: beside an ask stands the one
+ *  act that answers it, and what explains the task does not compete with it (Jonas, 25 Nov 2026:
+ *  "what is all this?! what am i meant to take from it"). */
 function Context({ task }) {
   const { about, notes } = useMemo(() => contextOf(task.source), [task.source]);
-  if (!about && notes.length === 0 && !agentHref(task.agent)) return null;
+  if (!about && notes.length === 0 && !task.blockedOn && !agentHref(task.agent)) return null;
   return html`
     <div class="needs-context">
-      ${notes[0] && html`<p class="needs-note" title="The newest note of the task's log"><${Linked} text=${notes[0]} /></p>`}
       <details>
         <summary>
           Context
@@ -1697,8 +1743,9 @@ function Context({ task }) {
             </a>`
           }
         </summary>
+        ${task.blockedOn && html`<p class="needs-blocked">Blocked on: <${Linked} text=${task.blockedOn} /></p>`}
+        ${notes.map((note) => html`<p key=${note} class="needs-note"><${Linked} text=${note} /></p>`)}
         ${about ? html`<p class="needs-about"><${Linked} text=${about} /></p>` : html`<p class="needs-about">The task has no text under its title.</p>`}
-        ${notes.slice(1).map((note) => html`<p key=${note} class="needs-note"><${Linked} text=${note} /></p>`)}
       </details>
     </div>
   `;
@@ -1843,7 +1890,6 @@ function NeedsPage({ state, tasks: every, filtered, view }) {
                 </details>
               `
             }
-            ${task.blockedOn && html`<p class="needs-blocked">Blocked on: <${Linked} text=${task.blockedOn} /></p>`}
             <${Context} task=${task} />
           </li>
         `,

@@ -10,6 +10,8 @@ import { agentPathOf } from "./public/share-links.js";
  *  are refused before (`agentPathOf`). */
 export function isAgentOf(catalog: unknown, path: string): boolean {
   if (!agentPathOf(path)) return false;
+  // the catalog's live state is `unknown` to its reader: iterate/agents writes `agents` as a map
+  // from a path to its row, and a state of any other shape has no row for the path
   const agents = (
     catalog as { agents?: Record<string, { kind?: string; title?: string } | null> } | null
   )?.agents;

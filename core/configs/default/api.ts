@@ -311,10 +311,10 @@ export abstract class ConfigApi extends IterateConfigEntrypoint {
   }
 
   /** `itx.config.taskUpdate({ file, status?, title?, owner?, agent?, tags?, model?, effort?,
-   *  blockedOn?, ask?, decision?, noChoice?, withdraw?, reword?, note?, repo?, by? })`: one commit
+   *  blockedOn?, ask?, decision?, tell?, noChoice?, withdraw?, reword?, note?, repo?, by? })`: one commit
    *  that keeps a card true, with no YAML by hand (apps/tasks/cards.js; tasks.md). `blockedOn: ""`
-   *  takes the blocker away; `ask` is one more question for a person, with its `decision` or
-   *  `noChoice`; `withdraw: { ask, why }` takes an ask off that nobody has to answer any more, and
+   *  takes the blocker away; `ask` is one more question for a person, with its `decision`, its
+   *  `tell: { agent, words? }` (the agent that acts on the answer) or `noChoice`; `withdraw: { ask, why }` takes an ask off that nobody has to answer any more, and
    *  `reword: { ask, to }` writes one again in plain words; `note` is one line under `## Log`.
    *  `by`: the agent that makes the change, when the call comes from no agent's context (the MCP
    *  `run` tool). It answers `{ repo, file, commitOid, changed, card }`. */
@@ -346,6 +346,9 @@ export abstract class ConfigApi extends IterateConfigEntrypoint {
    *  worker.ts's class: cards.js lists them (`linkNote`, `briefRules`, `startWorker`,
    *  `sessionState`). */
   protected taskDeps(itx: object) {
+    // Two casts, both of shapes that this file cannot name more closely: `itx` is the root's
+    // handle, which has `cd(path).facets` as `CatalogItx` asks; and the catalog's live state is
+    // `unknown` to its reader, with `agents` a map by path (iterate/agents writes it).
     const catalog = async () =>
       (await agentCatalogOf(itx as CatalogItx)) as { agents?: Record<string, unknown> } | null;
     return {

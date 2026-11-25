@@ -787,3 +787,82 @@ test("an ask that is a choice brings its options and a recommendation, or says w
     /An ask that is a choice goes with decision: \{ options: \[\{ name, tradeoff \}, …\], recommend, why \}.* its answer then holds a warning/,
   );
 });
+
+test("an ask whose answer another agent acts on names that agent, and the words that the asker waits for", async () => {
+  const mind = fakeMind({ caller: EM });
+  const file = "tasks/fix-the-bar.md";
+  const told = await taskUpdate(
+    mind.itx,
+    {
+      file,
+      ask: "Jonas: release the move of Jeeves.",
+      tell: { agent: " /agents/sysadmin ", words: "Move Jeeves after the local test." },
+    },
+    mind.deps,
+    NOW,
+  );
+  // it is no choice: no warning, and the card keeps where the answer goes
+  assert.equal(told.warning, undefined);
+  assert.deepEqual(told.card.humanAsk, ["Jonas: release the move of Jeeves."]);
+  assert.match(
+    mind.file(file),
+    /\n## Decisions\n\n- \*\*Jonas: release the move of Jeeves\.\*\*\n {2}- Tell: \/agents\/sysadmin: Move Jeeves after the local test\.\n/,
+  );
+  assert.match(
+    mind.commits[0].message,
+    /"Jonas: release the move of Jeeves\." is answered by a message to \/agents\/sysadmin/,
+  );
+  // what is refused, in words, and writes nothing
+  const before = mind.commits.length;
+  await assert.rejects(
+    taskUpdate(
+      mind.itx,
+      { file, ask: "A?", tell: { agent: "sysadmin", words: "x" } },
+      mind.deps,
+      NOW,
+    ),
+    /tell\.agent is the path of the agent/,
+  );
+  await assert.rejects(
+    taskUpdate(
+      mind.itx,
+      { file, ask: ["A?", "B?"], tell: { agent: "/agents/a", words: "x" } },
+      mind.deps,
+      NOW,
+    ),
+    /a tell is of ONE ask/,
+  );
+  await assert.rejects(
+    taskUpdate(mind.itx, { file, tell: { agent: "/agents/a", words: "x" } }, mind.deps, NOW),
+    /go with an ask, and this call adds none/,
+  );
+  await assert.rejects(
+    taskUpdate(
+      mind.itx,
+      {
+        file,
+        ask: "A?",
+        tell: { agent: "/agents/a", words: "x" },
+        decision: {
+          options: [
+            { name: "a", tradeoff: "x" },
+            { name: "b", tradeoff: "y" },
+          ],
+          recommend: "a",
+          why: "z",
+        },
+      },
+      mind.deps,
+      NOW,
+    ),
+    /a decision or a tell, not both/,
+  );
+  assert.equal(mind.commits.length, before);
+  // a new card takes one too
+  const opened = await taskOpen(
+    mind.itx,
+    { title: "Release", ask: "Jonas: say go.", tell: { agent: "/agents/sysadmin", words: "Go." } },
+    mind.deps,
+  );
+  assert.match(mind.file(opened.file), / {2}- Tell: \/agents\/sysadmin: Go\.\n/);
+});

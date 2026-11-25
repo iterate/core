@@ -973,6 +973,7 @@ export function counts(tasks, valuesOf) {
  *  calls (../cards.js, ../asks.js) make them all. */
 const CHANGES = {
   decision: (source, change) => addDecision(source, change),
+  tell: (source, change) => addTell(source, change),
   status: (source, change) => setStatus(source, change.status),
   title: (source, change) => setTitle(source, change.title),
   field: (source, change) => setField(source, change.field, change.value),
@@ -1027,6 +1028,11 @@ export function messageOf(changes) {
       last.set(
         `${change.path}\0answer\0${change.ask}`,
         `${change.path}: answered "${shortOf(change.ask)}"`,
+      );
+    else if (change.kind === "tell")
+      last.set(
+        `${change.path}\0tell\0${change.ask}`,
+        `${change.path}: "${shortOf(String(change.ask))}" is answered by a message to ${change.agent}`,
       );
     else if (change.kind === "decision")
       last.set(
@@ -1220,9 +1226,12 @@ export function talkDraft({ domain, repo = TASKS_REPO.split("/").at(-1), tasks, 
  *    - the agent that has the task, when it is another one and follows the card
  *      (`why: "has the task"`, `hears: "card"`). When no agent is known to have asked, it is
  *      listed also when it does not follow the card, and then gets the message.
+ *    - the agent that ACTS on the answer, when the ask names one (`tell`, tasks-model.js
+ *      `tellsOf`; `why: "acts on it"`): first, and always by a message that the page sends it
+ *      from the person (`tellMessage`), whether it follows the card or not.
  *  An agent that follows every task (a manager) is not listed for that alone: an answer goes to
  *  the agent that asked, and through nobody. */
-export function receiversOf({ task, asker, followers = [] }) {
+export function receiversOf({ task, asker, followers = [], tell }) {
   const follows = (agent, wide) =>
     followers.some(
       (row) =>
@@ -1232,17 +1241,21 @@ export function receiversOf({ task, asker, followers = [] }) {
     );
   const isPath = (value) => typeof value === "string" && value.startsWith("/");
   const out = [];
-  if (isPath(asker?.agent))
+  // the agent that acts on the answer gets the person's own words, from the person: a line of a
+  // card's diff is no member's message
+  if (tell && !tellFault(tell))
+    out.push({ agent: tell.agent, why: "acts on it", hears: "message" });
+  if (isPath(asker?.agent) && asker.agent !== tell?.agent)
     out.push({
       agent: asker.agent,
       why: "asked",
       hears: follows(asker.agent, true) ? "card" : "message",
     });
-  if (isPath(task.agent) && task.agent !== asker?.agent) {
+  if (isPath(task.agent) && task.agent !== asker?.agent && task.agent !== tell?.agent) {
     if (follows(task.agent, false))
       out.push({ agent: task.agent, why: "has the task", hears: "card" });
     // nobody is known to have asked: the agent that has the task is told, so that an answer is heard
-    else if (out.length === 0)
+    else if (!isPath(asker?.agent))
       out.push({ agent: task.agent, why: "has the task", hears: "message" });
   }
   return out;
@@ -1277,6 +1290,32 @@ export function answerMessage({
     }`,
     "",
     "The answer is in the card's text under ## Answers, and the ask is off the card. You get this message because you do not follow the card. Reply here if something is unclear: the person reads this chat.",
+  ].join("\n");
+}
+
+/** WHAT THE PAGE SENDS THE AGENT THAT ACTS ON AN ANSWER (`receiversOf`, "acts on it"): THE
+ *  PERSON'S OWN WORDS FIRST, as they would write them in that agent's chat, then where they were
+ *  given. It comes from the person's own session on the task board, so the platform stamps it as
+ *  that person's message. Whether those words release anything is the agent's own rule. */
+export function tellMessage({
+  domain,
+  repo = TASKS_REPO.split("/").at(-1),
+  path,
+  title,
+  ask,
+  answer,
+  by,
+  asker,
+}) {
+  const query = new URLSearchParams(
+    repo === TASKS_REPO.split("/").at(-1) ? { task: path } : { repo, task: path },
+  );
+  return [
+    String(answer ?? "")
+      .replace(/\s+/g, " ")
+      .trim() || "(no words)",
+    "",
+    `(${by} wrote this on the task board, in answer to: "${ask}"${asker ? `, which ${asker} asked` : ""}. The task: ${title ? `"${title}", ` : ""}https://tasks.${domain}/?${query}. The answer is on the card too, under ## Answers.)`,
   ].join("\n");
 }
 
@@ -1327,7 +1366,7 @@ export function decisionFault(decision) {
  *  (`decisionFault`), or an ask that has a block already, changes nothing. */
 export function addDecision(source, { ask, options, recommend, why }) {
   const said = lineOf(ask);
-  if (!said || decisionFault({ options, recommend, why }) || decisionsOf(source).has(said))
+  if (!said || decisionFault({ options, recommend, why }) || blocksOf(source).has(said))
     return source;
   const { bodyAt, eol } = frontmatterOf(source);
   const block = [
@@ -1344,13 +1383,68 @@ export function addDecision(source, { ask, options, recommend, why }) {
  *  to `{ options: [{ name, tradeoff }], recommend, why }`. A block with no "Recommended" line is
  *  left out. */
 export function decisionsOf(source) {
+  return new Map(
+    [...blocksOf(source)]
+      .filter(([, block]) => block.recommend)
+      .map(([ask, { options, recommend, why }]) => [ask, { options, recommend, why }]),
+  );
+}
+
+// ── an ask that a person answers by a message to another agent ──
+
+/** WHAT IS WRONG WITH `tell`, as words, or "" for one that is whole: `agent`, the path of the
+ *  agent that acts on the person's answer, and `words` (it may be left out): the answer that the
+ *  asker waits for, as one line, which the answer box starts with. */
+export function tellFault(tell) {
+  if (!tell || typeof tell !== "object" || Array.isArray(tell))
+    return 'tell is { agent: "/agents/…", words?: "the answer that you wait for" }.';
+  if (typeof tell.agent !== "string" || !/^\/agents\/\S+$/.test(tell.agent.trim()))
+    return 'tell.agent is the path of the agent that acts on the answer, like "/agents/sysadmin".';
+  if (tell.words !== undefined && typeof tell.words !== "string")
+    return "tell.words is a text: the words that you wait for, which the answer box starts with.";
+  return "";
+}
+
+/** THE FILE WITH WHICH AGENT ACTS ON ONE ASK'S ANSWER WRITTEN DOWN, and every other byte as it
+ *  was. Under `## Decisions`, as an ask's options are:
+ *      - **<the ask>**
+ *        - Tell: <the agent's path>: <the words that the asker waits for>
+ *  Jonas, 25 Nov 2026, of an ask that told him to write in another agent's chat and stood above
+ *  an answer box: "what is all this?! what am i meant to take from it", and then: "it should make
+ *  zero difference where i post". So the person answers in the one box, and the page sends the
+ *  answer on to that agent as the person's own message (`receiversOf`, `tellMessage`). A `tell`
+ *  that is not whole, or an ask that has a block already, changes nothing. */
+export function addTell(source, { ask, agent, words }) {
+  const said = lineOf(ask);
+  if (!said || tellFault({ agent, words }) || blocksOf(source).has(said)) return source;
+  const { bodyAt, eol } = frontmatterOf(source);
+  const block = [
+    `- **${said}**`,
+    `  - Tell: ${agent.trim()}${lineOf(words) ? `: ${lineOf(words)}` : ""}`,
+  ].join(eol);
+  return (
+    source.slice(0, bodyAt) + withLineUnder(source.slice(bodyAt), DECISIONS_HEADING, block, eol)
+  );
+}
+
+/** WHICH AGENT ACTS ON THE ANSWER OF EACH ASK THAT NAMES ONE (`addTell` wrote it): a Map from an
+ *  ask's whole text to `{ agent, words }`; `words` is "" when the asker named none. */
+export function tellsOf(source) {
+  return new Map(
+    [...blocksOf(source)]
+      .filter(([, block]) => block.tell)
+      .map(([ask, block]) => [ask, block.tell]),
+  );
+}
+
+/** Every block under `## Decisions`, by its ask: `{ options, recommend, why, tell }`. */
+function blocksOf(source) {
   const found = new Map();
   let fenced = false;
   let inside = false;
   let now = null;
   const close = () => {
-    if (now?.recommend)
-      found.set(now.ask, { options: now.options, recommend: now.recommend, why: now.why });
+    if (now && (now.recommend || now.tell)) found.set(now.ask, now);
     now = null;
   };
   for (const line of String(source ?? "")
@@ -1367,10 +1461,10 @@ export function decisionsOf(source) {
     const head = /^- \*\*(.+)\*\*\s*$/.exec(line);
     if (head) {
       close();
-      now = { ask: head[1], options: [], recommend: "", why: "" };
+      now = { ask: head[1], options: [], recommend: "", why: "", tell: null };
       continue;
     }
-    const part = now && /^\s+- (Option|Recommended): (.*)$/.exec(line);
+    const part = now && /^\s+- (Option|Recommended|Tell): (.*)$/.exec(line);
     if (!part) continue;
     // a name holds no ": " (a link's "https://" has none): the first one ends it
     const cut = part[2].indexOf(": ");
@@ -1378,7 +1472,10 @@ export function decisionsOf(source) {
       cut < 0
         ? [part[2].trim(), ""]
         : [part[2].slice(0, cut).trim(), part[2].slice(cut + 2).trim()];
-    if (part[1] === "Option") now.options.push({ name, tradeoff: rest });
+    // a path that `taskUpdate` would refuse is no route, whoever wrote the line (`tellFault`)
+    if (part[1] === "Tell")
+      now.tell = tellFault({ agent: name, words: rest }) ? null : { agent: name, words: rest };
+    else if (part[1] === "Option") now.options.push({ name, tradeoff: rest });
     else [now.recommend, now.why] = [name, rest];
   }
   close();
