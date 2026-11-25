@@ -132,16 +132,19 @@ export async function membersResponse(
   const email = String(form?.get("email") || "");
   const action = form?.get("action");
   if (action === "remove-keys" || action === "link") {
-    const [type, act] =
+    if (!owner) return membersPage(env, { owner, error: "Only an owner does this." });
+    const makeLink = action === "remove-keys" ? form?.get("make-link") === "1" : undefined;
+    const type = action === "link" ? MEMBER_LINK_MADE : MEMBER_KEYS_REMOVED;
+    const press = await ownerPress(env, session, form?.get("signed"), type, email, makeLink);
+    if ("error" in press) return membersPage(env, { owner, error: press.error });
+    const outcome =
       action === "link"
-        ? ([MEMBER_LINK_MADE, memberLink] as const)
-        : ([MEMBER_KEYS_REMOVED, removeKeys] as const);
-    const press = owner
-      ? await ownerPress(env, session, form?.get("signed"), type, email)
-      : { error: "Only an owner does this." };
-    const outcome = "error" in press ? press : await act(env, session, email, press);
+        ? await memberLink(env, session, email, press)
+        : await removeKeys(env, session, email, press, Boolean(makeLink));
     if ("error" in outcome) return membersPage(env, { owner, error: outcome.error });
-    return outcome.facts.on(await membersPage(env, { owner, notice: outcome.notice }));
+    return outcome.facts.on(
+      await membersPage(env, { owner, notice: outcome.notice, createdLink: outcome.link }),
+    );
   }
   if (action === "block" || action === "unblock") {
     const outcome = owner
@@ -335,19 +338,21 @@ async function remove(env: Env, actor: Actor, typed: string): Promise<Outcome> {
   return { facts };
 }
 
-// A lost passkey's way back in, with the link below: an owner removes the member's keys, and
-// makes the member a sign-in link. Never for an owner's keys: no owner takes another owner's keys
-// away, and an owner with no passkey left comes back by the recovery command (./enrolment.ts).
+// A lost passkey's way back in: an owner removes the member's keys and can make them a new
+// sign-in link in the same signed step. Never for an owner's keys: no owner takes another owner's
+// keys away, and an owner with no passkey left comes back by the recovery command (./enrolment.ts).
 /** AN OWNER'S ACT ON ANOTHER MEMBER'S WAY IN TAKES THE OWNER'S PASSKEY. A link for a member lets a
- *  new key act as that member, and the removal of a member's keys is the step before one. So
- *  each is a statement of `type` that names the member, signed by a passkey of the owner whose
- *  session posts it. A session alone, which can be stolen, does neither. */
+ *  new key act as that member, and the removal of a member's keys is the step before one. So each
+ *  is a statement of `type` that names the member (and, for key removal, whether a link is made
+ *  with it), signed by a passkey of the owner whose session posts it. A session alone, which can
+ *  be stolen, does neither. */
 async function ownerPress(
   env: Env,
   actor: Actor,
   signed: unknown,
   type: string,
   typed: string,
+  makeLink?: boolean,
 ): Promise<SignedChange | { error: string }> {
   const change = await signedChangeBy(env, signed, type, actor.email);
   if ("refused" in change)
@@ -356,7 +361,33 @@ async function ownerPress(
     };
   if (change.payload.email !== typed.trim().toLowerCase())
     return { error: "Nothing was changed: the signed statement names another member." };
+  if (makeLink !== undefined && Boolean(change.payload.makeLink) !== makeLink)
+    return { error: "Nothing was changed: the signed statement does not match this request." };
   return change;
+}
+
+type CreatedLink = { email: string; url: string };
+
+async function issueMemberLink(
+  env: Env,
+  actor: Actor,
+  email: string,
+  press: SignedChange,
+  facts: AccountFacts,
+): Promise<CreatedLink> {
+  const ticket = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const expires = Date.now() + ENROLMENT_MS;
+  await env.DB.prepare(
+    "insert into member_tickets (hash, email, made_by, expires_at) values (?1, ?2, ?3, ?4)",
+  )
+    .bind(await sha256Hex(ticket), email, actor.email, expires)
+    .run();
+  facts.add(actor.userId, {
+    type: MEMBER_LINK_MADE,
+    payload: { email, expires, ...signerOf(press) },
+  });
+  console.info({ event: "auth.member-link-made", by: actor.userId });
+  return { email, url: `${issuerOf(env)}${FIRST_PASSKEY_PATH}#${ticket}` };
 }
 
 async function removeKeys(
@@ -364,7 +395,8 @@ async function removeKeys(
   actor: Actor,
   typed: string,
   press: SignedChange,
-): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
+  makeLink: boolean,
+): Promise<{ facts: AccountFacts; notice: string; link?: CreatedLink } | { error: string }> {
   const email = typed.trim().toLowerCase();
   if (isOwner(configOf(env), email))
     return {
@@ -378,7 +410,12 @@ async function removeKeys(
   )
     .bind(at, email)
     .all<{ id: string; label: string; userId: string }>();
-  if (!results.length) return { error: `${email} has no keys here.` };
+  if (!results.length)
+    return {
+      error: (await isMember(env, email))
+        ? `${email} has no keys here. Make a sign-in link for them below.`
+        : `${email} has no keys here.`,
+    };
   const facts = new AccountFacts();
   // what the lost device was given outlives its passkey: the apps, the CLI, a hostname's cookie
   await endAllOf(env, results[0]!.userId, facts);
@@ -389,9 +426,23 @@ async function removeKeys(
       idempotencyKey: `account/key-removed:${key.id}:${at}`,
     });
   console.info({ event: "auth.member-keys-removed", by: actor.userId, keys: results.length });
+  if (makeLink) {
+    if (await isMember(env, email)) {
+      const link = await issueMemberLink(env, actor, email, press, facts);
+      return {
+        facts,
+        notice: `${email} has no keys now, and is signed out of every app and device.`,
+        link,
+      };
+    }
+    return {
+      facts,
+      notice: `${email} has no keys now, and is signed out of every app and device. No sign-in link was made because ${email} is not a member.`,
+    };
+  }
   return {
     facts,
-    notice: `${email} has no keys now, and is signed out of every app and device. Make a sign-in link for this member below: it lets them add a new passkey. A code by email does not.`,
+    notice: `${email} has no keys now, and is signed out of every app and device. Make a sign-in link for this member below when you are ready: it lets them add a new passkey. A code by email does not.`,
   };
 }
 
@@ -405,7 +456,7 @@ async function memberLink(
   actor: Actor,
   typed: string,
   press: SignedChange,
-): Promise<{ facts: AccountFacts; notice: string } | { error: string }> {
+): Promise<{ facts: AccountFacts; notice?: string; link: CreatedLink } | { error: string }> {
   const email = typed.trim().toLowerCase();
   if (isOwner(configOf(env), email))
     return {
@@ -419,23 +470,9 @@ async function memberLink(
     return {
       error: `${email} has a passkey here. If it is lost, remove this member's keys first: then the link lets them add a new one.`,
     };
-  const ticket = base64url(crypto.getRandomValues(new Uint8Array(32)));
-  const expires = Date.now() + ENROLMENT_MS;
-  await env.DB.prepare(
-    "insert into member_tickets (hash, email, made_by, expires_at) values (?1, ?2, ?3, ?4)",
-  )
-    .bind(await sha256Hex(ticket), email, actor.email, expires)
-    .run();
   const facts = new AccountFacts();
-  facts.add(actor.userId, {
-    type: MEMBER_LINK_MADE,
-    payload: { email, expires, ...signerOf(press) },
-  });
-  console.info({ event: "auth.member-link-made", by: actor.userId });
-  return {
-    facts,
-    notice: `Give this link to ${email}, and to nobody else. It works once, within 24 hours, and is not shown again: ${issuerOf(env)}${FIRST_PASSKEY_PATH}#${ticket}`,
-  };
+  const link = await issueMemberLink(env, actor, email, press, facts);
+  return { facts, link };
 }
 
 // For a person who is no member: an app's end user, who signs in with a code by email. A member
@@ -517,7 +554,12 @@ async function unblock(
 
 async function membersPage(
   env: Env,
-  { owner, error, notice }: { owner: boolean; error?: string; notice?: string },
+  {
+    owner,
+    error,
+    notice,
+    createdLink,
+  }: { owner: boolean; error?: string; notice?: string; createdLink?: CreatedLink },
 ) {
   const mind = configOf(env).controlPlaneHostname;
   const { owners, ownerPatterns, added } = await membersOf(env);
@@ -568,13 +610,61 @@ async function membersPage(
         )
         .join("")
     : "";
+  const callout = createdLink
+    ? `<section class="link-callout" aria-live="polite">
+        <p><strong>Sign-in link for ${text(createdLink.email)}</strong></p>
+        ${notice ? `<p>${text(notice)}</p>` : ""}
+        <div class="link-row">
+          <input type="text" class="link-value" value="${text(createdLink.url)}" readonly aria-label="One-time sign-in link for ${text(createdLink.email)}" data-select-on-focus>
+          <button type="button" data-copy="${text(createdLink.url)}">Copy link</button>
+        </div>
+        <p class="muted" role="status" data-copy-status></p>
+        <p class="muted">Give this link to ${text(createdLink.email)}, and to nobody else. It works once, within 24 hours, to add a new passkey, and is not shown again.</p>
+      </section>`
+    : error
+      ? `<p role="alert"><strong>${text(error)}</strong></p>`
+      : notice
+        ? `<p><strong>${text(notice)}</strong></p>`
+        : "";
   return page({
     title: `Members of ${mind}`,
     wide: true,
     status: error ? 400 : 200,
+    style: createdLink
+      ? `
+.link-callout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 1rem 1.125rem;
+  border: 1px solid color-mix(in oklab, var(--success) 35%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--success) 6%, var(--card));
+}
+.link-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+.link-row > .link-value {
+  box-sizing: border-box;
+  flex: 1 1 16rem;
+  min-width: 0;
+  max-width: none;
+  min-height: 2.25rem;
+  background: var(--card);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.8125rem;
+}
+.link-row > button {
+  flex: none;
+  white-space: nowrap;
+}`
+      : undefined,
     body: `<h1>Members of ${text(mind)}</h1>
       <p>A member can use everything in this mind, and add or remove members.</p>
-      ${error || notice ? `<p><strong>${text(error || notice || "")}</strong></p>` : ""}
+      ${callout}
       <ul>${ownerRows}${addedRows}</ul>
       <form id="add" class="stack">
         <label>Email <input type="email" name="email" autocomplete="off" required></label>
@@ -592,12 +682,13 @@ async function membersPage(
       <p>What each member let in, and what it reaches. Revoke one and it stops working at once. The member can let it in again.</p>
       ${accessRows ? `<ul class="access-list">${accessRows}</ul>` : `<p class="muted">No app or device has access.</p>`}
       <h2>A member lost a passkey</h2>
-      <p>Remove the member's keys, which signs them out everywhere. Then make them a sign-in link below.</p>
+      <p>Removes the member's keys and signs them out everywhere. Leave the box ticked to make a new sign-in link in the same step.</p>
       <form method="post" action="${MEMBERS_PATH}" class="stack" data-signed="${MEMBER_KEYS_REMOVED}">
         <input type="hidden" name="action" value="remove-keys">
         <input type="hidden" name="signed">
         <label>The member's email <input type="email" name="email" autocomplete="off" required></label>
-        <button type="submit">Remove this member's keys</button>
+        <label><input type="checkbox" name="make-link" value="1" checked> Make a new sign-in link right away</label>
+        <button type="submit" data-with-link="Remove keys and make a sign-in link" data-without-link="Remove this member's keys">Remove keys and make a sign-in link</button>
         <p class="muted" role="status" data-status>Your passkey signs this.</p>
       </form>
       <h2 id="link">A sign-in link for a member</h2>
@@ -640,19 +731,67 @@ form.addEventListener("submit", async (event) => {
   }
 });
 // An owner's act on a member's way in: the owner's passkey signs the act and the member it names.
-for (const act of document.querySelectorAll("form[data-signed]"))
+for (const act of document.querySelectorAll("form[data-signed]")) {
+  const makeLink = act.elements["make-link"];
+  const submit = act.querySelector('button[type="submit"]');
+  if (makeLink && submit?.dataset.withLink && submit?.dataset.withoutLink) {
+    const syncLabel = () => {
+      submit.textContent = makeLink.checked ? submit.dataset.withLink : submit.dataset.withoutLink;
+    };
+    makeLink.addEventListener("change", syncLabel);
+    syncLabel();
+  }
   act.addEventListener("submit", async (event) => {
     if (act.signed.value) return;
     event.preventDefault();
     const said = act.querySelector("[data-status]");
     try {
       statusSay(said, "Waiting for your passkey…");
-      act.signed.value = JSON.stringify(await signedStatement({ type: act.dataset.signed, payload: { email: act.email.value.trim().toLowerCase() } }));
+      const payload = { email: act.email.value.trim().toLowerCase() };
+      if (makeLink?.checked) payload.makeLink = true;
+      act.signed.value = JSON.stringify(await signedStatement({ type: act.dataset.signed, payload }));
       act.submit();
     } catch (error) {
       statusFailed(said, error, "Nothing was changed.", "No passkey was used, so nothing was changed.");
     }
-  });`;
+  });
+}
+for (const field of document.querySelectorAll("[data-select-on-focus]")) {
+  field.addEventListener("focus", () => field.select());
+  field.addEventListener("click", () => field.select());
+}
+for (const button of document.querySelectorAll("button[data-copy]")) {
+  let reset;
+  button.addEventListener("click", async () => {
+    const callout = button.closest(".link-callout");
+    const field = callout?.querySelector(".link-value");
+    const said = callout?.querySelector("[data-copy-status]");
+    const value = button.dataset.copy || "";
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else if (field) {
+        field.focus();
+        field.select();
+        if (!document.execCommand("copy")) throw new Error("copy failed");
+      } else {
+        throw new Error("no clipboard");
+      }
+      button.textContent = "Copied";
+      if (said) statusSay(said, "Copied to your clipboard.");
+      clearTimeout(reset);
+      reset = setTimeout(() => {
+        button.textContent = "Copy link";
+      }, 2500);
+    } catch {
+      if (field) {
+        field.focus();
+        field.select();
+      }
+      if (said) statusSay(said, "Could not copy automatically. Press Ctrl+C or Cmd+C to copy the selected link.");
+    }
+  });
+}`;
 
 const json = (value: unknown, status: number) =>
   Response.json(value, { status, headers: { "cache-control": "no-store" } });
