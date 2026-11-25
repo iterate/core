@@ -90,6 +90,8 @@ const NOT_CALLABLE: ReadonlySet<string> = new Set([
   "deliverEvent",
   "email",
   "callWithCause",
+  // the platform's call of an MCP server's class (./sdk/mcp.ts): it names who asks
+  "mcpCall",
   "getItx",
   "auth",
   "env",

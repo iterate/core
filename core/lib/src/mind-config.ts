@@ -62,6 +62,15 @@ export const MindConfig = z
      *  owner (`isOwnerEmail`). Absent or empty: the owners are `ownerEmails` alone. Only a
      *  deploy sets it, as it sets the owners. */
     ownerEmailPatterns: z.array(OwnerEmailPattern).optional(),
+    /** THE MIND'S PART OF ITS OWN MCP SERVER: the name of a method of the config worker's class
+     *  that answers an MCP server's class for the client that asks (iterate/sdk `McpServerTarget`):
+     *  its instructions, the description of `run`, more tools, and the mind's skills. Absent: the
+     *  platform's defaults. Set, and the method fails, is slow or answers what is no such class:
+     *  the failure is logged and the defaults answer. */
+    mcpTarget: z
+      .string()
+      .regex(/^[A-Za-z_$][\w$]{0,63}$/, "the name of a method")
+      .optional(),
     /** Where the mind Worker runs: in the stack, or elsewhere, connecting in through the
      *  boundary. */
     topology: z.enum(["full-cloudflare", "external-mind-connects-into-cloudflare-boundary"]),

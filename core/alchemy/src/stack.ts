@@ -71,6 +71,8 @@ const sharedConfigOf = (config: MindConfig) => ({
   ownerEmails: config.ownerEmails,
   // absent with no pattern: JSON leaves it out, so such a mind's variable is as it was
   ownerEmailPatterns: config.ownerEmailPatterns?.length ? config.ownerEmailPatterns : undefined,
+  // absent when the deploy names none: the platform's own MCP defaults answer
+  mcpTarget: config.mcpTarget || undefined,
   topology: config.topology,
 });
 /** A stream's fields, as a file of core/telemetry-worker/schemas lists them. */

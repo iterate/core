@@ -13,7 +13,8 @@
 //
 // Every other public method of the class is the mind's own API, `itx.config.<name>(…)`, for its
 // agents and its pages. Those are in api.ts. AGENTS.md is the guide to the rest of the repo.
-import type { IterateConfigProcessEventArgs } from "iterate/sdk";
+import type { IterateConfigProcessEventArgs, McpClient } from "iterate/sdk";
+import { MindMcp } from "./mcp.ts";
 import { ConfigApi, TASKS_BOARD_REPO } from "./api.ts";
 import { dashApp } from "./apps/dash/app.ts";
 import { framedSignIn } from "./apps/dash/framed-sign-in.ts";
@@ -44,6 +45,13 @@ const onboarding = onboardingApp({ repo: "/repos/onboarding" });
 const tasks = tasksApp({ repo: TASKS_BOARD_REPO });
 
 export default class extends ConfigApi {
+  // THE MIND'S PART OF ITS OWN MCP SERVER (mcp.ts): the platform serves that server and asks
+  // this method for a class that says the instructions and the skills. Optional, and it cannot
+  // break the server: when it fails, the platform's defaults answer.
+  mcp(client: McpClient) {
+    return new MindMcp(client);
+  }
+
   // EVERY REQUEST, on every hostname of the mind but `iterate.<zone>`, where the platform answers
   // (sign-in, the API, MCP).
   async fetch(request: Request) {

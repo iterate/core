@@ -81,6 +81,13 @@ mind starts from it, so a field that no Worker holds, such as `cloudflare.contai
 
 A mind takes each of its zones whole: nothing else may use them.
 
+`"mcpTarget": "mcp"` points the mind's own MCP server (`iterate.<zone>/mcp`) at a method of the
+config worker's class: that method answers a class which gives the server its instructions, its
+description of `run`, more tools and the mind's skills (`mcp.ts` of the default config). Absent,
+the platform's defaults answer; and they answer too whenever the method fails, so the field
+cannot break the server. `iterate deploy --mcp-target mcp` sets it, and `--mcp-target none` takes
+it away. A stack built before this field refuses it.
+
 `"ownerEmailPatterns": ["*@company.example"]` names more owners by pattern: every address at
 exactly that domain (no sub-domain) is an owner, with all that an owner may do. Such a person
 proves the address through Cloudflare Access, whose policy then names the whole domain, and adds a

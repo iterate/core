@@ -8,7 +8,6 @@ import { guestbookApp } from "../../configs/default/apps/guestbook/app.ts";
 import { auth } from "./sdk/auth.ts";
 
 // The app is on a second zone of the mind, whose control-plane hostname is iterate.example.com.
-const ORIGIN = "https://guestbook.example.org";
 
 test("an entry waits until a member approves it, and each person sees what is theirs to see", async () => {
   const book = guestbook();
@@ -116,71 +115,66 @@ test("the app says what it is to anyone, where the mind's sign-in reads it: its 
   expect(await book.fetch(nobody, "/icon.svg")).toMatchObject({ status: 200 });
 });
 
-test("the app's MCP server sends a client with no token to the mind's sign-in, for this host alone", async () => {
+test("the app asks the platform to serve its MCP server: at /mcp and at the sign-in document, for people", async () => {
   const book = guestbook();
-  const answer = await book.fetch(nobody, "/mcp", { method: "POST", body: "{}" });
-  expect(answer).toMatchObject({ status: 401 });
-  expect(answer.headers.get("www-authenticate")).toBe(
-    `Bearer resource_metadata="${ORIGIN}/.well-known/oauth-protected-resource/mcp", scope="identity"`,
-  );
-  const document = await book.fetch(nobody, "/.well-known/oauth-protected-resource/mcp");
-  expect(await document.json()).toEqual({
-    resource: ORIGIN,
-    authorization_servers: ["https://iterate.example.com"],
-    scopes_supported: ["identity"],
-    bearer_methods_supported: ["header"],
-  });
+  for (const path of [
+    "/mcp",
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+  ]) {
+    // whoever asks: the platform decides who may connect, from its own stamp
+    const answer = await book.fetch(nobody, path, { method: "POST", body: "{}" });
+    expect(answer.headers.get("x-iterate-serve")).toBe("mcp-server");
+    expect(await answer.json()).toEqual({
+      target: "guestbookMcp",
+      for: "people",
+      name: "guestbook at guestbook.example.org",
+    });
+  }
+  expect((await book.fetch(nobody, "/mcp/other")).headers.has("x-iterate-serve")).toBe(false);
 });
 
-test("an agent signed in as a person lists, writes and answers through the MCP tools", async () => {
+test("an agent signed in as a person lists, writes and answers through the tools of the MCP server's class", async () => {
   const book = guestbook();
-  expect(await book.mcp(ada, "initialize", { protocolVersion: "2025-06-18" })).toMatchObject({
-    result: { protocolVersion: "2025-06-18", capabilities: { tools: {} } },
-  });
-  expect(await book.mcp(ada, "tools/list")).toMatchObject({
-    result: {
-      tools: [{ name: "list_entries" }, { name: "add_entry" }, { name: "reply_to_entry" }],
+  const asPerson = (name: string) => ({
+    name: "an MCP client",
+    person: {
+      userId: `user_${name}`,
+      email: `${name}@example.net`,
+      name,
+      method: "email" as const,
     },
   });
-  const call = async (who: Record<string, string>, name: string, input = {}) => {
-    const answer = await book.mcp(who, "tools/call", { name, arguments: input });
-    const { content, isError } = answer.result as { content: { text: string }[]; isError: boolean };
-    return [JSON.parse(content[0]!.text), isError];
-  };
-  expect(await call(ada, "add_entry", { text: "from an agent" })).toEqual([
-    { waiting: true },
-    false,
+  const [ada_, bob_] = [book.mcpClass(asPerson("ada")), book.mcpClass(asPerson("bob"))];
+  expect(ada_.instructions()).toContain("ada@example.net");
+  expect(ada_.tools().map((tool) => tool.name)).toEqual([
+    "list_entries",
+    "add_entry",
+    "reply_to_entry",
   ]);
+  // every tool is a method of the class
+  for (const tool of ada_.tools()) expect(ada_).toHaveProperty(tool.name);
+
+  expect(await ada_.add_entry({ text: "from an agent" })).toEqual({ waiting: true });
   const [first] = book.ids();
   await book.post(member, `/entries/${first}/approve`);
-  expect(await call(bob, "reply_to_entry", { entry: first, text: "an answer" })).toEqual([
-    { waiting: true },
-    false,
-  ]);
-  expect(await call(bob, "reply_to_entry", { text: "to nothing" })).toEqual([
-    { refused: "Name the entry you answer." },
-    true,
-  ]);
-  expect(await call(bob, "add_entry", { text: "" })).toEqual([
-    { refused: "An entry needs some text." },
-    true,
-  ]);
+  expect(await bob_.reply_to_entry({ entry: first!, text: "an answer" })).toEqual({
+    waiting: true,
+  });
+  // a refusal is the tool's error
+  await expect(bob_.add_entry({ text: "" })).rejects.toThrow("An entry needs some text.");
   // each agent sees the approved entries and its own waiting ones
-  expect((await call(bob, "list_entries"))[0]).toMatchObject([
+  expect(await bob_.list_entries()).toMatchObject([
     { id: first, status: "approved", author: "ada", mine: false },
     { replyTo: first, status: "waiting", mine: true },
   ]);
-  expect((await call(ada, "list_entries"))[0]).toHaveLength(1);
-  // a notification gets no answer, and an unknown method or tool is an error of the protocol
-  const notified = await book.fetch(ada, "/mcp", {
-    method: "POST",
-    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+  expect(await ada_.list_entries()).toHaveLength(1);
+  // a client whom nobody signed in with an address reaches no tool
+  const guest = book.mcpClass({
+    person: { userId: "g", email: "", name: "a guest", method: "guest" },
   });
-  expect(notified).toMatchObject({ status: 202 });
-  expect(await book.mcp(ada, "resources/list")).toMatchObject({ error: { code: -32601 } });
-  expect(await book.mcp(ada, "tools/call", { name: "delete_all" })).toMatchObject({
-    error: { code: -32602 },
-  });
+  expect(() => guest.list_entries()).toThrow("Sign in with an address");
+  expect(() => book.mcpClass({}).instructions()).toThrow("Sign in with an address");
 });
 
 // ── who asks: the stamps the boundary sets on a request to a mind's host ──
@@ -221,7 +215,7 @@ function guestbook() {
   const app = guestbookApp();
   const fetch = (who: Record<string, string>, path: string, init: RequestInit = {}) =>
     app.fetch(
-      new Request(`${ORIGIN}${path}`, {
+      new Request(`https://guestbook.example.org${path}`, {
         ...init,
         headers: {
           "content-type": "application/json",
@@ -246,12 +240,7 @@ function guestbook() {
       const answer = await fetch(who, "/entries.json");
       return ((await answer.json()) as { entries: unknown[] }).entries;
     },
-    async mcp(who: Record<string, string>, method: string, params?: unknown) {
-      const answer = await fetch(who, "/mcp", {
-        method: "POST",
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-      });
-      return (await answer.json()) as { result?: unknown; error?: unknown };
-    },
+    /** The class of the app's MCP server for one client, as worker.ts answers it. */
+    mcpClass: (client: Parameters<typeof app.mcp>[0]) => app.mcp(client, host),
   };
 }

@@ -79,16 +79,31 @@ apps/<name>/
   that host: `newWebSocketRpcSession(new WebSocket("/itx"))`, a capnweb session
   (`memberItx()` of `@iterate-com/ui/live`, in `apps/dash/public/app.js`). The platform decides who the caller is, never the page. What the
   page appends shows `source.via.appPage`, and the socket closes when the sign-in ends.
-- **An MCP server of your own that runs scripts as the member.** An app may serve MCP itself, with
-  its own instructions and its own description of `run` (`apps/guestbook/mcp.ts` shows the
-  protocol and the sign-in). It hands a member's `tools/call` of `run` to the platform with
-  `host.auth.mcpRun(request, message)`: the platform runs the script as the member the request was
-  stamped with, as at the mind's own `/mcp`, never with the worker's reach. The run's
-  own record (`itx/run-requested` on `/`) shows the member as `source.principal` and the host as
-  `source.via.appPage`; what the script appends shows them as `source.onBehalfOf.principal` and
-  `source.onBehalfOf.via.appPage`. `apps/mcp/` is such a server for a host of its own
-  (`mcpApp()` in `apps/mcp/app.ts`), and `worker.ts` does not mount it: the mind's MCP server is
-  the platform's, `https://iterate.<zone>/mcp`.
+- **MCP servers: the platform serves them, and a class of yours says what they offer.** The
+  protocol, the sign-in and the skills catalog are the platform's, so none of it is in this
+  repo's worker. A server is a class that extends `RpcTarget` (iterate/sdk `McpServerTarget`):
+  `instructions()`, `tools()` (MCP's `Tool` entries; a call of a tool calls the method that has
+  its name) and `skills()` (a folder: each folder in it with a `SKILL.md` is served by MCP's
+  Skills extension, and as resources). Every method is optional.
+  - **The mind's own server**, `https://iterate.<zone>/mcp`, for members, with the tool `run`:
+    `mcp.ts` is its class, and `worker.ts` hands it over in the method `mcp(client)`. The deploy's
+    config names that method (`"mcpTarget": "mcp"`); without it the platform's defaults answer.
+    When the class fails, is slow or answers what the platform cannot use, the platform logs
+    `mcp.config-target-failed` and its defaults answer: this file cannot break `run`.
+  - **A server of an app**, at `/mcp` on the app's host: in `fetch`,
+    `const mcp = this.auth.mcpServer(request, { target: "guestbookMcp", for: "people" }); if (mcp)
+return mcp;`, and a method `guestbookMcp(client)` that answers the class
+    (`apps/guestbook/`). `for` is who may connect: `"members"`, or `"people"` for anyone who
+    signed in with an address. The platform decides that, from its own stamp on the request.
+  - **`client`** is how the MCP client named itself (`client.name`: `claude-code`,
+    `codex-mcp-client`) and who signed it in (`client.person`, `client.member`). Branch on the
+    name for wording alone, as `mcp.ts` does for clients that do not list skills by themselves.
+  - **Skills**: a folder under `skills/` with a `SKILL.md`
+    ([Agent Skills](https://agentskills.io/specification)); `skills/mind-skills/SKILL.md` says
+    how to add one. The server hands the files over and runs nothing from them.
+  - An app that serves MCP by its own code can still hand a member's `tools/call` of `run` to
+    the platform with `host.auth.mcpRun(request, message)`: the platform runs the script as the
+    member the request was stamped with, never with the worker's reach.
 - **Who asked.** A facet's code appends as its context, not as the person who called it. So when a
   signed-in person calls a facet (`itx.agents.get(path).message(...)` is such a call), what the
   facet then appends shows them as `source.onBehalfOf`: `principal`, `grant`, `via` when they

@@ -662,6 +662,14 @@ export function workersRoot(deps: {
           method === "email"
         )
           throw codedError("NOT_A_METHOD", `workers.get(spec).${method}: no caller reaches it`);
+        // `mcpCall` names the client and the person who asks in its arguments, so it is the
+        // platform's MCP server's call alone (`Caller.mcpServer`): any other caller could name
+        // a person of its own making.
+        if (method === "mcpCall" && !deps.caller().mcpServer)
+          throw codedError(
+            "NOT_A_METHOD",
+            "workers.get(spec).mcpCall: only the platform's MCP server calls it",
+          );
         // A loaded worker's `fetch` reads who is asking off its Request: the call's own caller,
         // stamped here, never what the Request says, which the calling code could write.
         const cause = deps.cause();

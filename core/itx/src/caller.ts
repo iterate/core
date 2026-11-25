@@ -53,6 +53,11 @@ export type Caller = {
   // (./context/itx-expression-rewriting.ts `admitRowsOfCall` says why). Set only where a row's
   // target is run, and it stays on the caller across contexts.
   runsRow?: true;
+  // This call is the platform's own MCP server asking a config's class what a server offers, or
+  // calling one of its tools (iterate/sdk `IterateConfigEntrypoint.mcpCall`). Set only by the
+  // mind Worker's MCP server and by serve-host.ts, where the platform itself names the client and
+  // the person: no other caller reaches `mcpCall` (./context/built-ins.ts `workersRoot`).
+  mcpServer?: true;
   copiedFrom?: EventCopiedFrom;
   cause?: Cause;
   onBehalfOf?: OnBehalfOf;

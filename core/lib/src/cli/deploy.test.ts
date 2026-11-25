@@ -184,6 +184,16 @@ test("a deploy over a mind keeps what the mind has, its id among it, and a flag 
 test("the owner email patterns are what --owner-email-patterns says, else what the mind has; none takes them away", () => {
   const { accountId } = answers;
   expect(deployConfigOf(answers)).not.toHaveProperty("ownerEmailPatterns");
+  // the MCP target: a method's name as the flag gives it, kept by a later deploy, and `none`
+  expect(deployConfigOf(answers)).not.toHaveProperty("mcpTarget");
+  expect(deployConfigOf({ ...answers, mcpTarget: "mcp" })).toMatchObject({ mcpTarget: "mcp" });
+  expect(
+    JSON.parse(JSON.stringify(deployConfigOf({ ...answers, mcpTarget: "none" }))),
+  ).not.toHaveProperty("mcpTarget");
+  for (const refused of ["", "a.b", "1mcp", "mcp()"])
+    expect(() => deployConfigOf({ ...answers, mcpTarget: refused }), refused).toThrow(
+      "--mcp-target",
+    );
   expect(
     deployConfigOf({ ...answers, ownerEmailPatterns: "*@company.example, *@second.example" }),
   ).toMatchObject({ ownerEmailPatterns: ["*@company.example", "*@second.example"] });
@@ -1049,6 +1059,7 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
     controlPlaneHostname: "iterate.ada-labs.com",
     ownerEmails: ["ada@example.org"],
     ownerEmailPatterns: ["*@company.example"],
+    mcpTarget: "mcp",
     topology: "full-cloudflare",
     alchemy: { stageName: "ada-labs-com" },
     cloudflare: {

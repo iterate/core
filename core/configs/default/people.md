@@ -161,13 +161,16 @@ It is off in a new mind. To turn it on:
 
 1. In `worker.ts`, add three lines: the import beside the other apps' imports, the app beside
    the other apps' constants, and its case in the `switch` of `fetch`, after `case "tasks"`. The
-   guestbook has no guard in `fetch`: its routes ask for who they need.
+   guestbook has no guard in `fetch`: its routes ask for who they need. For its MCP server, add
+   the method `guestbookMcp` to the class, beside `mcp`: the platform serves the server and asks
+   that method for the class whose methods are the tools (`apps/guestbook/mcp.ts`).
 
    ```ts
    import { guestbookApp } from "./apps/guestbook/app.ts";
    const guestbook = guestbookApp();
          case "guestbook": // the guestbook, for everyone
            return guestbook.fetch(request, this);
+     guestbookMcp(client: McpClient) { return guestbook.mcp(client, this); }
    ```
 
 2. A person who is no member signs in with a code that the mind mails to their address (at most

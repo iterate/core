@@ -102,6 +102,9 @@ export type DeployInput = {
   /** more owners by pattern, `*@<domain>` with commas between; `none` takes them away
    *  (`deployConfigOf`) */
   ownerEmailPatterns?: string;
+  /** the method of the config's class that answers the mind's part of its own MCP server;
+   *  `none` takes it away (`deployConfigOf`) */
+  mcpTarget?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
   /** where each mail is forwarded as it arrived; `none` stops the forward (`deployConfigOf`) */
@@ -175,7 +178,9 @@ type DeployedMind = z.infer<typeof DeployedConfig> & {
  *  `mail.forwardTo`, and `none` there removes it: with no flag the mind keeps its forward. So does
  *  `traceSampling`, the config's `telemetry.traceSampling` (a number from 0 to 1), and `default`
  *  there removes it, so that every trace is kept. So does `ownerEmailPatterns`, the config's
- *  field of that name (`*@<domain>`, commas or spaces between), and `none` there removes it.
+ *  field of that name (`*@<domain>`, commas or spaces between), and `none` there removes it. So
+ *  does `mcpTarget`, the config's field of that name (a method's name), and `none` there
+ *  removes it.
  *
  *  `zones` is the mind's WHOLE list of zones (commas or spaces between), and replaces what the
  *  mind has: the stack then makes each new zone's records, routes and mail, and deletes those
@@ -191,6 +196,7 @@ export function deployConfigOf(answers: {
   owner?: string;
   extraOwners?: readonly string[];
   ownerEmailPatterns?: string;
+  mcpTarget?: string;
   controlPlaneHostname?: string;
   egressGateway?: string;
   mailForwardTo?: string;
@@ -264,6 +270,12 @@ export function deployConfigOf(answers: {
     throw new Error(
       `The owner email pattern ${patternAtTheMind} is at a domain of the mind, and the mind takes that domain's mail. Name a domain elsewhere.`,
     );
+  const { mcpTarget } = answers;
+  // an empty flag is an error, never "no target" by accident
+  if (mcpTarget === "" || (mcpTarget && !/^[A-Za-z_$][\w$]{0,63}$/.test(mcpTarget)))
+    throw new Error(
+      `--mcp-target ${mcpTarget} is no method's name: give the name of a method of the config's class (the default config has mcp), or none to take it away.`,
+    );
   // a mind that is there starts from its deploy's whole config: only what a flag names changes
   const kept = deployed?.deployConfig;
   const forwardTo = answers.mailForwardTo;
@@ -299,6 +311,8 @@ export function deployConfigOf(answers: {
     ownerEmails,
     // the patterns are what the flag says, else what the mind has; `none` takes them away
     ...(patterns && { ownerEmailPatterns: named.length ? named : undefined }),
+    // the MCP target is what the flag says, else what the mind has; `none` takes it away
+    ...(mcpTarget && { mcpTarget: mcpTarget === "none" ? undefined : mcpTarget }),
     topology: deployed?.topology || ("full-cloudflare" as const),
     alchemy: { ...kept?.alchemy, stageName: deployed?.stageName || stageNameOf(answers.domain) },
     cloudflare: {
@@ -2445,6 +2459,7 @@ export async function deployMind(input: DeployInput) {
       controlPlaneHostname: input.controlPlaneHostname,
       egressGateway: input.egressGateway,
       ownerEmailPatterns: input.ownerEmailPatterns,
+      mcpTarget: input.mcpTarget,
       mailForwardTo: input.mailForwardTo,
       traceSampling: input.traceSampling,
       zones: input.zones,

@@ -272,6 +272,12 @@ const launcherProcedures = {
           .describe(
             "More owners by pattern: *@<domain> makes EVERY address at exactly that domain an owner, who proves the address with Cloudflare and adds a passkey; a comma between two; none takes them away. Name a domain only when its mail is the company's own (default: none; for a mind that is there already: what it has)",
           ),
+        mcpTarget: z
+          .string()
+          .optional()
+          .describe(
+            "The method of the config's class that says what the mind's own MCP server offers: its instructions, the description of run, more tools and skills (the default config has mcp); none takes it away, and the platform's defaults then answer (for a mind that is there already: what it has)",
+          ),
         controlPlaneHostname: z
           .string()
           .optional()

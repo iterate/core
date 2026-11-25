@@ -1,32 +1,15 @@
-// mcp.ts — THE GUESTBOOK'S OWN MCP SERVER, at /mcp on the app's host, for other agents. It speaks
-// MCP's streamable HTTP with no session: each POST is one JSON-RPC message, answered as JSON.
+// mcp.ts — THE GUESTBOOK'S OWN MCP SERVER, at /mcp on the app's host, for other agents: a class
+// with a method for each tool. The platform serves it (iterate/sdk `auth.mcpServer`, which app.ts
+// answers in `fetch`): it speaks MCP, and it signs a client's person in. None of that is here.
 //
 // How an agent signs in: its first call has no token, and gets a 401 that names the document at
 // /.well-known/oauth-protected-resource/mcp (RFC 9728). That names the mind's sign-in, at its
 // control-plane hostname, as the authorization server. The client registers there, its person
 // signs in and consents, and the token it gets is good for this host alone. The platform checks
-// the token on the way in and hands this code the person (`host.auth.person`), never the token.
-import type { Person } from "iterate/principal";
+// the token on the way in and hands this class the person (`client.person`), never the token.
+import { RpcTarget } from "cloudflare:workers";
+import type { McpClient } from "iterate/sdk";
 import type { Guestbook } from "./app.ts";
-
-const METADATA_PATH = "/.well-known/oauth-protected-resource";
-
-/** RFC 9728's document, for `/mcp` and for the host. The resource is the host's origin: a token is
- *  for a whole host. `controlPlaneHostname`: the mind's, as the boundary stamped it
- *  (`host.auth.controlPlaneHostname`). */
-export function protectedResourceResponse(
-  request: Request,
-  controlPlaneHostname: () => string,
-): Response | null {
-  const url = new URL(request.url);
-  if (url.pathname !== METADATA_PATH && url.pathname !== `${METADATA_PATH}/mcp`) return null;
-  return Response.json({
-    resource: url.origin,
-    authorization_servers: [`https://${controlPlaneHostname()}`],
-    scopes_supported: ["identity"],
-    bearer_methods_supported: ["header"],
-  });
-}
 
 const TOOLS = [
   {
@@ -59,71 +42,52 @@ const TOOLS = [
   },
 ];
 
-type Call = { jsonrpc?: string; id?: unknown; method?: string; params?: Record<string, unknown> };
+/** A call of a tool calls the method here that has the tool's name, with the call's arguments,
+ *  which the platform has held to the tool's `inputSchema`. What a method returns is the tool's
+ *  result; what it throws is the tool's error. */
+export class GuestbookMcp extends RpcTarget {
+  readonly #client: McpClient;
+  readonly #book: Guestbook;
 
-export async function mcpResponse(
-  request: Request,
-  {
-    person,
-    viewer,
-    book,
-  }: { person: Person | null; viewer: { person: Person | null; member: boolean }; book: Guestbook },
-): Promise<Response> {
-  const url = new URL(request.url);
-  if (!person)
-    return new Response("Sign in\n", {
-      status: 401,
-      headers: {
-        "WWW-Authenticate": `Bearer resource_metadata="${url.origin}${METADATA_PATH}/mcp", scope="identity"`,
-      },
-    });
-  // no stream from the server, and no session to end
-  if (request.method !== "POST")
-    return new Response("Method not allowed\n", { status: 405, headers: { allow: "POST" } });
-  const call = (await request.json().catch(() => null)) as Call | null;
-  if (!call?.method)
-    return rpc(null, { error: { code: -32600, message: "Send one JSON-RPC request." } });
-  // a notification gets no answer
-  if (call.id === undefined) return new Response(null, { status: 202 });
-  switch (call.method) {
-    case "initialize":
-      return rpc(call.id, {
-        result: {
-          protocolVersion: String(call.params?.protocolVersion || "2025-06-18"),
-          capabilities: { tools: {} },
-          serverInfo: { name: `guestbook at ${url.hostname}`, version: "1" },
-          instructions: `The guestbook of ${url.hostname}. You are signed in as ${person.email}.`,
-        },
-      });
-    case "ping":
-      return rpc(call.id, { result: {} });
-    case "tools/list":
-      return rpc(call.id, { result: { tools: TOOLS } });
-    case "tools/call": {
-      const input = (call.params?.arguments || {}) as Record<string, unknown>;
-      const said = (value: unknown, isError = false) =>
-        rpc(call.id, {
-          result: { content: [{ type: "text", text: JSON.stringify(value) }], isError },
-        });
-      if (call.params?.name === "list_entries") return said(await book.view(viewer));
-      if (call.params?.name === "add_entry" || call.params?.name === "reply_to_entry") {
-        const reply = call.params.name === "reply_to_entry";
-        if (reply && typeof input.entry !== "number")
-          return said({ refused: "Name the entry you answer." }, true);
-        const written = await book.write(person, {
-          text: input.text,
-          replyTo: reply ? input.entry : undefined,
-        });
-        return said(written, "refused" in written);
-      }
-      return rpc(call.id, {
-        error: { code: -32602, message: `No tool named ${String(call.params?.name)}.` },
-      });
-    }
-    default:
-      return rpc(call.id, { error: { code: -32601, message: `No method ${call.method}.` } });
+  constructor(client: McpClient, book: Guestbook) {
+    super();
+    this.#client = client;
+    this.#book = book;
+  }
+
+  instructions() {
+    return `The guestbook of this mind. You are signed in as ${this.#person().email}.`;
+  }
+
+  tools() {
+    return TOOLS;
+  }
+
+  list_entries() {
+    // a member is a person whom the platform also stamped as a member
+    return this.#book.view({ person: this.#person(), member: Boolean(this.#client.member) });
+  }
+
+  add_entry(input: { text: string }) {
+    return this.#write({ text: input.text });
+  }
+
+  reply_to_entry(input: { entry: number; text: string }) {
+    return this.#write({ text: input.text, replyTo: input.entry });
+  }
+
+  async #write(input: { text: string; replyTo?: number }) {
+    const written = await this.#book.write(this.#person(), input);
+    if ("refused" in written) throw new Error(written.refused);
+    return written;
+  }
+
+  /** The person who signed the client in. The platform lets nobody else reach this server
+   *  (`for: "people"` in app.ts). */
+  #person() {
+    const { person } = this.#client;
+    if (!person || person.method === "guest" || person.method === "mind")
+      throw new Error("Sign in with an address to use the guestbook.");
+    return person;
   }
 }
-
-const rpc = (id: unknown, body: Record<string, unknown>) =>
-  Response.json({ jsonrpc: "2.0", id, ...body });

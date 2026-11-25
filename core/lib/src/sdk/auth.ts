@@ -215,6 +215,36 @@ export const auth = {
    *  write and at most once every 5 seconds of the socket's traffic, and a `false` or a throw
    *  ends the socket: a guest whose link ended is out of the context, not only of a call. A
    *  member is never asked. */
+  /** AN MCP SERVER OF THIS APP, SERVED BY THE PLATFORM (./mcp.ts). Call it in `fetch` for the
+   *  app's host, before the app's own paths: it answers for `/mcp` and for the document that
+   *  tells a client where to sign in, and null for every other path. `target` names the method
+   *  of the config's class that answers the server's class for the client that asks. `for` says
+   *  who may connect: "members" (the default) or "people", anyone signed in who proved an
+   *  address. The platform decides who asks, by the stamp on the request it still holds; it
+   *  answers the 401 that makes a client sign in, and speaks MCP. An answer, never a call.
+   *
+   *  ```js
+   *  // in fetch, for the app's host
+   *  const mcp = this.auth.mcpServer(request, { target: "guestbookMcp", for: "people" });
+   *  if (mcp) return mcp;
+   *  // a method of the config's class
+   *  guestbookMcp(client) { return new GuestbookMcp(client.person); }
+   *  ``` */
+  mcpServer(
+    request: Request,
+    server: { target: string; for?: "members" | "people"; name?: string },
+  ): Response | null {
+    const { pathname } = new URL(request.url);
+    // the server, and RFC 9728's document for it, which tells a client where to sign in (the
+    // platform serves both: core/itx/src/serve-host.ts)
+    if (
+      pathname !== "/mcp" &&
+      pathname !== "/.well-known/oauth-protected-resource" &&
+      pathname !== "/.well-known/oauth-protected-resource/mcp"
+    )
+      return null;
+    return Response.json(server, { headers: { [ITERATE_SERVE_HEADER]: "mcp-server" } });
+  },
   personItx(
     request: Request,
     path: string,

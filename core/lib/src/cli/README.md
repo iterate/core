@@ -124,6 +124,8 @@ What it does, in order:
      domain itself, or one label under it.
    - `ownerEmails`: the owner, who is the Cloudflare login unless `--owner` names another address.
      The address must not be at the mind's own domain.
+   - `mcpTarget`: none, unless `--mcp-target mcp` names the method of the config's class that
+     says what the mind's own MCP server offers (the default config's is `mcp`)
    - `ownerEmailPatterns`: none, unless `--owner-email-patterns '*@company.example'` names some
      (a comma between two; `none` takes them away). A pattern makes every address at exactly
      that domain an owner: the person proves the address with Cloudflare Access and adds a

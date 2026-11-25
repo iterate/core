@@ -18,7 +18,7 @@ import { FILES_PATH, serveMindFileRequest } from "./context/file-urls.ts";
 import type { Env } from "./env.ts";
 import { MCP_WEBHOOK_PATH, serveMcpWebhook } from "./integrations/mcp.ts";
 import { serveWebhook, WEBHOOKS_PATH } from "./integrations/webhooks.ts";
-import { serveMcp, serveMcpRun } from "./mcp.ts";
+import { serveAppMcp, serveMcp, serveMcpRun } from "./mcp.ts";
 import { appendAsPlatform } from "./platform-append.ts";
 
 export async function mindResponse(request: Request, env: Env, ctx: ExecutionContext) {
@@ -44,6 +44,12 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
       caller: { ...stampedCallerOf(request), cause: host.cause },
       itxSessions: true,
       mcpRun: (message, caller) => serveMcpRun(message, caller, readSignedFile),
+      mcpServer: (asked, caller, server, call) =>
+        serveAppMcp(asked, caller, {
+          ...server,
+          controlPlaneOrigin: controlPlaneOriginOf(config),
+          config: call,
+        }),
     });
   }
   // Of the control plane, the boundary sends the mind the API and MCP alone.
@@ -78,7 +84,25 @@ export async function mindResponse(request: Request, env: Env, ctx: ExecutionCon
     // the API itself is a session that the boundary ends: `Mind.api` (./rpc.ts) is the mind's part
     return new Response("Not found\n", { status: 404 });
   }
-  if (route === "mcp") return serveMcp(request, readSignedFile);
+  if (route === "mcp") {
+    // THE MIND'S PART OF ITS OWN SERVER: the method of the config's class that the deploy's config
+    // names (`mcpTarget`), called as the member who asks. Absent: the defaults.
+    const { mcpTarget } = config;
+    const caller = stampedCallerOf(request);
+    return serveMcp(
+      request,
+      readSignedFile,
+      mcpTarget
+        ? (client, method, args) =>
+            contextAt("/").invoke(
+              ["itx", "config", ["mcpCall", mcpTarget, [client], method, args]],
+              [],
+              // the platform's MCP server asks: the one caller that reaches `mcpCall`
+              { ...caller, mcpServer: true },
+            )
+        : undefined,
+    );
+  }
   return new Response("Not found\n", { status: 404 });
 }
 

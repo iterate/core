@@ -1,4 +1,5 @@
 import { errorCode } from "iterate/lib";
+import { z } from "zod";
 import { stampedExpiryOf } from "iterate/principal";
 import {
   ITERATE_SERVE_ADMITS_HEADER,
@@ -55,6 +56,14 @@ export async function serveHostRequest(args: {
   // Answers one MCP `tools/call` of `run` as `caller` (the mind Worker's own handler). Only with
   // it may the config worker's answer ask for such a run (`mcpRunAnswer`).
   mcpRun?: (message: Request, caller: Caller) => Promise<Response>;
+  // Serves a whole MCP server whose class the config worker's answer named (`mcpServerAnswer`).
+  // `call` is one call of that class, on the config that answered.
+  mcpServer?: (
+    request: Request,
+    caller: Caller,
+    server: MCPServerAsked,
+    call: (client: unknown, method: string, args: unknown[]) => Promise<unknown>,
+  ) => Promise<Response>;
 }): Promise<Response> {
   const { ctx, caller, unserved } = args;
   const namespace = contexts();
@@ -117,6 +126,12 @@ export async function serveHostRequest(args: {
     const ingress = itxExpressionEndingInFetch(routing.ingressTarget);
     // Refused here, so an unpublished mind costs the root no call per request.
     resolveItxExpression(() => rules, ingress, implicitRootsAt("/"));
+    // An MCP server that the config's answer may ask the platform to serve reads the client's own
+    // message: a copy of the request, taken only on a path where such a server answers.
+    const forMcpServer =
+      args.mcpServer && MCP_SERVER_PATHS.has(new URL(request.url).pathname)
+        ? request.clone()
+        : undefined;
     // The ingress row's target is run as the person who asks, and as a row's run
     // (`Caller.runsRow`): a member's request writes no row that loaded code could not write.
     const answer = await resolverUnder({ ...caller, runsRow: true }).invoke(ingress, request);
@@ -130,6 +145,36 @@ export async function serveHostRequest(args: {
     }
     if (!(answer instanceof Response))
       return new Response(`expression fetch: ${JSON.stringify(answer)}\n`);
+    const mcpServer =
+      args.mcpServer &&
+      forMcpServer &&
+      answer instanceof Response &&
+      answer.headers.get(ITERATE_SERVE_HEADER) === "mcp-server" &&
+      args.mcpServer;
+    // Never awaited: the copy is one branch of a tee, and its cancellation settles only when the
+    // other branch, which the config's `fetch` got, is cancelled or ends. An answer must not
+    // wait for a sender's upload.
+    if (!mcpServer) forMcpServer?.body?.cancel().catch(() => {});
+    if (mcpServer && forMcpServer) {
+      const asked = MCPServerAsked.safeParse(await answer.json().catch(() => null));
+      if (!asked.success) {
+        forMcpServer.body?.cancel().catch(() => {});
+        return new Response("This app asked for an MCP server and named no method for it\n", {
+          status: 502,
+          headers: { "Cache-Control": "no-store" },
+        });
+      }
+      const { target } = asked.data;
+      // The class is the config's own, called as its `fetch` was: as the one who asks, and as a
+      // row's run.
+      const config = resolverUnder({ ...caller, runsRow: true, mcpServer: true });
+      return await mcpServer(forMcpServer, caller, asked.data, (client, method, callArgs) =>
+        config.invoke([
+          ...routing.ingressTarget!,
+          ["mcpCall", target, [client], method, callArgs],
+        ] as never),
+      );
+    }
     if (args.mcpRun && answer.headers.get(ITERATE_SERVE_HEADER) === "mcp-run")
       return await mcpRunAnswer({ ...args, mcpRun: args.mcpRun }, answer);
     const serve = args.itxSessions && answer.headers.get(ITERATE_SERVE_HEADER);
@@ -159,6 +204,24 @@ export async function serveHostRequest(args: {
     return await failedPageAnswer(args.request, expressionFetchErrorAnswer(error, label), error);
   }
 }
+
+/** Where an app's MCP server answers on its host: the server, and RFC 9728's document for it
+ *  (iterate/sdk `auth.mcpServer`). */
+const MCP_SERVER_PATHS: ReadonlySet<string> = new Set([
+  "/mcp",
+  "/.well-known/oauth-protected-resource",
+  "/.well-known/oauth-protected-resource/mcp",
+]);
+
+/** What a config worker's answer says of the MCP server it asks for (iterate/sdk
+ *  `auth.mcpServer`): the method of its class that answers the server's class, who may connect,
+ *  and the server's name. */
+const MCPServerAsked = z.object({
+  target: z.string().regex(/^[A-Za-z_$][\w$]{0,63}$/),
+  for: z.enum(["members", "people"]).default("members"),
+  name: z.string().min(1).max(64).optional(),
+});
+export type MCPServerAsked = z.infer<typeof MCPServerAsked>;
 
 // The headers are the platform's to act on: no answer that goes on to a browser keeps them.
 const withoutServeHeader =

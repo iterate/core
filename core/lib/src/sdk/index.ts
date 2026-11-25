@@ -35,6 +35,7 @@ import {
 import { causeOfRequest, currentCause, runCausedBy } from "../cause.ts";
 import { errorCode, reportIssue } from "../lib.ts";
 import { auth } from "./auth.ts";
+import { callMcpTarget } from "./mcp.ts";
 import { codeFailedFact, type CodeFailedWhere, scrubbedError } from "./code-failed.ts";
 import {
   currentCallerPath,
@@ -54,6 +55,7 @@ import { DirectAppendHolder, type DirectAppend } from "./direct-append.ts";
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
 export { serveFiles, type FileContent } from "./files.ts";
+export type { McpClient, McpServerTarget, McpToolDescription } from "./mcp.ts";
 export type { OnBehalfOf };
 // What an app says of itself to the mind's issuer: the typed object, and the answer that serves it.
 export { serveAppDescription, type AppDescription } from "../app-description.ts";
@@ -507,6 +509,18 @@ export abstract class IterateConfigEntrypoint<
     return walkUnderCause(this, cause, steps, callerPath);
   }
 
+  /** ONE CALL OF AN MCP SERVER'S CLASS, for the platform (./mcp.ts): the method `target` of this
+   *  class answers the server's class for `targetArgs` (the client), and `method` is called on it.
+   *  ONLY THE PLATFORM'S MCP SERVER CALLS IT (core/itx/src/context/built-ins.ts refuses every
+   *  other caller): `targetArgs` names the person who asks, which only the platform may say.
+   *  `target` is a method that the config's own class declares, and never one that the platform
+   *  calls by itself: those take an event or a request, not a client. */
+  mcpCall(target: string, targetArgs: unknown[], method: string, args: unknown[]) {
+    if (PLATFORM_METHODS.has(target))
+      throw new Error(`${target} is the platform's method, and answers no MCP server`);
+    return callMcpTarget(this, IterateConfigEntrypoint.prototype, target, targetArgs, method, args);
+  }
+
   /** `using itx = this.getItx()`: the mind root's scope, released with every call made through
    *  it when the block ends (`FacetDurableObject.getItx` says why nothing is kept past it). A field,
    *  not a method: Workers RPC reaches an entrypoint's methods, and a caller must never get the
@@ -556,6 +570,21 @@ export abstract class IterateConfigEntrypoint<
    *  `this.getItx()`) or forwarding the Request. */
   abstract override fetch(request: Request): Response | Promise<Response>;
 }
+
+/** What the platform calls on a config's class by itself: none of them answers an MCP server. */
+const PLATFORM_METHODS: ReadonlySet<string> = new Set([
+  "callWithCause",
+  "deliverEvent",
+  "email",
+  "fetch",
+  "mcpCall",
+  "processEvent",
+  "processMindEvent",
+  "queue",
+  "scheduled",
+  "tail",
+  "trace",
+]);
 
 /** The method `name` of a config's class, or undefined where the class lacks it: the loader never
  *  type-checks, so an abstract method can be missing at run time. */

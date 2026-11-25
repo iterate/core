@@ -31,6 +31,10 @@ export const MindConfig = z
      *  added: an owner's block of that address on `/members` ends that one person
      *  (core/auth-worker/src/members.ts `isMember`). Absent: no pattern. */
     ownerEmailPatterns: z.array(OwnerEmailPattern).optional(),
+    /** The method of the config worker's class that answers the mind's part of its own MCP
+     *  server (iterate/mind-config `mcpTarget`): "mcp" in the default config. Absent: the
+     *  platform's defaults answer. */
+    mcpTarget: z.string().optional(),
     /** Where the mind Worker runs: in the stack, or elsewhere, connecting in through the
      *  boundary. */
     topology: z.enum(["full-cloudflare", "external-mind-connects-into-cloudflare-boundary"]),

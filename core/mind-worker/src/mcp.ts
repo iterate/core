@@ -1,25 +1,139 @@
-import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
+import {
+  createMcpHandler,
+  fromJsonSchema,
+  McpServer,
+  ResourceNotFoundError,
+} from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { contextAt, type Caller } from "core-itx";
 import { bytesToBase64, errorCode } from "iterate/lib";
 import { stampedCallerOf } from "iterate/principal";
 import { z } from "zod";
+import { skillCatalog, type SkillCatalog } from "./mcp-skills.ts";
+
+// mcp.ts — EVERY MCP SERVER OF A MIND IS SERVED HERE. The protocol, the SDK and the skills
+// catalog are this Worker's; a mind's config says what a server offers, as a class with a method
+// for each tool (iterate/sdk `McpServerTarget`), and none of the protocol is in its worker.
+//
+//   - THE MIND'S OWN SERVER, at the control-plane hostname, for members: the tool `run`. When the
+//     deploy's config names a method of the config's class (`mcpTarget`, iterate/mind-config),
+//     that class may give the instructions, the description of `run`, more tools and skills.
+//   - A SERVER OF AN APP, on a host of the mind: the config's `fetch` asked for it
+//     (iterate/sdk `auth.mcpServer`; core/itx/src/serve-host.ts hands it over). It has the
+//     class's tools and skills, and no `run`.
+//
+// THE CONFIG CANNOT BREAK A SERVER. Each thing it is asked (`askConfig`) has a time limit and a
+// schema. What fails, is slow or does not fit is logged, and the default stands: the mind's own
+// server then answers as it does with no `mcpTarget`.
+
+/** One call of the config's class for this server: `method` with `args`
+ *  (iterate/sdk `IterateConfigEntrypoint.mcpCall`). */
+export type McpConfigCall = (
+  client: McpClient,
+  method: string,
+  args: unknown[],
+) => Promise<unknown>;
+
+/** The client as the config's class gets it (iterate/sdk `McpClient`). */
+type McpClient = { name?: string; version?: string; person?: unknown; member?: unknown };
 
 // A caller without a stamp came in past the boundary (a home lab's local port).
 export async function serveMcp(
   request: Request,
   readSignedFile: ReadSignedFile,
+  // the config's part, when the deploy's config names its method
+  config?: McpConfigCall,
 ): Promise<Response> {
   const caller = stampedCallerOf(request);
   if (!caller.principal) return new Response("Sign in\n", { status: 401 });
-  return mcpResponse(request, caller, readSignedFile);
+  return mcpResponse(request, caller, { name: "iterate-mind", run: readSignedFile, config });
 }
 
 /** ONE `run` FOR AN MCP SERVER OF THE MIND'S OWN CONFIG (core/itx/src/serve-host.ts
  *  `mcpRunAnswer`): `message` is one `tools/call` of `run`, and `caller` the member the boundary
  *  stamped. The same handler as above, so a run is the same run at either address. */
 export const serveMcpRun = (message: Request, caller: Caller, readSignedFile: ReadSignedFile) =>
-  mcpResponse(message, caller, readSignedFile);
+  mcpResponse(message, caller, { name: "iterate-mind", run: readSignedFile });
+
+const plain = (body: string, status: number, headers?: Record<string, string>) =>
+  new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+      ...headers,
+    },
+  });
+
+/** AN APP'S MCP SERVER, on a host of the mind (core/itx/src/serve-host.ts hands it over when the
+ *  config's `fetch` asked: iterate/sdk `auth.mcpServer`). The tools and skills of the config's
+ *  class, and no `run`.
+ *
+ *  WHO MAY CONNECT is decided here, by the stamp of the boundary that `caller` carries, never by
+ *  the config's answer: "members" takes a member; "people" also a person who signed in and
+ *  proved an address (no guest, and no member of another mind). Anyone else gets MCP's 401, which
+ *  names RFC 9728's document; that names the mind's sign-in, and the token a client gets there is
+ *  good for this host alone. A write from another site's page is refused, as every guard of
+ *  iterate/sdk `auth` does. */
+export async function serveAppMcp(
+  request: Request,
+  caller: Caller,
+  server: {
+    target: string;
+    for: "members" | "people";
+    name?: string;
+    controlPlaneOrigin: string;
+    config: McpConfigCall;
+  },
+): Promise<Response> {
+  const url = new URL(request.url);
+  // A body that is not read is dropped and NEVER AWAITED: `request` is one branch of a tee
+  // (core/itx/src/serve-host.ts), whose cancellation settles only when the other branch is
+  // cancelled or ends. A refusal must not wait for a sender's upload.
+  const drop = () => {
+    request.body?.cancel().catch(() => {});
+  };
+  if (url.pathname !== "/mcp") {
+    drop();
+    return request.method === "GET"
+      ? Response.json(
+          {
+            resource: url.origin,
+            authorization_servers: [server.controlPlaneOrigin],
+            scopes_supported: ["identity"],
+            bearer_methods_supported: ["header"],
+          },
+          { headers: { "Cache-Control": "no-store" } },
+        )
+      : plain("Method not allowed\n", 405, { allow: "GET" });
+  }
+  const refuse = (body: string, status: number, headers?: Record<string, string>) => {
+    drop();
+    return plain(body, status, headers);
+  };
+  const origin = request.headers.get("origin");
+  if (origin && origin !== url.origin) return refuse("Cross-site request refused\n", 403);
+  const { person } = caller;
+  const proved = person && person.method !== "guest" && person.method !== "mind";
+  if (!caller.principal && !(server.for === "people" && proved)) {
+    // signed in, and not one this server takes: a 401 would make the client sign the same
+    // person in again
+    if (person) return refuse("This MCP server is not open to you.\n", 403);
+    const invalid = request.headers.has("authorization") ? 'error="invalid_token", ' : "";
+    // a 401 at the probe of a client of MCP 2026-07-28 ends its connect with an error; a 400
+    // makes it `initialize`, whose 401 signs it in. Nobody is signed in, so the body is not
+    // read whole: the probe is named in a header, or in the first bytes of a small message.
+    const probe = request.method === "POST" && (await isDiscoverProbe(request));
+    return refuse("Sign in to use this MCP server.\n", probe ? 400 : 401, {
+      "WWW-Authenticate": `Bearer ${invalid}resource_metadata="${url.origin}/.well-known/oauth-protected-resource/mcp", scope="identity"`,
+    });
+  }
+  if (request.method !== "POST") return refuse("Method not allowed\n", 405, { allow: "POST" });
+  return mcpResponse(request, caller, {
+    name: server.name || url.hostname,
+    config: server.config,
+  });
+}
 
 const runInstructions =
   "One tool, `run({ script })`, runs a script of yours against this iterate mind. Its description is the guide: how to inspect the mind, change its code and read the platform's source.";
@@ -210,21 +324,126 @@ export async function shownImages(
   };
 }
 
-function buildServer(
-  caller: Caller,
-  instructed: boolean,
-  readSignedFile: ReadSignedFile,
-): McpServer {
+/** What one server offers. `run`: the mind's own tool, with the reader of the files it shows.
+ *  `config`: the config's class. */
+type Served = { name: string; run?: ReadSignedFile; config?: McpConfigCall };
+
+/** What the config's class said for one request, each part checked: absent where it said
+ *  nothing, failed or did not fit. */
+type Said = {
+  instructions?: string;
+  tools?: z.infer<typeof ConfigTools>;
+  skills?: SkillCatalog;
+};
+
+const CONFIG_ANSWER_TIMEOUT_MS = 5000;
+const ConfigInstructions = z.string().max(16_384);
+/** MCP's `Tool`, as far as this server reads it. A tool's name is a method's name. */
+const ConfigTools = z
+  .array(
+    z.object({
+      name: z.string().regex(/^[A-Za-z_][\w-]{0,63}$/),
+      title: z.string().max(256).optional(),
+      description: z.string().max(16_384).optional(),
+      inputSchema: z.record(z.string(), z.unknown()).optional(),
+    }),
+  )
+  .max(128);
+const ConfigSkillFiles = z.record(z.string(), z.union([z.string(), z.instanceof(Uint8Array)]));
+
+/** The names no tool of a config may have: the class's own three, and what every object has. */
+const NO_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "instructions",
+  "tools",
+  "skills",
+  "constructor",
+  "fetch",
+]);
+
+/** MCP's Skills extension (./mcp-skills.ts). An empty object: no `resources/directory/read`. */
+const SKILLS_EXTENSION = "io.modelcontextprotocol/skills";
+/** What MCP from 2026-07-28 on asks on a list and a read: a client may keep an answer for a
+ *  minute, for the one who asked. */
+const CACHEABLE = { resultType: "complete", ttlMs: 60_000, cacheScope: "private" } as const;
+const UriParams = z.looseObject({ uri: z.string() });
+const AnyResult = z.looseObject({});
+
+/** ONE QUESTION TO THE CONFIG'S CLASS, which cannot break the server: its answer within the time
+ *  limit and in `schema`'s shape, or undefined, with one log line that says what went wrong. */
+async function askConfig<T>(
+  ask: () => Promise<unknown>,
+  schema: z.ZodType<T>,
+  what: string,
+): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const answer = await Promise.race([
+      ask(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`no answer in ${CONFIG_ANSWER_TIMEOUT_MS} ms`)),
+          CONFIG_ANSWER_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    // the class has no such method: the default stands, and nothing is wrong
+    if (!answer) return undefined;
+    const parsed = schema.safeParse(answer);
+    if (parsed.success) return parsed.data;
+    throw new Error(`not the expected shape: ${parsed.error.issues[0]?.message || "invalid"}`);
+  } catch (error) {
+    console.warn({
+      event: "mcp.config-target-failed",
+      what,
+      message: (error instanceof Error ? error.message : String(error)).slice(0, 300),
+    });
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildServer(caller: Caller, served: Served, said: Said, client: McpClient): McpServer {
+  const instructions = said.instructions || (served.run ? runInstructions : undefined);
   const mcpServer = new McpServer(
-    { name: "iterate-mind", version: "0.1.0" },
-    instructed ? { instructions: runInstructions } : {},
+    { name: served.name, version: "0.1.0" },
+    instructions ? { instructions } : {},
   );
+  const { config } = served;
+  for (const tool of said.tools || []) {
+    // `run` is the platform's on the mind's own server: its entry gives the description alone
+    if (NO_TOOL_NAMES.has(tool.name) || (served.run && tool.name === "run") || !config) continue;
+    mcpServer.registerTool(
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: fromJsonSchema(
+          (tool.inputSchema || { type: "object" }) as Parameters<typeof fromJsonSchema>[0],
+          validator,
+        ),
+      },
+      async (toolArguments: unknown) => {
+        try {
+          const value = await config(client, tool.name, [toolArguments]);
+          const text = typeof value === "string" ? value : (JSON.stringify(value) ?? "null");
+          return { content: [{ type: "text" as const, text }], isError: false };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { content: [{ type: "text" as const, text: message }], isError: true };
+        }
+      },
+    );
+  }
+  if (said.skills) serveSkills(mcpServer, said.skills);
+  const readSignedFile = served.run;
+  if (!readSignedFile) return mcpServer;
 
   mcpServer.registerTool(
     "run",
     {
       title: "Run a script",
-      description: runDescription,
+      description: said.tools?.find((tool) => tool.name === "run")?.description || runDescription,
       inputSchema: fromJsonSchema(
         {
           type: "object",
@@ -283,25 +502,163 @@ function buildServer(
   return mcpServer;
 }
 
-/** Stateless: `createMcpHandler` builds a server per HTTP request. */
-async function mcpResponse(request: Request, caller: Caller, readSignedFile: ReadSignedFile) {
-  const instructed = await answersWithInstructions(request);
+/** The skills of a server, as resources and through MCP's Skills extension. All of it reads the
+ *  catalog: nothing of a skill is run. */
+function serveSkills(mcpServer: McpServer, catalog: SkillCatalog) {
+  const { server } = mcpServer;
+  server.registerCapabilities({
+    resources: {},
+    extensions: { [SKILLS_EXTENSION]: {} },
+  } as Parameters<typeof server.registerCapabilities>[0]);
+  server.setRequestHandler("resources/list", () => ({
+    ...CACHEABLE,
+    resources: catalog.resources,
+  }));
+  server.setRequestHandler("resources/templates/list", () => ({
+    ...CACHEABLE,
+    resourceTemplates: [],
+  }));
+  server.setRequestHandler("resources/read", (request) => {
+    const contents = catalog.contents.get(request.params.uri);
+    // one lookup of the exact URI: a path that climbs finds nothing. The SDK's own error for
+    // it, so a client reads "not found" and not a fault of the server.
+    if (!contents) throw new ResourceNotFoundError(request.params.uri);
+    return { ...CACHEABLE, contents: [contents] };
+  });
+  server.setRequestHandler("skills/list", { params: z.looseObject({}), result: AnyResult }, () => ({
+    ...CACHEABLE,
+    skills: catalog.skills,
+    // a SKILL.md that is no valid skill is not served: say which, and why
+    ...(catalog.leftOut.length > 0 && {
+      _meta: { "com.iterate/skills-left-out": catalog.leftOut },
+    }),
+  }));
+  server.setRequestHandler("skills/get", { params: UriParams, result: AnyResult }, (params) => {
+    const skill = catalog.skills.find(({ uri }) => uri === params.uri);
+    if (!skill) throw new ResourceNotFoundError(params.uri, `No skill is served at ${params.uri}`);
+    return { ...CACHEABLE, skill };
+  });
+}
+
+/** Stateless: `createMcpHandler` builds a server per HTTP request. The config's class is asked
+ *  only what this request needs. */
+async function mcpResponse(request: Request, caller: Caller, served: Served) {
+  const asked = await askedOf(request);
+  const client: McpClient = {
+    ...asked.client,
+    person: caller.person,
+    // null for anyone who is no member
+    member: caller.principal || undefined,
+  };
+  const said: Said = {};
+  const { config } = served;
+  if (config) {
+    const say = <T>(method: string, schema: z.ZodType<T>) =>
+      askConfig(() => config(client, method, []), schema, `${served.name}.${method}`);
+    const [instructions, tools, files] = await Promise.all([
+      asked.instructions ? say("instructions", ConfigInstructions) : undefined,
+      // an initialize says whether the server has tools and skills at all
+      asked.tools || asked.instructions ? say("tools", ConfigTools) : undefined,
+      asked.skills || asked.instructions ? say("skills", ConfigSkillFiles) : undefined,
+    ]);
+    said.instructions = instructions;
+    said.tools = tools;
+    if (files) said.skills = await skillCatalog(files);
+  }
   return createMcpHandler(
-    () => buildServer(caller, instructed, readSignedFile),
+    () => buildServer(caller, served, said, client),
     // A `run` can last ten minutes, and Claude Code gives up on a POST whose headers take 60 seconds.
     // "sse" sends the headers at once and a keep-alive every 15 seconds.
     { responseMode: "sse" },
   ).fetch(request);
 }
 
-/** The SDK's `Server._oninitialize` and `_ondiscover` (@modelcontextprotocol/server 2.0.0). */
-const InstructedRequest = z.object({ method: z.enum(["initialize", "server/discover"]) });
+/** A probe is one small JSON-RPC message: more than this is read of no anonymous body. */
+const PROBE_BYTES = 2048;
 
-/** Read from a copy, so the SDK reads and refuses the body as it always does. */
-async function answersWithInstructions(request: Request) {
+/** WHETHER AN ANONYMOUS POST IS THE `server/discover` PROBE, read at no more cost than a probe
+ *  has. MCP from 2026-07-28 on names the method in the header `Mcp-Method`: then no byte is read.
+ *  Without the header, a body is read only when it declares a length of at most `PROBE_BYTES`
+ *  (a body of unknown length is no probe, and is not read); the read takes at most one
+ *  second in all, and no chunk past the declared size is decoded. The body is
+ *  cancelled after: the caller refuses the request either way. */
+async function isDiscoverProbe(request: Request): Promise<boolean> {
+  const named = request.headers.get("mcp-method");
+  if (named) return named === "server/discover";
+  const declared = request.headers.get("content-length");
+  const length = declared && /^\d+$/.test(declared) ? Number(declared) : Infinity;
+  if (length > PROBE_BYTES || !request.body) return false;
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => {
+    timer = setTimeout(() => resolve("late"), 1000);
+  });
+  let text = "";
+  let read = 0;
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), late]);
+      // a sender that pauses holds no answer open
+      if (next === "late") return false;
+      if (next.done) return /"method"\s*:\s*"server\/discover"/.test(text + decoder.decode());
+      read += next.value.byteLength;
+      // more than the body declared: no probe, and the chunk is not decoded
+      if (read > length) return false;
+      text += decoder.decode(next.value, { stream: true });
+    }
+  } finally {
+    clearTimeout(timer);
+    // the rest is never read, and the caller may cancel the body itself after this
+    reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+const ClientInfo = z.looseObject({ name: z.string().max(256), version: z.string().max(64) });
+/** One JSON-RPC message, as far as this file reads it before the SDK does: its method, and how
+ *  the client named itself (`initialize`'s `clientInfo`, or each call's envelope from MCP
+ *  2026-07-28 on). */
+const AskedMessage = z.looseObject({
+  method: z.string(),
+  params: z
+    .looseObject({
+      clientInfo: ClientInfo.optional().catch(undefined),
+      _meta: z
+        .looseObject({
+          "io.modelcontextprotocol/clientInfo": ClientInfo.optional().catch(undefined),
+        })
+        .optional()
+        .catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
+});
+
+/** What a request asks, read from a copy, so the SDK reads and refuses the body as it always
+ *  does. `instructions`: the SDK's `Server._oninitialize` and `_ondiscover`. */
+async function askedOf(request: Request) {
   const body: unknown = await request
     .clone()
     .json()
     .catch(() => null);
-  return [body].flat().some((message) => InstructedRequest.safeParse(message).success);
+  const messages = [body].flat().flatMap((message) => {
+    const parsed = AskedMessage.safeParse(message);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const methods = messages.map((message) => message.method);
+  const named = messages
+    .map(
+      (message) =>
+        message.params?.clientInfo || message.params?._meta?.["io.modelcontextprotocol/clientInfo"],
+    )
+    .find(Boolean);
+  return {
+    client: named ? { name: named.name, version: named.version } : {},
+    instructions: methods.some((method) => method === "initialize" || method === "server/discover"),
+    tools: methods.some((method) => method.startsWith("tools/")),
+    skills: methods.some(
+      (method) => method.startsWith("skills/") || method.startsWith("resources/"),
+    ),
+  };
 }
