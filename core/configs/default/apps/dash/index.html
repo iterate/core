@@ -58,6 +58,10 @@
         const open = left ? left === "true" : sidebarParam !== "collapsed";
         document.documentElement.dataset.sidebar = open ? "open" : "collapsed";
         if (agent) document.documentElement.dataset.page = "agent";
+        // `?embed=1`: the page is shown in a frame of another app of the mind (the Tasks app shows
+        // an agent's chat in a sheet). The frame is narrow, so the shell draws no sidebar; its
+        // button is hidden too (public/app.css). The page is the same Dash, for the same member.
+        if (query.get("embed") === "1") document.documentElement.dataset.embed = "";
       }
     </script>
     <!-- The stylesheet at the address the build serves it from: the shorter one answers with a

@@ -445,24 +445,86 @@ export const DIMENSIONS = [
  *  apps/dash/links.ts `dashLinks(apex).agent`, which is what `itx.config.dashLink` answers: a path
  *  that a URL's pathname can carry goes in the pathname, any other in `?contextPath=`. */
 export function agentChatPath(agent) {
-  const path = String(agent ?? "").trim();
+  return dashPath("agents", agent);
+}
+function dashPath(page, context) {
+  const path = String(context ?? "").trim();
   if (!path.startsWith("/") || path === "/") return null;
   const sayable = path
     .slice(1)
     .split("/")
     .every((part) => part && part !== "." && part !== "..");
   const href = sayable
-    ? `/agents${path
+    ? `/${page}${path
         .split("/")
         .map(encodeURIComponent)
         .join("/")
         .replace(/%(?:40|3A|24|26|2B|2C|3B|3D)/g, decodeURIComponent)}`
-    : `/agents?${new URLSearchParams({ contextPath: path })
+    : `/${page}?${new URLSearchParams({ contextPath: path })
         .toString()
         .replaceAll("+", "%20")
         .replace(/%(?:2F|40|3A|2C)/g, decodeURIComponent)}`;
   // a last "." "," ":" is encoded, so that a chat or a mail that makes the address a link keeps it
   return href.replace(/[.,:]$/, (last) => ({ ".": "%2E", ",": "%2C", ":": "%3A" })[last]);
+}
+
+/** WHERE ONE EVENT OF A CONTEXT IS IN THE DASH: the raw view of the context (`/contexts/<path>`)
+ *  with that event open in its inspector, which the view takes from `?view={"event":<offset>}`
+ *  (@iterate-com/ui `ContextViewState`). With no origin; null when `path` is no context path or
+ *  `offset` is no offset. The agent's chat has no address for one message: this is the nearest
+ *  thing that has one. Like any address of the Dash it grants nothing: the Dash is for members. */
+export function eventPath(path, offset) {
+  const href = dashPath("contexts", path);
+  if (!href || !Number.isInteger(offset) || offset < 0) return null;
+  return `${href}${href.includes("?") ? "&" : "?"}${new URLSearchParams({ view: JSON.stringify({ event: offset }) })}`;
+}
+
+/** THE DRAFT BEHIND "huh?": the words that ask a NEW agent to explain one ask of a task, for a
+ *  person who wants the background and does not want to take the asker off its work. It names the
+ *  ask, the task (its link on the board, and its file and repo, which an agent reads with `itx`)
+ *  and who asked. `asker` is the ask's row of `itx.config.taskAskers` (`agent`, or `by` for a
+ *  person, and `at`); with none, the draft says so and names the task's own agent. The draft is
+ *  never sent by the page: the person reads it, changes it and sends it. */
+export function huhDraft({
+  domain,
+  repo = TASKS_REPO.split("/").at(-1),
+  path,
+  title,
+  ask,
+  asker,
+  taskAgent,
+}) {
+  const query = new URLSearchParams(
+    repo === TASKS_REPO.split("/").at(-1) ? { task: path } : { repo, task: path },
+  );
+  const when = asker?.at ? ` (on ${asker.at.slice(0, 16).replace("T", " ")} UTC)` : "";
+  const asked = asker?.agent
+    ? `The agent that asked: ${asker.agent}${when}`
+    : asker?.by && !asker.by.startsWith("/")
+      ? `Asked by the person ${asker.by}${when}, on the task board`
+      : `Who asked is not recorded.${taskAgent ? ` The agent that has the task: ${taskAgent}` : ""}`;
+  return [
+    "Explain this question to me. A task on the task board asks a person to decide it, and I want the background before I answer.",
+    "",
+    `The question: "${ask}"`,
+    `The task: ${title ? `"${title}", ` : ""}https://tasks.${domain}/?${query} (the file ${path} of the repo /repos/${repo})`,
+    asked,
+    "",
+    "Read the task's file and what it points to. Then tell me in a few lines what is being decided, why it is asked, and what each answer would lead to.",
+    "Do not answer the question on the board, do not change the task, and do not message the agent that asked: I do not want to take it off its work.",
+  ].join("\n");
+}
+
+/** Longest draft that an address carries to the Dash's home, where the box that starts a new agent
+ *  takes it. */
+export const HUH_DRAFT_MAX = 4000;
+
+/** WHERE "huh?" GOES: the Dash's home, where the box that starts a new agent holds the draft,
+ *  unsent. The new agent is the mind's own, which reads the task with `itx`. The draft is in the
+ *  address's HASH: a browser sends a hash to no server and in no Referer, so the ask's words stay
+ *  in the browser of the member who clicked. */
+export function huhHref(domain, draft) {
+  return `https://dash.${domain}/#draft=${encodeURIComponent(String(draft).slice(0, HUH_DRAFT_MAX))}`;
 }
 
 /** A task's values in one dimension: none, one, or for tags several. */
@@ -506,18 +568,106 @@ export function rowsOf(tasks, dimension) {
 
 // ── what waits for a person ──
 
-/** The tasks that are not done and ask a person something or say what holds them: those that ask
- *  first, then the blocked ones, each by title. The board never writes `blocked-on:`, and it
- *  writes `human-ask:` in one way: an ask that a person answers leaves it (`answerAsk`). */
+/** The tasks that are not done and ask a person something, by title. A task that is held and
+ *  asks nothing (`blocked-on:` a deploy, a review, another task) waits for no person: it is not
+ *  here (Misha, 23 Nov 2026, could not tell which rows of the list still mattered). What a
+ *  person must decide is an ask. The board never writes `blocked-on:`, and it writes
+ *  `human-ask:` in one way: an ask that a person answers leaves it (`answerAsk`). */
 export function needsAPerson(tasks) {
   return tasks
-    .filter((task) => task.column !== "done" && (task.humanAsk.length > 0 || task.blockedOn))
+    .filter((task) => waitsForAPerson(task))
     .sort(
       (a, b) =>
-        Number(b.humanAsk.length > 0) - Number(a.humanAsk.length > 0) ||
         a.title.localeCompare(b.title, undefined, { numeric: true }) ||
         a.path.localeCompare(b.path),
     );
+}
+
+// a word that can start an ask before a colon and is no person's name
+const NOT_A_NAME = new Set([
+  "note",
+  "question",
+  "ask",
+  "decision",
+  "todo",
+  "fyi",
+  "update",
+  "blocked",
+  "option",
+  "options",
+  "context",
+  "warning",
+  "important",
+  "action",
+  "yes",
+  "no",
+]);
+const NAME = "\\p{Lu}\\p{Ll}[\\p{L}'’-]{0,22}";
+const BETWEEN_NAMES = "\\s*[,/&]\\s*|\\s+(?:and|or)\\s+";
+const ADDRESSED = new RegExp(`^\\s*(${NAME}(?:(?:${BETWEEN_NAMES})${NAME}){0,3})\\s*:\\s`, "u");
+
+/** WHO AN ASK IS FOR, when it says so: an ask is written "Jonas: delete the 5 kept sign-ins, yes
+ *  or no?" (tasks.md, "Asks and answers"), so the names before its first colon are the people it
+ *  asks: ["Jonas"], or ["Jonas", "Misha"] for "Jonas or Misha: …". An ask that starts with no
+ *  name answers []. This only reads the ask: who MAY answer it is every member, as before. */
+export function askedOf(ask) {
+  const names = ADDRESSED.exec(String(ask ?? ""))?.[1].split(new RegExp(BETWEEN_NAMES, "u")) ?? [];
+  return names.some((name) => NOT_A_NAME.has(name.toLowerCase())) ? [] : names;
+}
+
+/** THE MARK OF A CARD THAT WAITS FOR A PERSON, or null for a card that has none. The rule is
+ *  `needsAPerson`'s: the task is not done and has an ask. `people` are the names that its asks
+ *  give (`askedOf`), each once, in the asks' order; `label` is the mark's words, "Needs Jonas", or
+ *  "Needs a person" when no ask names one; `asks` is how many asks are open. A task that is held
+ *  and asks nothing (`blocked-on:`) has no mark: it waits for no person. */
+export function waitsForAPerson(task) {
+  if (task.column === "done" || task.humanAsk.length === 0) return null;
+  const people = [...new Set(task.humanAsk.flatMap(askedOf))];
+  return { asks: task.humanAsk.length, people, label: `Needs ${people.join(", ") || "a person"}` };
+}
+
+// a Markdown link `[words](https://…)` (its address may hold one pair of brackets), or a bare address
+const LINK =
+  /\[([^[\]]+)\]\((https?:\/\/[^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\)|https?:\/\/[^\s<>"`]+/g;
+
+/** Whether the page may make a link of this address: http or https, and no user name or password
+ *  in it. Any other scheme (`javascript:`) stays text. */
+function linkable(href) {
+  try {
+    const url = new URL(href);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** ONE LINE THAT A PERSON READS (an ask, what holds a task), AS TEXT AND LINKS: a list of
+ *  `{ text }` and `{ text, href }`. A Markdown link `[words](https://…)` is its words; a bare
+ *  `https://…` is itself, without the full stop or the bracket that ends the sentence around it.
+ *  No other Markdown is read. The line itself is never changed: an ask is named by its whole text
+ *  (`answerAsk`), and the page only shows it this way. */
+export function linkedParts(line) {
+  const text = String(line ?? "");
+  const parts = [];
+  let at = 0;
+  for (const match of text.matchAll(LINK)) {
+    let [whole, words, href] = match;
+    if (!href) {
+      href = whole.replace(/[.,;:!?'*_]+$/, "");
+      // a closing bracket that the address does not open belongs to the sentence
+      while (/[)\]]$/.test(href) && href.split(/[)\]]/).length > href.split(/[([]/).length)
+        href = href.slice(0, -1).replace(/[.,;:!?'*_]+$/, "");
+      whole = words = href;
+    }
+    if (!linkable(href)) continue;
+    if (match.index > at) parts.push({ text: text.slice(at, match.index) });
+    parts.push({ text: words, href });
+    at = match.index + whole.length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at) });
+  return parts;
 }
 
 const ASK_KEYS = ["human-ask", "human_ask"];
@@ -533,9 +683,39 @@ export const ANSWERS_HEADING = "## Answers";
  *  `by` is who answered, as they are known (an address); `at` is an ISO time. The answer is kept
  *  as one line. An ask that the file does not have changes nothing. */
 export function answerAsk(source, { ask, answer, by, at }) {
+  const cut = frontWithoutAsk(source, ask);
+  if (!cut) return source;
+  const said = String(answer ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const when = `${String(at).slice(0, 10)} ${String(at).slice(11, 16)} UTC`;
+  const line = `- **${ask}** ${said ? `${said} ` : ""}(${by}, ${when})`;
+  return withFront(cut, withLineUnder(source.slice(cut.bodyAt), ANSWERS_HEADING, line, cut.eol));
+}
+
+/** THE FILE WITH ONE ASK TAKEN OFF, and every other byte as it was: the ask's line leaves
+ *  `human-ask:` (the key too, when it was the last ask), and nothing is written under
+ *  `## Answers`, because nobody answered. For an ask that events overtook (the pull request it
+ *  asked about is merged). The caller says why in a note. An ask that the file does not have
+ *  changes nothing. */
+export function withdrawAsk(source, ask) {
+  const cut = frontWithoutAsk(source, ask);
+  return cut ? withFront(cut, source.slice(cut.bodyAt)) : source;
+}
+
+/** THE FILE WITH ONE ASK WRITTEN AGAIN in other words (`to`), as the last ask; every other byte
+ *  as it was. An ask that the file does not have, and an empty `to`, change nothing. */
+export function rewordAsk(source, ask, to) {
+  const next = withdrawAsk(source, ask);
+  return next === source || !String(to ?? "").trim() ? source : addAsk(next, to);
+}
+
+/** The frontmatter's lines without one ask (`{ front, bodyAt, eol }`), or null when the file does
+ *  not have that ask. */
+function frontWithoutAsk(source, ask) {
   const { exists, lines, bodyAt, eol } = frontmatterOf(source);
   const keyAt = lines.findIndex((line) => ASK_KEYS.includes(keyOf(line)));
-  if (!exists || keyAt < 0) return source;
+  if (!exists || keyAt < 0) return null;
   const front = [...lines];
   const rest = front[keyAt].slice(front[keyAt].indexOf(":") + 1).trim();
   const inline = /^\[([\s\S]*)\]$/.exec(rest);
@@ -545,13 +725,13 @@ export function answerAsk(source, { ask, answer, by, at }) {
       .map((item) => item.trim())
       .filter(Boolean);
     const found = items.findIndex((item) => scalar(item, true) === ask);
-    if (found < 0) return source;
+    if (found < 0) return null;
     items.splice(found, 1);
     if (items.length > 0) front[keyAt] = `${keyOf(front[keyAt])}: [${items.join(", ")}]`;
     else front.splice(keyAt, 1);
   } else if (rest) {
     // `human-ask: one ask`
-    if (scalar(rest, true) !== ask) return source;
+    if (scalar(rest, true) !== ask) return null;
     front.splice(keyAt, 1);
   } else {
     // the `- ` lines under the key
@@ -560,19 +740,17 @@ export function answerAsk(source, { ask, answer, by, at }) {
     const found = front
       .slice(keyAt + 1, end)
       .findIndex((line) => scalar(/^\s*-\s+(.*)$/.exec(line)[1], true) === ask);
-    if (found < 0) return source;
+    if (found < 0) return null;
     // the last ask takes its key with it
     if (end - keyAt === 2) front.splice(keyAt, 2);
     else front.splice(keyAt + 1 + found, 1);
   }
-  const said = String(answer ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  const when = `${String(at).slice(0, 10)} ${String(at).slice(11, 16)} UTC`;
-  const line = `- **${ask}** ${said ? `${said} ` : ""}(${by}, ${when})`;
-  const between = front.length > 0 ? `${front.join(eol)}${eol}` : "";
-  return `---${eol}${between}---${eol}${withLineUnder(source.slice(bodyAt), ANSWERS_HEADING, line, eol)}`;
+  return { front, bodyAt, eol };
 }
+
+/** A file from its frontmatter's lines and its text. */
+const withFront = ({ front, eol }, body) =>
+  `---${eol}${front.length > 0 ? `${front.join(eol)}${eol}` : ""}---${eol}${body}`;
 
 /** A task's text with one more line under a `## ` heading (`heading`, with its marks): after that
  *  section's last line, or under a new heading at the text's end. A heading inside a code fence is
@@ -794,11 +972,14 @@ export function counts(tasks, valuesOf) {
 /** What each kind of change does to a file's text. The board makes the first four; an agent's
  *  calls (../cards.js, ../asks.js) make them all. */
 const CHANGES = {
+  decision: (source, change) => addDecision(source, change),
   status: (source, change) => setStatus(source, change.status),
   title: (source, change) => setTitle(source, change.title),
   field: (source, change) => setField(source, change.field, change.value),
   answer: (source, change) => answerAsk(source, change),
   ask: (source, change) => addAsk(source, change.ask),
+  withdraw: (source, change) => withdrawAsk(source, change.ask),
+  reword: (source, change) => rewordAsk(source, change.ask, change.to),
   blocked: (source, change) => setBlockedOn(source, change.blockedOn),
   note: (source, change) => addNote(source, change),
   key: (source, change) => setPlainKey(source, change.key, change.value),
@@ -807,6 +988,8 @@ const CHANGES = {
 /** `files` after `change`: `{ kind: "status", path, status }`, `{ kind: "title", path, title }`,
  *  `{ kind: "field", path, field, value }` (a dimension's id and its value), `{ kind: "answer",
  *  path, ask, answer, by, at }` (`answerAsk`), `{ kind: "ask", path, ask }` (`addAsk`),
+ *  `{ kind: "withdraw", path, ask }` (`withdrawAsk`), `{ kind: "reword", path, ask, to }`
+ *  (`rewordAsk`),
  *  `{ kind: "blocked", path, blockedOn }` (`setBlockedOn`), `{ kind: "note", path, note, by, at }`
  *  (`addNote`), `{ kind: "key", path, key, value }` (`setPlainKey`) or `{ kind: "create", path,
  *  content }`. A change of a file that is gone changes nothing, and neither does a kind that is
@@ -845,10 +1028,25 @@ export function messageOf(changes) {
         `${change.path}\0answer\0${change.ask}`,
         `${change.path}: answered "${shortOf(change.ask)}"`,
       );
+    else if (change.kind === "decision")
+      last.set(
+        `${change.path}\0decision\0${change.ask}`,
+        `${change.path}: the options of "${shortOf(String(change.ask))}"`,
+      );
     else if (change.kind === "ask")
       last.set(
         `${change.path}\0ask\0${change.ask}`,
         `${change.path}: asks "${shortOf(String(change.ask))}"`,
+      );
+    else if (change.kind === "withdraw")
+      last.set(
+        `${change.path}\0withdraw\0${change.ask}`,
+        `${change.path}: no longer asks "${shortOf(String(change.ask))}"`,
+      );
+    else if (change.kind === "reword")
+      last.set(
+        `${change.path}\0reword\0${change.ask}`,
+        `${change.path}: asks again, as "${shortOf(String(change.to))}"`,
       );
     else if (change.kind === "blocked")
       last.set(
@@ -876,4 +1074,378 @@ export function messageOf(changes) {
   const said = [...last.values()];
   if (said.length === 1) return `tasks: ${said[0]}`;
   return [`tasks: ${said.length} changes`, "", ...said.map((line) => `- ${line}`)].join("\n");
+}
+
+// ── "Needs a person": its order, whom it asks, and what a person reads before they answer ──
+
+/** The orders of "Needs a person" (`?order=`), the first one when the address names none. */
+export const NEEDS_ORDERS = [
+  { id: "pressing", label: "Most pressing first" },
+  { id: "oldest", label: "Longest waiting first" },
+  { id: "newest", label: "Newest ask first" },
+  { id: "title", label: "By title" },
+];
+
+/** WHOM THE OPEN ASKS NAME, for the filter of "Needs a person": `[[name, tasks], …]` by how many
+ *  tasks ask that person, then `["", tasks]` last for the tasks with an ask that names nobody (left
+ *  out when there is none). `tasks` are those that wait for a person (`needsAPerson`). */
+export function peopleAsked(tasks) {
+  const count = new Map();
+  let unnamed = 0;
+  for (const task of tasks) {
+    for (const name of new Set(task.humanAsk.flatMap(askedOf)))
+      count.set(name, (count.get(name) ?? 0) + 1);
+    if (task.humanAsk.some((ask) => askedOf(ask).length === 0)) unnamed += 1;
+  }
+  const named = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return unnamed > 0 ? [...named, ["", unnamed]] : named;
+}
+
+/** Whether an ask is for this person: it names them, or, for "" (nobody), it names no one. */
+export const askIsFor = (ask, who) =>
+  who === "" ? askedOf(ask).length === 0 : askedOf(ask).includes(who);
+
+/** "Needs a person" FOR ONE PERSON: the tasks with an ask for `who` (`askIsFor`), each as it is,
+ *  with all its asks. `who` null or undefined: every task. */
+export function needsFor(tasks, who) {
+  return who === null || who === undefined
+    ? tasks
+    : tasks.filter((task) => task.humanAsk.some((ask) => askIsFor(ask, who)));
+}
+
+/** "Needs a person" IN AN ORDER (`NEEDS_ORDERS`). `askedAt(task, ask)` answers when the ask was
+ *  asked, as an ISO time, or nothing when no one knows. A task's time is that of its oldest ask
+ *  ("oldest") or of its newest ("newest"); a task with no known time comes last, and equal tasks
+ *  keep the order they came in (by title: `needsAPerson`). "pressing" is by `pressOf`: the
+ *  priority, then the tasks whose work is held, then the longest wait. Any other order changes
+ *  nothing. */
+export function orderNeeds(tasks, order, askedAt) {
+  if (order === "pressing") {
+    // by priority, then the tasks whose work is held, then the longest wait
+    const waited = orderNeeds(tasks, "oldest", askedAt);
+    return waited
+      .map((task, index) => ({ task, index, press: pressOf(task) }))
+      .sort(
+        (a, b) => a.press.rank - b.press.rank || b.press.held - a.press.held || a.index - b.index,
+      )
+      .map(({ task }) => task);
+  }
+  if (order !== "oldest" && order !== "newest") return tasks;
+  const timeOf = (task) => {
+    const times = task.humanAsk
+      .map((ask) => Date.parse(askedAt(task, ask) ?? ""))
+      .filter(Number.isFinite);
+    return times.length === 0 ? null : order === "oldest" ? Math.min(...times) : Math.max(...times);
+  };
+  return tasks
+    .map((task, index) => ({ task, index, time: timeOf(task) }))
+    .sort(
+      (a, b) =>
+        (a.time === null) - (b.time === null) ||
+        (order === "oldest" ? a.time - b.time : b.time - a.time) ||
+        a.index - b.index,
+    )
+    .map(({ task }) => task);
+}
+
+/** How long ago, in a few letters: "now", "5 min", "3 h", "2 d", "3 wk". "" for no time. */
+export function agoOf(at, now = Date.now()) {
+  const then = Date.parse(at ?? "");
+  if (!Number.isFinite(then)) return "";
+  const minutes = Math.max(0, Math.floor((now - then) / 60_000));
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60 * 24) return `${Math.floor(minutes / 60)} h`;
+  if (minutes < 60 * 24 * 14) return `${Math.floor(minutes / (60 * 24))} d`;
+  return `${Math.floor(minutes / (60 * 24 * 7))} wk`;
+}
+
+/** WHAT A PERSON READS BEFORE THEY ANSWER, from the task's own text: `about`, the text between its
+ *  title and its first `## ` heading, cut at `max` characters at a word; and `notes`, the newest
+ *  lines under `## Log`, newest first, each without its `- `. Both are plain text as the file has
+ *  it (the page shows them with `linkedParts`, and reads no other Markdown). */
+export function contextOf(source, { max = 900, notes: most = 3 } = {}) {
+  const { bodyAt } = frontmatterOf(String(source ?? ""));
+  const lines = String(source ?? "")
+    .slice(bodyAt)
+    .split(/\r?\n/);
+  const title = headingIn(lines.join("\n"))?.at ?? -1;
+  const next = lines.findIndex((line, at) => at > title && /^##\s/.test(line));
+  const text = lines
+    .slice(title + 1, next < 0 ? undefined : next)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const cut = text.length > max ? `${text.slice(0, max).replace(/\s+\S*$/, "")} …` : text;
+  const log = lines.findIndex((line) => line.trim() === LOG_HEADING);
+  const noted = [];
+  for (const line of log < 0 ? [] : lines.slice(log + 1)) {
+    if (/^##?\s/.test(line)) break;
+    const item = /^-\s+(.*)$/.exec(line);
+    if (item) noted.push(item[1].trim());
+  }
+  return { about: cut, notes: noted.slice(-most).reverse() };
+}
+
+/** THE DRAFT BEHIND "Talk these through": the words that ask a NEW agent to go through the open
+ *  asks with the person, one at a time. It names the tasks (at most `most`), and how the agent
+ *  reads the asks itself. It tells the agent to answer nothing and to approve nothing: the person
+ *  answers on the board. That is an instruction in a draft, and no guard: the new agent is a
+ *  member's own, with the mind's reach. The page never sends the draft. */
+export function talkDraft({ domain, repo = TASKS_REPO.split("/").at(-1), tasks, who, most = 12 }) {
+  const call = repo === TASKS_REPO.split("/").at(-1) ? "" : `{ repo: "${repo}" }`;
+  const asks = tasks.reduce((sum, task) => sum + task.humanAsk.length, 0);
+  return [
+    `Go through the open questions of the task board with me${who ? ` (those for ${who})` : ""}. ${asks === 1 ? "One question waits" : `${asks} questions wait`} for a person's answer, on ${tasks.length === 1 ? "one task" : `${tasks.length} tasks`}.`,
+    "",
+    `Read them with itx.config.taskAskers(${call}) (each open ask and who asked it) and itx.config.taskBoard(${call}) (each task, and "needsAPerson"). Read a task's file in /repos/${repo} for its background.`,
+    `The page where I answer: https://tasks.${domain}/?${new URLSearchParams(repo === TASKS_REPO.split("/").at(-1) ? { needs: "person" } : { repo, needs: "person" })}`,
+    "",
+    "The tasks:",
+    ...tasks.slice(0, most).map((task) => `- ${task.path}: ${task.title}`),
+    ...(tasks.length > most ? [`- and ${tasks.length - most} more`] : []),
+    "",
+    "Start with a short list, the ones that hold the most work first. Then take them one at a time: what is being decided, why it is asked, what each answer leads to, and what you would answer.",
+    "Do not answer a question on the board, do not approve anything for me, do not change a task, and do not message the agents that asked. I answer on the board myself.",
+  ].join("\n");
+}
+
+// ── an answer: who hears it, and what the asker is told ──
+
+/** WHICH AGENTS HEAR AN ANSWER TO AN ASK, and how: `[{ agent, why, hears }]`, the asker first.
+ *  `asker` is the ask's row of `itx.config.taskAskers`; `followers` are the rows of
+ *  `itx.config.taskFollowers` (`{ agent, follows, only }`: `follows` is a file or "every task").
+ *    - the agent that asked (`why: "asked"`): by the card's commit when it follows the card
+ *      (`hears: "card"`), else by a message that the page sends it (`hears: "message"`);
+ *    - the agent that has the task, when it is another one and follows the card
+ *      (`why: "has the task"`, `hears: "card"`). When no agent is known to have asked, it is
+ *      listed also when it does not follow the card, and then gets the message.
+ *  An agent that follows every task (a manager) is not listed for that alone: an answer goes to
+ *  the agent that asked, and through nobody. */
+export function receiversOf({ task, asker, followers = [] }) {
+  const follows = (agent, wide) =>
+    followers.some(
+      (row) =>
+        row.agent === agent &&
+        (row.follows === task.path ||
+          (wide && row.follows === "every task" && (!row.only || row.only.includes("human-ask")))),
+    );
+  const isPath = (value) => typeof value === "string" && value.startsWith("/");
+  const out = [];
+  if (isPath(asker?.agent))
+    out.push({
+      agent: asker.agent,
+      why: "asked",
+      hears: follows(asker.agent, true) ? "card" : "message",
+    });
+  if (isPath(task.agent) && task.agent !== asker?.agent) {
+    if (follows(task.agent, false))
+      out.push({ agent: task.agent, why: "has the task", hears: "card" });
+    // nobody is known to have asked: the agent that has the task is told, so that an answer is heard
+    else if (out.length === 0)
+      out.push({ agent: task.agent, why: "has the task", hears: "message" });
+  }
+  return out;
+}
+
+/** WHAT THE PAGE TELLS AN ASKER THAT DOES NOT FOLLOW THE CARD, after a person answered its ask:
+ *  who answered, the task, the ask and the answer. The card's commit holds the same. */
+export function answerMessage({
+  domain,
+  repo = TASKS_REPO.split("/").at(-1),
+  path,
+  title,
+  ask,
+  answer,
+  by,
+  why = "asked",
+}) {
+  const query = new URLSearchParams(
+    repo === TASKS_REPO.split("/").at(-1) ? { task: path } : { repo, task: path },
+  );
+  return [
+    why === "asked"
+      ? `${by} answered a question that you asked on the task board.`
+      : `${by} answered a question on a task that you have, on the task board.`,
+    "",
+    `The task: ${title ? `"${title}", ` : ""}https://tasks.${domain}/?${query} (the file ${path} of the repo /repos/${repo})`,
+    `The question: "${ask}"`,
+    `The answer: ${
+      String(answer ?? "")
+        .replace(/\s+/g, " ")
+        .trim() || "(no words)"
+    }`,
+    "",
+    "The answer is in the card's text under ## Answers, and the ask is off the card. You get this message because you do not follow the card. Reply here if something is unclear: the person reads this chat.",
+  ].join("\n");
+}
+
+// ── a decision ask: its options, and what the asker recommends ──
+
+/** The heading in a task's text under which the options of its asks are kept. */
+export const DECISIONS_HEADING = "## Decisions";
+
+const lineOf = (value) =>
+  String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/** WHAT IS WRONG WITH A DECISION, as words, or "" for one that is whole: at least two options,
+ *  each with a name and what it costs or gives (`tradeoff`); `recommend`, the name of one of them;
+ *  and `why`. Jonas, 25 Nov 2026: "when we are presented with a choice, the different options are
+ *  explored and a recommendation is given". */
+export function decisionFault(decision) {
+  if (!decision || typeof decision !== "object" || Array.isArray(decision))
+    return "decision is { options: [{ name, tradeoff }, …], recommend, why }.";
+  const options = Array.isArray(decision.options) ? decision.options : [];
+  if (options.length < 2)
+    return "decision.options holds at least two options: a choice with one option is no choice.";
+  if (
+    !options.every(
+      (option) =>
+        option && typeof option === "object" && lineOf(option.name) && lineOf(option.tradeoff),
+    )
+  )
+    return "each of decision.options is { name, tradeoff }: its name, and what it costs or gives.";
+  const names = options.map((option) => lineOf(option.name));
+  if (new Set(names).size !== names.length)
+    return "the names of decision.options differ from each other.";
+  if (!names.includes(lineOf(decision.recommend)))
+    return `decision.recommend is the name of one option: ${names.map((name) => JSON.stringify(name)).join(", ")}.`;
+  if (!lineOf(decision.why)) return "decision.why says why you recommend that option.";
+  return "";
+}
+
+/** THE FILE WITH THE OPTIONS OF ONE ASK WRITTEN DOWN, and every other byte as it was. Under
+ *  `## Decisions` at the text's end:
+ *      - **<the ask>**
+ *        - Option: <name>: <tradeoff>
+ *        - Recommended: <name>: <why>
+ *  The block stays when the ask is answered: the text then holds what was weighed. Which MODEL
+ *  recommended is never written here: a model's own word is no evidence, and
+ *  `itx.config.taskAskers` reads it from the asker's own log. A decision that is not whole
+ *  (`decisionFault`), or an ask that has a block already, changes nothing. */
+export function addDecision(source, { ask, options, recommend, why }) {
+  const said = lineOf(ask);
+  if (!said || decisionFault({ options, recommend, why }) || decisionsOf(source).has(said))
+    return source;
+  const { bodyAt, eol } = frontmatterOf(source);
+  const block = [
+    `- **${said}**`,
+    ...options.map((option) => `  - Option: ${lineOf(option.name)}: ${lineOf(option.tradeoff)}`),
+    `  - Recommended: ${lineOf(recommend)}: ${lineOf(why)}`,
+  ].join(eol);
+  return (
+    source.slice(0, bodyAt) + withLineUnder(source.slice(bodyAt), DECISIONS_HEADING, block, eol)
+  );
+}
+
+/** THE OPTIONS THAT A TASK'S TEXT KEEPS (`addDecision` wrote them): a Map from an ask's whole text
+ *  to `{ options: [{ name, tradeoff }], recommend, why }`. A block with no "Recommended" line is
+ *  left out. */
+export function decisionsOf(source) {
+  const found = new Map();
+  let fenced = false;
+  let inside = false;
+  let now = null;
+  const close = () => {
+    if (now?.recommend)
+      found.set(now.ask, { options: now.options, recommend: now.recommend, why: now.why });
+    now = null;
+  };
+  for (const line of String(source ?? "")
+    .slice(frontmatterOf(String(source ?? "")).bodyAt)
+    .split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    if (fenced) continue;
+    if (/^#{1,6}\s/.test(line)) {
+      close();
+      inside = /^##\s+Decisions\s*$/.test(line);
+      continue;
+    }
+    if (!inside) continue;
+    const head = /^- \*\*(.+)\*\*\s*$/.exec(line);
+    if (head) {
+      close();
+      now = { ask: head[1], options: [], recommend: "", why: "" };
+      continue;
+    }
+    const part = now && /^\s+- (Option|Recommended): (.*)$/.exec(line);
+    if (!part) continue;
+    // a name holds no ": " (a link's "https://" has none): the first one ends it
+    const cut = part[2].indexOf(": ");
+    const [name, rest] =
+      cut < 0
+        ? [part[2].trim(), ""]
+        : [part[2].slice(0, cut).trim(), part[2].slice(cut + 2).trim()];
+    if (part[1] === "Option") now.options.push({ name, tradeoff: rest });
+    else [now.recommend, now.why] = [name, rest];
+  }
+  close();
+  return found;
+}
+
+// ── "Needs a person": what presses, and what may be outdated ──
+
+/** The priorities that the page offers, the most pressing first. */
+export const PRIORITIES = ["urgent", "high", "medium", "low"];
+
+/** HOW MUCH A TASK THAT WAITS FOR A PERSON PRESSES (Jonas, 25 Nov 2026: age alone is not
+ *  priority): `rank`, lower is more pressing, from the task's `priority:` in the board's own order
+ *  of priorities (a task with none ranks as "medium"); and `held`, whether work stands still for
+ *  the answer: the task is in progress or in review, or says what holds it (`blocked-on:`). */
+export function pressOf(task) {
+  const order = DIMENSIONS.find(({ id }) => id === "priority").order;
+  const at = order.indexOf(String(task.priority ?? "").toLowerCase());
+  return {
+    rank: at < 0 ? order.indexOf("medium") : at,
+    held: task.column === "in-progress" || task.column === "in-review" || Boolean(task.blockedOn),
+  };
+}
+
+/** After how many days an ask may be outdated. */
+export const STALE_DAYS = 3;
+
+/** WHY AN ASK MAY BE OUTDATED, as words, or "" (Jonas, 25 Nov 2026: "quite often stuff is
+ *  outdated"). `asker` is the ask's row of `itx.config.taskAskers`. It may be: the agent that
+ *  asked is retired, or the ask is `STALE_DAYS` days old or more. This is a hint to look, never a
+ *  fact: only the agent or a person takes an ask off. `retired`: the paths of the agents that the
+ *  mind retired (app.ts `tasksApp({ retiredAgents })`); a mind that names none has none. */
+export function staleOf({ asker, now = Date.now(), retired = [] }) {
+  if (retired.includes(asker?.agent)) return "the agent that asked is retired";
+  const days = Math.floor((now - Date.parse(asker?.at ?? "")) / 86_400_000);
+  return days >= STALE_DAYS ? `asked ${days} days ago` : "";
+}
+
+/** WHOM THE PAGE ASKS WHETHER AN ASK IS STILL NEEDED: the agent that asked; when that one is
+ *  retired or unknown, the agent that has the task; else nobody (null). */
+export function keeperOf({ task, asker, retired = [] }) {
+  return (
+    [asker?.agent, task.agent].find(
+      (value) => typeof value === "string" && value.startsWith("/") && !retired.includes(value),
+    ) ?? null
+  );
+}
+
+/** THE WORDS BEHIND "Still needed?": a person asks the ask's keeper to keep the ask true. */
+export function stillNeededMessage({
+  domain,
+  repo = TASKS_REPO.split("/").at(-1),
+  path,
+  title,
+  ask,
+  by,
+  why,
+}) {
+  const query = new URLSearchParams(
+    repo === TASKS_REPO.split("/").at(-1) ? { task: path } : { repo, task: path },
+  );
+  return [
+    `${by} asks whether a question on the task board is still needed${why ? ` (${why})` : ""}.`,
+    "",
+    `The task: ${title ? `"${title}", ` : ""}https://tasks.${domain}/?${query} (the file ${path} of the repo /repos/${repo})`,
+    `The question: "${ask}"`,
+    "",
+    'Check it against what is true now. When events overtook it, take it off: itx.config.taskUpdate({ file, withdraw: { ask: "<its beginning>", why: "…" } }). When it is still needed and its words are old, write it again: reword: { ask: "<its beginning>", to: "<the new sentence>" }. When it stands as it is, say so here in one line. tasks.md of /repos/config, "Asks and answers".',
+  ].join("\n");
 }

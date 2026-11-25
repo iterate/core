@@ -321,7 +321,8 @@ that the boundary kept for a mind that runs elsewhere while it was away (`iterat
 - **An integration** uses its own name as its namespace, for example `chrome`, `slack`, `google`,
   `github`.
 - **An app** of a mind uses its own name too: `ai-subscriptions` (the Claude and Codex accounts'
-  app, internal-packages/ai-subscriptions, and `apps/ai-subscriptions/` of a mind's config repo).
+  app, internal-packages/ai-subscriptions, and `apps/ai-subscriptions/` of a mind's config repo)
+  and `tasks` (the Tasks app, `apps/tasks/`: the change feed of a repo's task files).
 - **A channel** of an agent uses its own name, as an integration does: `agent-ui` is the web and
   mobile chat (`agent-ui/message-received` is what its composer creates, and
   `agent-ui/message-sent` is the agent's words for it), beside `slack`.

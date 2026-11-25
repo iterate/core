@@ -3,13 +3,15 @@
 //
 // The hooks here run side by side: the integration packages (integrations.ts), the kinds of agent
 // (agent-kinds/index.ts), the Integrations page's cards, the Cloudflare connection, each context's
-// description and the onboarding steps. Each hook returns at once for an event that is not its
+// description, the onboarding steps and the tasks' change feed. Each hook returns at once for an event that is not its
 // own. One hook that fails does not stop the others: the first failure is thrown after all of
 // them settled.
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { agentKinds } from "./agent-kinds/index.ts";
 import { agentPrompt } from "./agent-prompt.ts";
 import { onboardingEvent } from "./apps/onboarding/steps.ts";
+// @ts-expect-error -- a plain module of the Tasks app, with no types
+import { taskChangesEvent } from "./apps/tasks/feed.js";
 import { cloudAccountsEvent } from "./cloud-accounts.ts";
 import { mindFormEvent } from "./cloud-deliveries.ts";
 import { cloudflareConnectionEvent } from "./cloudflare.ts";
@@ -49,6 +51,10 @@ export async function everyEvent(
     onboardingEvent(itx, event),
     // The system prompt of a new agent of the kind `agent`, once (agent-prompt.ts).
     agentPrompt(itx, event),
+    // An update of a repo's main: one `tasks/task-changed` for each task file that it changed,
+    // on that repo's feed log, /task-files/<repo> (apps/tasks/feed.js). The followers of a task
+    // and the board's "who asked" read it.
+    taskChangesEvent(itx, event),
   ]);
   const failed = hooks.find((hook) => hook.status === "rejected");
   if (failed) throw failed.reason;

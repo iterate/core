@@ -84,6 +84,18 @@ const CONTEXT_DESCRIPTIONS: { path: string; title: string; description: string }
   },
   { path: "/repos/<name>", title: "Repo <name>", description: "The git repository <name>." },
   {
+    path: "/task-files",
+    title: "Task change feeds",
+    description:
+      "The change feeds of the repos' tasks: one log for each repo, /task-files/<repo> (apps/tasks/feed.js).",
+  },
+  {
+    path: "/task-files/<repo>",
+    title: "Task changes of <repo>",
+    description:
+      "What changed in the tasks of /repos/<repo>: one tasks/task-changed for each task file that a commit changed. An agent follows a task with itx.config.followTasks (apps/tasks/feed.js).",
+  },
+  {
     path: "/secrets",
     title: "Secrets",
     description: "The mind's secrets: each context below /secrets is one secret.",

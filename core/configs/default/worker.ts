@@ -16,7 +16,7 @@
 // agents and its pages. Those are in api.ts. AGENTS.md is the guide to the rest of the repo.
 import type { EmailHookArgs } from "iterate/email";
 import type { IterateConfigProcessEventArgs } from "iterate/sdk";
-import { ConfigApi } from "./api.ts";
+import { ConfigApi, TASKS_BOARD_REPO } from "./api.ts";
 import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
 import { meetApp } from "./apps/meet/app.ts";
@@ -40,8 +40,9 @@ const docs = docsApp();
 const meet = meetApp();
 // The onboarding page and its guides are the repo /repos/onboarding; this repo keeps its steps.
 const onboarding = onboardingApp({ repo: "/repos/onboarding" });
-// The Tasks board shows the markdown files under tasks/ of /repos/onboarding: the onboarding cards.
-const tasks = tasksApp({ repo: "/repos/onboarding" });
+// The Tasks board shows the markdown files under tasks/ of the repo that the task calls use too
+// (api.ts `TASKS_BOARD_REPO`): /repos/onboarding, the onboarding cards.
+const tasks = tasksApp({ repo: TASKS_BOARD_REPO });
 
 export default class extends ConfigApi {
   // EVERY REQUEST, on every hostname of the mind but `iterate.<zone>`, where the platform answers

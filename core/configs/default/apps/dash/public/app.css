@@ -321,3 +321,11 @@ body,
     padding: 1rem 1rem 0;
   }
 }
+
+/* An embedded view (index.html, `?embed=1`): no button for a sidebar that the frame has no room for. */
+[data-embed] [data-slot="sidebar-trigger"],
+[data-embed] [data-slot="sidebar"],
+[data-embed] [data-slot="sidebar-gap"],
+[data-embed] .frame-sidebar {
+  display: none;
+}

@@ -8,6 +8,24 @@ import {
   addNote,
   answerAsk,
   answersOf,
+  addDecision,
+  agoOf,
+  decisionFault,
+  keeperOf,
+  NEEDS_ORDERS,
+  pressOf,
+  staleOf,
+  stillNeededMessage,
+  decisionsOf,
+  answerMessage,
+  receiversOf,
+  askedOf,
+  contextOf,
+  HUH_DRAFT_MAX,
+  needsFor,
+  orderNeeds,
+  peopleAsked,
+  talkDraft,
   applyChange,
   columnOf,
   columnsOf,
@@ -15,12 +33,15 @@ import {
   counts,
   DIMENSIONS,
   dimensionsOf,
+  eventPath,
   filterTasks,
   isTaskPath,
   messageOf,
   needsAPerson,
+  waitsForAPerson,
   newTask,
   parseTask,
+  rewordAsk,
   rowsOf,
   setBlockedOn,
   setField,
@@ -29,6 +50,7 @@ import {
   slugify,
   tasksOf,
   valuesOf,
+  withdrawAsk,
 } from "./public/tasks-model.js";
 
 test("a file with frontmatter is a card with its status, tags, size and owner", () => {
@@ -543,7 +565,7 @@ test("a long title's file name is cut at a word", () => {
   assert.equal(slugify("short"), "short");
 });
 
-test("blocked-on and human-ask are read whole, and only an open task that has one needs a person", () => {
+test("blocked-on and human-ask are read whole, and only an open task that asks needs a person", () => {
   const asks = parseTask(
     "tasks/a.md",
     "---\nstatus: todo\nhuman-ask: [sign the grant, read it]\nblocked-on: a review, then a deploy\n---\n# A\n",
@@ -561,10 +583,62 @@ test("blocked-on and human-ask are read whole, and only an open task that has on
   assert.deepEqual([none.blockedOn, none.humanAsk], ["", []]);
   const done = parseTask("tasks/e.md", "---\nstatus: done\nhuman-ask: [late]\n---\n# E\n");
   const blocked = parseTask("tasks/f.md", "---\nblocked-on: CI\n---\n# Aa blocked\n");
+  // a task that is held and asks nothing waits for no person
   assert.deepEqual(
     needsAPerson([none, done, blocked, oneLine, asks]).map((task) => task.title),
-    ["A", "B", "Aa blocked"],
+    ["A", "B"],
   );
+});
+
+test("a card's mark: only an open task that asks has one, and it names whom the asks name", () => {
+  const card = (front) => parseTask("tasks/a.md", `---\n${front}\n---\n# A\n`);
+  // no ask, a done task, a task that is only held: no mark
+  assert.equal(waitsForAPerson(card("status: todo")), null);
+  assert.equal(waitsForAPerson(card("status: done\nhuman-ask: [Jonas: late?]")), null);
+  assert.equal(waitsForAPerson(card("status: in-progress\nblocked-on: CI")), null);
+  // an ask that names nobody
+  assert.deepEqual(waitsForAPerson(card("status: todo\nhuman-ask: Should this mind be let in?")), {
+    asks: 1,
+    people: [],
+    label: "Needs a person",
+  });
+  // the names before the first colon, each once, in the asks' order
+  assert.deepEqual(
+    waitsForAPerson(
+      card(
+        'status: in-review\nhuman-ask:\n  - "Jonas: delete the 5 kept sign-ins, yes or no?"\n  - "Jonas or Misha: may we merge?"\n  - Ship it?',
+      ),
+    ),
+    { asks: 3, people: ["Jonas", "Misha"], label: "Needs Jonas, Misha" },
+  );
+  // the mark and "Needs a person" are one rule
+  const all = [
+    card("status: todo"),
+    card("status: done\nhuman-ask: [x]"),
+    card("human-ask: [x]"),
+    card("blocked-on: CI"),
+  ];
+  assert.deepEqual(
+    needsAPerson(all),
+    all.filter((task) => waitsForAPerson(task)),
+  );
+});
+
+test("whom an ask names: the names before its first colon, and nothing else", () => {
+  assert.deepEqual(askedOf("Jonas: may I make one proof agent?"), ["Jonas"]);
+  assert.deepEqual(askedOf("Jonas, Misha and Jo: who signs?"), ["Jonas", "Misha", "Jo"]);
+  assert.deepEqual(askedOf("Jonas & Misha: ok?"), ["Jonas", "Misha"]);
+  for (const ask of [
+    "Should this mind be let in? If yes, open https://iterate.com/x",
+    "Note: the deploy waits",
+    "PR: merge it?",
+    "Merge #12 now: yes or no?",
+    "jonas: lower case",
+    "Open the page and say what is wrong: the menu",
+    "",
+    undefined,
+  ])
+    assert.deepEqual(askedOf(ask), [], String(ask));
 });
 
 test("a # in blocked-on or human-ask is a word; after any other key it starts a comment", () => {
@@ -613,6 +687,56 @@ test("an answer takes the ask's line out of the frontmatter and keeps both under
   // an ask that the file does not have changes nothing
   assert.equal(answerAsk(file, { ask: "Another ask?", ...answered }), file);
   assert.equal(answerAsk("# No frontmatter\n", { ask: "x", ...answered }), "# No frontmatter\n");
+});
+
+test("an ask that is taken off leaves the frontmatter and writes no answer; one that is written again keeps its place in the list's end", () => {
+  const file =
+    "---\nstatus: todo\nhuman-ask:\n  - Merge #12 now, or wait?\n  - Sign the grant?\nowner: jonas\n---\n\n# A\n\nText.\n";
+  assert.equal(
+    withdrawAsk(file, "Merge #12 now, or wait?"),
+    "---\nstatus: todo\nhuman-ask:\n  - Sign the grant?\nowner: jonas\n---\n\n# A\n\nText.\n",
+  );
+  // the last ask takes its key with it; every other byte stays
+  assert.equal(
+    withdrawAsk(withdrawAsk(file, "Merge #12 now, or wait?"), "Sign the grant?"),
+    "---\nstatus: todo\nowner: jonas\n---\n\n# A\n\nText.\n",
+  );
+  assert.equal(
+    withdrawAsk("---\nhuman-ask: [Sign #7?, read it]\n---\n\n# B\n", "read it"),
+    "---\nhuman-ask: [Sign #7?]\n---\n\n# B\n",
+  );
+  assert.equal(withdrawAsk("---\nhuman-ask: one ask\n---\n# C\n", "one ask"), "---\n---\n# C\n");
+  assert.equal(
+    rewordAsk(file, "Merge #12 now, or wait?", " Jonas: merge  #12 now,\nyes or no? "),
+    "---\nstatus: todo\nhuman-ask:\n  - Sign the grant?\n  - Jonas: merge #12 now, yes or no?\nowner: jonas\n---\n\n# A\n\nText.\n",
+  );
+  // an ask that the file does not have, and new words that are empty, change nothing
+  assert.equal(withdrawAsk(file, "Another ask?"), file);
+  assert.equal(rewordAsk(file, "Another ask?", "New words?"), file);
+  assert.equal(rewordAsk(file, "Sign the grant?", "  "), file);
+  assert.equal(withdrawAsk("# No frontmatter\n", "x"), "# No frontmatter\n");
+  // as changes of a commit, with a message that says what happened to each ask
+  const changes = [
+    { kind: "withdraw", path: "tasks/a.md", ask: "Merge #12 now, or wait?" },
+    {
+      kind: "reword",
+      path: "tasks/a.md",
+      ask: "Sign the grant?",
+      to: "Jonas: sign the grant, yes or no?",
+    },
+  ];
+  // the card's only ask written again: its key is made again, at the frontmatter's end
+  assert.deepEqual(commitOf({ "tasks/a.md": file }, changes), [
+    {
+      path: "tasks/a.md",
+      content:
+        "---\nstatus: todo\nowner: jonas\nhuman-ask:\n  - Jonas: sign the grant, yes or no?\n---\n\n# A\n\nText.\n",
+    },
+  ]);
+  assert.equal(
+    messageOf(changes),
+    'tasks: 2 changes\n\n- tasks/a.md: no longer asks "Merge #12 now, or wait?"\n- tasks/a.md: asks again, as "Jonas: sign the grant, yes or no?"',
+  );
 });
 
 test("an answer finds an ask however the file writes it, and its heading wherever it is", () => {
@@ -893,4 +1017,454 @@ test("parseTask reads depends-on and depends_on frontmatter", () => {
     "---\nstatus: todo\ntags: [onboarding]\ndepends-on: [tasks/onboarding-website.md, tasks/onboarding-look.md]\n---\n\n# Telemetry\n",
   );
   assert.deepEqual(card.dependsOn, ["tasks/onboarding-website.md", "tasks/onboarding-look.md"]);
+});
+
+test("huh? drafts a question to a new agent, and its link keeps the draft in the hash", async () => {
+  const { huhDraft, huhHref, HUH_DRAFT_MAX } = await import("./public/tasks-model.js");
+  const ask =
+    'Jonas: turn on the tools in [the Dash](https://dash.iterate.com/settings), yes or no? 100% & "now" #1';
+  const draft = huhDraft({
+    domain: "iterate.com",
+    path: "tasks/turn on.md",
+    title: "Turn on the tools",
+    ask,
+    asker: { agent: "/agents/claude/x", at: "2026-11-23T15:40:12.000Z" },
+    taskAgent: "/agents/claude/y",
+  });
+  // the ask whole, the task's link and file, and the agent that asked
+  assert.ok(draft.includes(`The question: "${ask}"`));
+  assert.ok(
+    draft.includes(
+      'The task: "Turn on the tools", https://tasks.iterate.com/?task=tasks%2Fturn+on.md (the file tasks/turn on.md of the repo /repos/tasks)',
+    ),
+  );
+  assert.ok(draft.includes("The agent that asked: /agents/claude/x (on 2026-11-23 15:40 UTC)"));
+  assert.ok(draft.includes("do not message the agent that asked"));
+  assert.ok(!draft.includes("/agents/claude/y"));
+  // another repo's board is named in the link and in the words
+  assert.ok(
+    huhDraft({ domain: "iterate.com", repo: "trial", path: "tasks/a.md", ask: "x?" }).includes(
+      "https://tasks.iterate.com/?repo=trial&task=tasks%2Fa.md (the file tasks/a.md of the repo /repos/trial)",
+    ),
+  );
+  // a person who asked on the board; nobody on record
+  assert.ok(
+    huhDraft({
+      domain: "d.test",
+      path: "tasks/a.md",
+      ask: "x?",
+      asker: { by: "misha@nustom.com" },
+    }).includes("Asked by the person misha@nustom.com, on the task board"),
+  );
+  assert.ok(
+    huhDraft({
+      domain: "d.test",
+      path: "tasks/a.md",
+      ask: "x?",
+      asker: {},
+      taskAgent: "/agents/z",
+    }).includes("Who asked is not recorded. The agent that has the task: /agents/z"),
+  );
+  assert.ok(
+    huhDraft({ domain: "d.test", path: "tasks/a.md", ask: "x?", asker: { unread: true } }).includes(
+      "Who asked is not recorded.",
+    ),
+  );
+  // the link: the Dash's home, and the draft in the hash alone
+  const href = new URL(huhHref("iterate.com", draft));
+  assert.equal(href.origin + href.pathname + href.search, "https://dash.iterate.com/");
+  assert.equal(new URLSearchParams(href.hash.slice(1)).get("draft"), draft);
+  const long = new URL(huhHref("iterate.com", "x".repeat(9000)));
+  assert.equal(new URLSearchParams(long.hash.slice(1)).get("draft").length, HUH_DRAFT_MAX);
+});
+
+test("a line's Markdown links and bare addresses are links, and nothing else is", async () => {
+  const { linkedParts } = await import("./public/tasks-model.js");
+  assert.deepEqual(
+    linkedParts(
+      "Jonas: turn on the tools in [iterate.com's Dash](https://dash.iterate.com/settings), yes or no?",
+    ),
+    [
+      { text: "Jonas: turn on the tools in " },
+      { text: "iterate.com's Dash", href: "https://dash.iterate.com/settings" },
+      { text: ", yes or no?" },
+    ],
+  );
+  // two links, one with brackets in its address
+  assert.deepEqual(linkedParts("[a](https://x.test/a_(b)) and [c](http://y.test/?q=1&r=2)"), [
+    { text: "a", href: "https://x.test/a_(b)" },
+    { text: " and " },
+    { text: "c", href: "http://y.test/?q=1&r=2" },
+  ]);
+  // a bare address ends before the sentence's full stop and bracket
+  assert.deepEqual(
+    linkedParts("Read #12 (https://github.com/iterate/private/pull/12). Then say yes."),
+    [
+      { text: "Read #12 (" },
+      {
+        text: "https://github.com/iterate/private/pull/12",
+        href: "https://github.com/iterate/private/pull/12",
+      },
+      { text: "). Then say yes." },
+    ],
+  );
+  assert.deepEqual(linkedParts("see https://en.wikipedia.org/wiki/A_(b)"), [
+    { text: "see " },
+    { text: "https://en.wikipedia.org/wiki/A_(b)", href: "https://en.wikipedia.org/wiki/A_(b)" },
+  ]);
+  // no link: another scheme, a name and password in the address, plain words
+  for (const plain of [
+    "[x](javascript:alert(1))",
+    "[x](https://me:secret@x.test/)",
+    "https://me:secret@x.test/ now",
+    "Sign #7 [now]?",
+    "",
+  ])
+    assert.deepEqual(linkedParts(plain), plain ? [{ text: plain }] : []);
+  assert.deepEqual(linkedParts(undefined), []);
+});
+
+test("an ask that begins with a link is kept and read back as it was written", () => {
+  const ask = "[The Dash](https://dash.iterate.com/) shows it: yes or no?";
+  const source = addAsk("---\nstatus: todo\n---\n# A\n", ask);
+  assert.deepEqual(parseTask("tasks/a.md", source).humanAsk, [ask]);
+  const whole = "[yes](https://x.test/) or [no]";
+  assert.deepEqual(parseTask("tasks/a.md", addAsk("# A\n", whole)).humanAsk, [whole]);
+});
+
+test("Needs a person: whom the asks name, the tasks for one person, and the order by when an ask was asked", () => {
+  const card = (path, front) => parseTask(path, `---\nstatus: todo\n${front}\n---\n# ${path}\n`);
+  const a = card("tasks/a.md", 'human-ask:\n  - "Jonas: one?"\n  - "Jonas or Misha: two?"');
+  const b = card("tasks/b.md", "human-ask: Should this mind be let in?");
+  const c = card("tasks/c.md", 'human-ask:\n  - "Misha: three?"\n  - Four?');
+  const all = [a, b, c];
+  assert.deepEqual(peopleAsked(all), [
+    ["Misha", 2],
+    ["Jonas", 1],
+    ["", 2],
+  ]);
+  assert.deepEqual(peopleAsked([a]), [
+    ["Jonas", 1],
+    ["Misha", 1],
+  ]);
+  assert.deepEqual(needsFor(all, "Jonas"), [a]);
+  assert.deepEqual(needsFor(all, "Misha"), [a, c]);
+  assert.deepEqual(needsFor(all, ""), [b, c]);
+  assert.equal(needsFor(all, null), all);
+  // a task's time is its oldest ask's (oldest) or its newest ask's (newest); no time is last
+  const at = {
+    "Jonas: one?": "2026-11-20T10:00:00Z",
+    "Jonas or Misha: two?": "2026-11-24T10:00:00Z",
+    "Misha: three?": "2026-11-22T10:00:00Z",
+  };
+  const askedAt = (_task, ask) => at[ask];
+  assert.deepEqual(orderNeeds(all, "oldest", askedAt), [a, c, b]);
+  assert.deepEqual(orderNeeds(all, "newest", askedAt), [a, c, b]);
+  assert.deepEqual(
+    orderNeeds([c, a, b], "newest", (_task, ask) =>
+      ask === "Jonas or Misha: two?" ? null : at[ask],
+    ),
+    [c, a, b],
+  );
+  assert.deepEqual(orderNeeds([b, c, a], "title", askedAt), [b, c, a]);
+  assert.deepEqual(
+    orderNeeds(all, "oldest", () => null),
+    all,
+  );
+});
+
+test("how long ago, and what a person reads before they answer", () => {
+  const now = Date.parse("2026-11-25T12:00:00Z");
+  assert.deepEqual(
+    [
+      "2026-11-25T11:59:40Z",
+      "2026-11-25T11:20:00Z",
+      "2026-11-25T03:00:00Z",
+      "2026-11-22T12:00:00Z",
+      "2026-11-01T12:00:00Z",
+      null,
+      "soon",
+    ].map((at) => agoOf(at, now)),
+    ["now", "40 min", "9 h", "3 d", "3 wk", "", ""],
+  );
+  const file =
+    "---\nstatus: todo\n---\n\n# The title\n\nJonas said: do it.\n\n\n\nSecond paragraph.\n\n## Done when\n\n- [ ] x\n\n## Log\n\n- 2026-11-20 10:00 UTC, /agents/a: one\n- 2026-11-21 10:00 UTC, /agents/a: two\nnot a note\n- 2026-11-22 10:00 UTC, /agents/b: three\n\n## Answers\n\n- **x** y (z, 2026-11-23 10:00 UTC)\n";
+  assert.deepEqual(contextOf(file, { notes: 2 }), {
+    about: "Jonas said: do it.\n\nSecond paragraph.",
+    notes: ["2026-11-22 10:00 UTC, /agents/b: three", "2026-11-21 10:00 UTC, /agents/a: two"],
+  });
+  assert.deepEqual(contextOf("# T\n\none two three four", { max: 12 }), {
+    about: "one two …",
+    notes: [],
+  });
+  assert.deepEqual(contextOf("---\nstatus: todo\n---\n"), { about: "", notes: [] });
+});
+
+test("Talk these through drafts a question to a new agent that answers nothing itself", () => {
+  const card = (path) =>
+    parseTask(path, `---\nhuman-ask: ["Jonas: yes or no?"]\n---\n# Title of ${path}\n`);
+  const draft = talkDraft({
+    domain: "example.com",
+    tasks: [card("tasks/a.md"), card("tasks/b.md")],
+    who: "Jonas",
+  });
+  assert.match(draft, /those for Jonas\)\. 2 questions wait for a person's answer, on 2 tasks\./);
+  assert.match(draft, /itx\.config\.taskAskers\(\)/);
+  assert.match(draft, /https:\/\/tasks\.example\.com\/\?needs=person/);
+  assert.match(draft, /- tasks\/a\.md: Title of tasks\/a\.md\n- tasks\/b\.md/);
+  assert.match(draft, /Do not answer a question on the board, do not approve anything for me/);
+  const many = talkDraft({
+    domain: "example.com",
+    repo: "other",
+    tasks: Array.from({ length: 15 }, (_, n) => card(`tasks/${n}.md`)),
+  });
+  assert.match(many, /- and 3 more/);
+  assert.match(many, /taskAskers\(\{ repo: "other" \}\)/);
+  assert.match(many, /\?repo=other&needs=person/);
+  assert.ok(many.length < HUH_DRAFT_MAX);
+});
+
+test("one event of a context in the Dash: the raw view with the event open, and none for no path or no offset", () => {
+  assert.equal(
+    eventPath("/agents/claude/x-1", 41),
+    "/contexts/agents/claude/x-1?view=%7B%22event%22%3A41%7D",
+  );
+  assert.equal(
+    new URLSearchParams(eventPath("/agents/a", 0).split("?")[1]).get("view"),
+    '{"event":0}',
+  );
+  assert.equal(
+    eventPath("/agents/a b//c", 7),
+    "/contexts?contextPath=/agents/a%20b//c&view=%7B%22event%22%3A7%7D",
+  );
+  for (const [path, offset] of [
+    ["worker", 1],
+    ["/", 1],
+    ["/agents/a", null],
+    ["/agents/a", -1],
+    ["/agents/a", 1.5],
+    ["/agents/a", "7"],
+  ])
+    assert.equal(eventPath(path, offset), null);
+});
+
+test("who hears an answer: the asker, by the card it follows or by a message, and the task's agent that follows", () => {
+  const task = parseTask("tasks/a.md", "---\nagent: /agents/worker\nhuman-ask: [x]\n---\n# A\n");
+  const followers = [
+    { agent: "/agents/worker", follows: "tasks/a.md", only: null },
+    { agent: "/agents/manager", follows: "every task", only: ["status", "human-ask"] },
+    { agent: "/agents/quiet", follows: "every task", only: ["status"] },
+    { agent: "/agents/elsewhere", follows: "tasks/b.md", only: null },
+  ];
+  const of = (agent) => receiversOf({ task, asker: { agent }, followers });
+  assert.deepEqual(of("/agents/worker"), [
+    { agent: "/agents/worker", why: "asked", hears: "card" },
+  ]);
+  // a manager that asked hears by the card; the worker that has the task hears too. Nobody else is a proxy
+  assert.deepEqual(of("/agents/manager"), [
+    { agent: "/agents/manager", why: "asked", hears: "card" },
+    { agent: "/agents/worker", why: "has the task", hears: "card" },
+  ]);
+  for (const agent of ["/agents/quiet", "/agents/elsewhere", "/agents/stranger"])
+    assert.deepEqual(of(agent), [
+      { agent, why: "asked", hears: "message" },
+      { agent: "/agents/worker", why: "has the task", hears: "card" },
+    ]);
+  // no asker known, or a person asked: only the task's agent, when it follows
+  assert.deepEqual(receiversOf({ task, asker: { agent: null, by: "misha@x" }, followers }), [
+    { agent: "/agents/worker", why: "has the task", hears: "card" },
+  ]);
+  // and when it does not follow, it is told by a message, so that the answer is heard
+  assert.deepEqual(receiversOf({ task, asker: null }), [
+    { agent: "/agents/worker", why: "has the task", hears: "message" },
+  ]);
+  assert.deepEqual(receiversOf({ task, asker: { agent: "/agents/stranger" }, followers: [] }), [
+    { agent: "/agents/stranger", why: "asked", hears: "message" },
+  ]);
+  assert.deepEqual(
+    receiversOf({ task: parseTask("tasks/b.md", "---\nagent: someone\n---\n"), asker: {} }),
+    [],
+  );
+  assert.match(
+    answerMessage({
+      domain: "example.com",
+      path: "tasks/a.md",
+      ask: "x",
+      answer: "y",
+      by: "jo",
+      why: "has the task",
+    }),
+    /^jo answered a question on a task that you have/,
+  );
+});
+
+test("what an asker that does not follow the card is told of an answer", () => {
+  const said = answerMessage({
+    domain: "example.com",
+    path: "tasks/a.md",
+    title: "A",
+    ask: "Ship it?",
+    answer: " Yes,\nafter the deploy. ",
+    by: "jo@example.com",
+  });
+  assert.match(said, /^jo@example\.com answered a question that you asked on the task board\./);
+  assert.match(
+    said,
+    /The task: "A", https:\/\/tasks\.example\.com\/\?task=tasks%2Fa\.md \(the file tasks\/a\.md of the repo \/repos\/tasks\)/,
+  );
+  assert.match(said, /The question: "Ship it\?"\nThe answer: Yes, after the deploy\.\n/);
+  assert.match(
+    answerMessage({
+      domain: "example.com",
+      repo: "other",
+      path: "tasks/a.md",
+      ask: "x",
+      answer: "",
+      by: "jo",
+    }),
+    /\?repo=other&task=tasks%2Fa\.md .*\n.*\nThe answer: \(no words\)/,
+  );
+});
+
+test("a decision's options are kept in the task's text and read back, also after the ask is answered", () => {
+  const file =
+    '---\nstatus: todo\nhuman-ask:\n  - "Jonas: a or b?"\n---\n# A\n\n## Log\n\n- a note\n';
+  const decision = {
+    ask: "Jonas: a or b?",
+    options: [
+      { name: "a", tradeoff: "Fast: see https://x.example/a" },
+      { name: "b", tradeoff: " slow,\nand safe " },
+    ],
+    recommend: "b",
+    why: "It is safe.",
+  };
+  const one = addDecision(file, decision);
+  assert.equal(
+    one,
+    `${file}\n## Decisions\n\n- **Jonas: a or b?**\n  - Option: a: Fast: see https://x.example/a\n  - Option: b: slow, and safe\n  - Recommended: b: It is safe.\n`,
+  );
+  assert.deepEqual(
+    [...decisionsOf(one)],
+    [
+      [
+        "Jonas: a or b?",
+        {
+          options: [
+            { name: "a", tradeoff: "Fast: see https://x.example/a" },
+            { name: "b", tradeoff: "slow, and safe" },
+          ],
+          recommend: "b",
+          why: "It is safe.",
+        },
+      ],
+    ],
+  );
+  // a second block for the same ask, and a decision that is not whole, change nothing
+  assert.equal(addDecision(one, decision), one);
+  assert.equal(addDecision(file, { ...decision, recommend: "c" }), file);
+  assert.equal(addDecision(file, { ...decision, options: [decision.options[0]] }), file);
+  // a second ask's block goes under the same heading; an answer leaves both blocks
+  const two = addDecision(one, {
+    ...decision,
+    ask: "Misha: c or d?",
+    options: [
+      { name: "c", tradeoff: "x" },
+      { name: "d", tradeoff: "y" },
+    ],
+    recommend: "c",
+  });
+  assert.deepEqual([...decisionsOf(two).keys()], ["Jonas: a or b?", "Misha: c or d?"]);
+  const answered = answerAsk(two, {
+    ask: "Jonas: a or b?",
+    answer: "b",
+    by: "jonas@x",
+    at: "2026-11-25T10:00:00.000Z",
+  });
+  assert.deepEqual([...decisionsOf(answered).keys()], ["Jonas: a or b?", "Misha: c or d?"]);
+  assert.deepEqual([...decisionsOf("# No decisions\n\n- **x**\n  - Option: a: b\n")], []);
+  assert.equal(decisionFault(decision), "");
+  assert.match(
+    decisionFault({ ...decision, options: [decision.options[0], decision.options[0]] }),
+    /differ from each other/,
+  );
+  assert.match(decisionFault(null), /decision is \{ options/);
+  // as a change of the board, with its line in the commit's message
+  const change = { kind: "decision", path: "tasks/a.md", ...decision };
+  assert.equal(applyChange({ "tasks/a.md": file }, change)["tasks/a.md"], one);
+  assert.equal(messageOf([change]), 'tasks: tasks/a.md: the options of "Jonas: a or b?"');
+});
+
+test("what presses: the priority, then held work, then the longest wait; and it is the first order", () => {
+  const card = (path, front) => parseTask(path, `---\n${front}\nhuman-ask: [x]\n---\n# ${path}\n`);
+  const a = card("tasks/a.md", "status: backlog");
+  const b = card("tasks/b.md", "status: in-progress");
+  const c = card("tasks/c.md", "status: backlog\npriority: high");
+  const d = card("tasks/d.md", "status: todo\npriority: low\nblocked-on: CI");
+  const e = card("tasks/e.md", "status: todo\nblocked-on: a deploy");
+  assert.deepEqual(
+    [a, b, c, d, e].map((task) => [pressOf(task).rank < pressOf(a).rank, pressOf(task).held]),
+    [
+      [false, false],
+      [false, true],
+      [true, false],
+      [false, true],
+      [false, true],
+    ],
+  );
+  const at = {
+    "tasks/a.md": "2026-11-20T10:00:00Z",
+    "tasks/b.md": "2026-11-24T10:00:00Z",
+    "tasks/e.md": "2026-11-22T10:00:00Z",
+  };
+  // high first; then the held ones of no priority, the longer wait first; then the rest; low last
+  assert.deepEqual(
+    orderNeeds([a, b, c, d, e], "pressing", (task) => at[task.path]).map((task) =>
+      task.path.slice(6, 7),
+    ),
+    ["c", "e", "b", "a", "d"],
+  );
+  assert.equal(NEEDS_ORDERS[0].id, "pressing");
+});
+
+test("an ask that may be outdated, whom the page asks, and with what words", () => {
+  const now = Date.parse("2026-11-25T12:00:00Z");
+  assert.equal(staleOf({ asker: { agent: "/agents/a", at: "2026-11-24T12:00:00Z" }, now }), "");
+  assert.equal(
+    staleOf({ asker: { agent: "/agents/a", at: "2026-11-21T11:00:00Z" }, now }),
+    "asked 4 days ago",
+  );
+  assert.equal(
+    staleOf({
+      asker: { agent: "/agents/coding-chief-of-staff", at: "2026-11-25T11:00:00Z" },
+      now,
+      retired: ["/agents/coding-chief-of-staff"],
+    }),
+    "the agent that asked is retired",
+  );
+  assert.equal(staleOf({ asker: { agent: null, at: null }, now }), "");
+  const task = parseTask("tasks/a.md", "---\nagent: /agents/worker\n---\n# A\n");
+  assert.equal(keeperOf({ task, asker: { agent: "/agents/asker" } }), "/agents/asker");
+  assert.equal(
+    keeperOf({
+      task,
+      asker: { agent: "/agents/coding-chief-of-staff" },
+      retired: ["/agents/coding-chief-of-staff"],
+    }),
+    "/agents/worker",
+  );
+  assert.equal(keeperOf({ task: parseTask("tasks/b.md", "# B\n"), asker: {} }), null);
+  const said = stillNeededMessage({
+    domain: "example.com",
+    path: "tasks/a.md",
+    title: "A",
+    ask: "Ship it?",
+    by: "jo@example.com",
+    why: "asked 4 days ago",
+  });
+  assert.match(
+    said,
+    /^jo@example\.com asks whether a question on the task board is still needed \(asked 4 days ago\)\./,
+  );
+  assert.match(said, /The question: "Ship it\?"/);
+  assert.match(said, /withdraw: \{ ask: "<its beginning>", why: "…" \}/);
 });

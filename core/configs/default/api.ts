@@ -6,9 +6,20 @@
 // mind's standard API. An owner adds a method to worker.ts's class, or here.
 import type { IterateContextApiWith } from "iterate/api";
 import { IterateConfigEntrypoint } from "iterate/sdk";
+import { agentCatalogOf, type CatalogItx, isAgentOf } from "./apps/dash/agent-catalog.ts";
 import { dashLink, type DashLinkInput } from "./apps/dash/links.ts";
 import { runStep, stepContext } from "./apps/onboarding/steps.ts";
 import { startMeeting } from "./apps/meet/meeting.ts";
+// @ts-expect-error -- a plain module of the Tasks app, with no types
+import { taskAskers } from "./apps/tasks/askers.js";
+// @ts-expect-error -- a plain module of the Tasks app, with no types
+import { answerTask } from "./apps/tasks/asks.js";
+// @ts-expect-error -- a plain module of the Tasks app, with no types
+import { taskBoard } from "./apps/tasks/board.js";
+// @ts-expect-error -- a plain module of the Tasks app, with no types
+import { taskAssign, taskOpen, taskUpdate } from "./apps/tasks/cards.js";
+// @ts-expect-error -- a plain module of the Tasks app, with no types
+import { followTasks, taskFollowers, unfollowTasks } from "./apps/tasks/feed.js";
 import { exceptionGroups } from "./apps/telemetry/crashes.ts";
 import { pageSpeed } from "./apps/telemetry/page-speed.ts";
 import { callSnapshot } from "./call/snapshot.ts";
@@ -26,6 +37,11 @@ import { profileOf } from "./profile.ts";
 // oxlint-disable-next-line import/extensions -- a folder: the loader hands over every file under it, by path
 import profileFiles from "./profile/";
 import { slackForAgent } from "./slack.ts";
+
+/** THE REPO OF THE MIND'S TASKS: the board shows the markdown files under its `tasks/`
+ *  (worker.ts, `tasksApp({ repo })`), and the task calls below read and write it when a call
+ *  names no repo. A new mind's cards are its onboarding jobs, in the repo it starts with. */
+export const TASKS_BOARD_REPO = "/repos/onboarding";
 
 export abstract class ConfigApi extends IterateConfigEntrypoint {
   /** `itx.config.dashLink(input)`: a canonical URL to a view in this mind's Dash
@@ -200,6 +216,147 @@ export abstract class ConfigApi extends IterateConfigEntrypoint {
   async pageSpeed(options?: { days?: number; app?: string; limit?: number; members?: boolean }) {
     using itx = this.getItx();
     return await pageSpeed(itx, options);
+  }
+
+  /** `itx.config.followTasks({ file?, agent?, wake?, only?, repo? })`: from now on an agent is
+   *  told of each change of one task file (`file`, like "tasks/a-task.md"), or with no `file` of
+   *  every task, as a message with what changed and a small diff (apps/tasks/feed.js; tasks.md).
+   *  `agent`: the calling agent's own context when not given; a member's script and the MCP `run`
+   *  tool name it. `repo`: another repo of the mind than the board's (`TASKS_BOARD_REPO`), by its name. `wake: false`:
+   *  the words are context only. `only`: the changes that moved one of the fields it names
+   *  (`["status", "blocked-on", "human-ask"]`), and no other. It answers
+   *  `{ agent, follows, only, repo, log, row }`. */
+  async followTasks(input?: {
+    file?: string;
+    agent?: string;
+    wake?: boolean;
+    only?: string[];
+    repo?: string;
+  }) {
+    using itx = this.getItx();
+    return await followTasks(
+      itx,
+      { ...input, repo: input?.repo || TASKS_BOARD_REPO },
+      this.taskDeps(itx),
+    );
+  }
+
+  /** `itx.config.unfollowTasks({ file?, agent?, repo? })`: ends what `followTasks` with the same
+   *  `file` (or with none) and the same repo began. It answers `{ agent, follows, repo, ended }`. */
+  async unfollowTasks(input?: { file?: string; agent?: string; repo?: string }) {
+    using itx = this.getItx();
+    return await unfollowTasks(
+      itx,
+      { ...input, repo: input?.repo || TASKS_BOARD_REPO },
+      this.taskDeps(itx),
+    );
+  }
+
+  /** `itx.config.taskFollowers({ repo? })`: which agent follows which task file, or "every task",
+   *  in the board's repo or in the repo that `repo` names. */
+  async taskFollowers(input?: { repo?: string }) {
+    using itx = this.getItx();
+    return await taskFollowers(itx, { ...input, repo: input?.repo || TASKS_BOARD_REPO });
+  }
+
+  /** `itx.config.answerTask({ file, ask, answer, by, repo? })`: an answer that a person gave to
+   *  an ask of a task (one line of its `human-ask:`), written into the task file as the board
+   *  writes it: the ask's line goes, and the ask with the answer, `by` and the time is kept under
+   *  `## Answers` (apps/tasks/asks.js). For an answer that reached an agent in a chat or on a
+   *  call; a person at the board answers there ("Needs a person"). `ask`: the ask's whole text.
+   *  It answers `{ repo, file, commitOid, stillAsked }`. */
+  async answerTask(input: {
+    file: string;
+    ask: string;
+    answer: string;
+    by: string;
+    repo?: string;
+  }) {
+    using itx = this.getItx();
+    return await answerTask(itx, { ...input, repo: input?.repo || TASKS_BOARD_REPO });
+  }
+
+  /** `itx.config.taskAskers({ repo? })`: who asked each ask that a task still has (a line of its
+   *  `human-ask:`), read from the change feed (apps/tasks/askers.js): the agent of the commit that
+   *  added the ask, by its `Via:` line or the platform's stamp. The board's "Needs a person" links
+   *  each ask to that agent's chat. It answers `{ repo, asks, readFrom }`, each ask as
+   *  `{ file, ask, agent, by, page, at, message, model, blocking, assignee }`. `agent` is null when nothing
+   *  says who asked; `assignee` is the task's own agent, which is not the asker. */
+  async taskAskers(input?: { repo?: string }) {
+    using itx = this.getItx();
+    return await taskAskers(itx, { ...input, repo: input?.repo || TASKS_BOARD_REPO });
+  }
+
+  /** `itx.config.taskBoard({ repo? })`: the whole board as data, in one call, for an agent that
+   *  manages work or starts with no history (apps/tasks/board.js): every task as its card with the
+   *  answers people gave to its asks, its last change and whether the agent it names has work now,
+   *  the tasks that need a person, the board's newest changes and who follows what. It answers
+   *  `{ repo, commitOid, board, tasks, needsAPerson, recentChanges, followers }`. */
+  async taskBoard(input?: { repo?: string }) {
+    using itx = this.getItx();
+    return await taskBoard(itx, { ...input, repo: input?.repo || TASKS_BOARD_REPO });
+  }
+
+  /** `itx.config.taskOpen({ title, text?, status?, owner?, agent?, tags?, ask?, decision?,
+   *  noChoice?, repo?, by? })`: a new card on the board (apps/tasks/cards.js): `text` is the ask
+   *  in the person's own words and where it came from, `owner` the person who asked. It answers
+   *  `{ repo, file, commitOid, link }`. */
+  async taskOpen(input: Record<string, unknown>) {
+    using itx = this.getItx();
+    return await taskOpen(
+      itx,
+      { ...input, repo: input?.repo || TASKS_BOARD_REPO },
+      this.taskDeps(itx),
+    );
+  }
+
+  /** `itx.config.taskUpdate({ file, status?, title?, owner?, agent?, tags?, model?, effort?,
+   *  blockedOn?, ask?, decision?, noChoice?, withdraw?, reword?, note?, repo?, by? })`: one commit
+   *  that keeps a card true, with no YAML by hand (apps/tasks/cards.js; tasks.md). `blockedOn: ""`
+   *  takes the blocker away; `ask` is one more question for a person, with its `decision` or
+   *  `noChoice`; `withdraw: { ask, why }` takes an ask off that nobody has to answer any more, and
+   *  `reword: { ask, to }` writes one again in plain words; `note` is one line under `## Log`.
+   *  `by`: the agent that makes the change, when the call comes from no agent's context (the MCP
+   *  `run` tool). It answers `{ repo, file, commitOid, changed, card }`. */
+  async taskUpdate(input: Record<string, unknown>) {
+    using itx = this.getItx();
+    return await taskUpdate(
+      itx,
+      { ...input, repo: input?.repo || TASKS_BOARD_REPO },
+      this.taskDeps(itx),
+    );
+  }
+
+  /** `itx.config.taskAssign({ file, agent, message?, repo?, by? })`: gives a card to an agent that
+   *  runs (apps/tasks/cards.js). The card names the agent and is in progress, and the agent gets
+   *  one message that makes the card its brief. It answers
+   *  `{ repo, file, agent, model, effort, starting, running, card }`. */
+  async taskAssign(input: Record<string, unknown>) {
+    using itx = this.getItx();
+    return await taskAssign(
+      itx,
+      { ...input, repo: input?.repo || TASKS_BOARD_REPO },
+      this.taskDeps(itx),
+    );
+  }
+
+  /** What the task calls ask of the mind (apps/tasks/cards.js, feed.js): where a call came from,
+   *  and the one gate that says a path is an agent (apps/dash/agent-catalog.ts), since a
+   *  follower's row writes to the path it names. A mind adds its own parts by overriding this in
+   *  worker.ts's class: cards.js lists them (`linkNote`, `briefRules`, `startWorker`,
+   *  `sessionState`). */
+  protected taskDeps(itx: object) {
+    const catalog = async () =>
+      (await agentCatalogOf(itx as CatalogItx)) as { agents?: Record<string, unknown> } | null;
+    return {
+      callerPath: () => this.callerPath(),
+      isAgent: async (path: string) => isAgentOf(await catalog(), path),
+      /** the agent's row in the catalog (`kind`, `status`, `lastActivityAt`), or null */
+      agentRow: async (path: string) => {
+        const agents = (await catalog())?.agents;
+        return agents && Object.hasOwn(agents, path) ? agents[path] : null;
+      },
+    };
   }
 }
 

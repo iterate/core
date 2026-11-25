@@ -896,6 +896,18 @@ body,
   font-size: 0.8125rem;
 }
 
+/* a link in an ask or in what holds a task (app.js `Linked`) */
+.needs-link {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.needs-link:hover {
+  text-decoration-thickness: 2px;
+}
+
 /* an ask's answer box (app.js `Ask`): the field takes the row, the button keeps its own width */
 /* under an ask: who asked it, a link to that agent's chat in the Dash */
 .needs-asker {
@@ -913,6 +925,28 @@ a.needs-asker:hover {
   color: var(--foreground);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* who asked, then "huh?" (app.js `Huh`): one line under the ask */
+.needs-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+.needs-huh {
+  margin-top: 0.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.needs-huh:hover {
+  color: var(--foreground);
+  text-decoration-style: solid;
 }
 
 .needs-asker > svg {
@@ -936,4 +970,586 @@ a.needs-asker:hover {
   margin: 0;
   color: var(--muted-foreground);
   font-size: 0.8125rem;
+}
+
+/* ── a card that waits for a person (app.js `NeedsMark`): amber, as the dot of a high priority ── */
+.task[data-needs] {
+  border-left: 3px solid oklch(0.75 0.15 75);
+}
+
+.task-needs {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid color-mix(in oklab, oklch(0.75 0.15 75) 60%, var(--border));
+  border-radius: calc(var(--radius) - 2px);
+  background: color-mix(in oklab, oklch(0.75 0.15 75) 20%, var(--card));
+  color: var(--foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.task-needs:hover {
+  background: color-mix(in oklab, oklch(0.75 0.15 75) 32%, var(--card));
+}
+
+.task-needs:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.task-needs > i,
+.task-asks-title > i {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: oklch(0.75 0.15 75);
+}
+
+.task-needs-who {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.task-needs-count {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+/* ── the same in the task's sheet, before the title (app.js `TaskAsks`) ── */
+.task-asks {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.25rem 1.5rem 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.task-asks[data-waits] {
+  border-color: color-mix(in oklab, oklch(0.75 0.15 75) 60%, var(--border));
+  border-left: 3px solid oklch(0.75 0.15 75);
+  background: color-mix(in oklab, oklch(0.75 0.15 75) 10%, var(--card));
+}
+
+.task-asks-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.task-asks .needs-asks {
+  padding-inline-start: 1.25rem;
+  font-size: 0.875rem;
+}
+
+@media (max-width: 640px) {
+  .task-asks {
+    margin-inline: 1rem;
+  }
+
+  .task-asks .needs-answer {
+    flex-wrap: wrap;
+  }
+}
+
+/* ── "Needs a person": for whom, the order, "Talk these through" (app.js `NeedsPage`) ── */
+.needs-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 48rem;
+  padding: 1rem 1rem 0;
+}
+
+.needs-for {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.needs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.needs-chip > i {
+  color: var(--muted-foreground);
+  font-style: normal;
+  font-size: 0.75rem;
+}
+
+.needs-chip[aria-pressed="true"] {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.needs-chip[aria-pressed="true"] > i {
+  color: inherit;
+  opacity: 0.7;
+}
+
+.needs-chip:focus-visible,
+.needs-talk:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.needs-bar-end {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.needs-talk {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.needs-talk > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.needs-ago {
+  margin-top: 0.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* what a person reads before they answer (app.js `Context`) */
+.needs-context,
+.needs-others {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.needs-context summary,
+.needs-others summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.75rem;
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.needs-context summary::-webkit-details-marker,
+.needs-others summary::-webkit-details-marker {
+  display: none;
+}
+
+.needs-context summary > .needs-asker {
+  margin-top: 0;
+}
+
+.needs-note,
+.needs-about {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
+.needs-note {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.needs-context details .needs-note {
+  display: block;
+}
+
+.needs-about {
+  color: var(--foreground);
+  white-space: pre-wrap;
+}
+
+.needs-others > .needs-asks {
+  margin-top: 0.375rem;
+  color: var(--foreground);
+}
+
+@media (max-width: 640px) {
+  .needs-bar-end {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+  }
+}
+
+/* ── an answer: the box that grows, who hears it, and what you answered (app.js `Ask`, `Answered`) ── */
+.needs-answer {
+  align-items: flex-end;
+}
+
+.needs-box {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.25rem;
+  max-height: 20rem;
+  padding: 0.4rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  resize: none;
+  overflow-y: auto;
+}
+
+.needs-box:focus-visible {
+  border-color: var(--ring);
+  outline: 2px solid color-mix(in oklab, var(--ring) 40%, transparent);
+}
+
+.needs-goes {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.needs-answered {
+  max-width: 48rem;
+  padding: 0 1rem 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+}
+
+.task-asks .needs-answered {
+  padding: 0;
+}
+
+.needs-answered > summary {
+  width: fit-content;
+  margin: 0.5rem 0 0.375rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.needs-answered > ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.needs-answered li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.needs-answered-task {
+  color: var(--foreground);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.needs-answered-task:hover {
+  text-decoration: underline;
+}
+
+.needs-answered-said {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.needs-answered-said::before {
+  content: "→ ";
+  color: var(--muted-foreground);
+}
+
+/* ── the button that opens an agent's chat (app.js `ChatButton`) ── */
+.needs-chat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.125rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--foreground);
+  font-size: 0.75rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.needs-chat-toggle > svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.needs-chat-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* ── the sheet with an agent's chat (app.js `ChatButton`): the Dash's page of the agent in a frame ── */
+.chat-sheet {
+  gap: 0;
+  width: min(100vw, 46rem);
+  max-width: none;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.chat-sheet-top {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.75rem 3.25rem 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-sheet-about {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.chat-sheet-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+}
+
+/* ── a decision's options under its ask, and the model that asked (app.js `Decision`) ── */
+.needs-decision {
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--background);
+  font-size: 0.8125rem;
+}
+
+.needs-decision[data-bare] {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.needs-decision > ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.needs-decision li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.needs-option {
+  flex: none;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--foreground);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.needs-option:hover,
+.needs-option:focus-visible {
+  border-color: var(--foreground);
+  outline: none;
+}
+
+.needs-decision li[data-recommended] > .needs-option {
+  border-color: oklch(0.6 0.13 150);
+  background: color-mix(in oklab, oklch(0.6 0.13 150) 16%, var(--card));
+}
+
+.needs-recommend {
+  margin: 0.5rem 0 0;
+}
+
+.needs-by {
+  display: block;
+  margin-top: 0.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.needs-model {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.6875rem;
+}
+
+.needs-model[data-unrecorded] {
+  font-family: inherit;
+  font-style: italic;
+}
+
+/* an ask that may be outdated (app.js `Stale`), and a task's priority in place (`Press`) */
+.needs-stale {
+  display: block;
+  margin-top: 0.125rem;
+  color: oklch(0.55 0.13 60);
+  font-size: 0.75rem;
+}
+
+.needs-press {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.needs-top {
+  flex-wrap: wrap;
+}
+
+.needs-press [data-priority="urgent"],
+.needs-press [data-priority="high"] {
+  border-color: oklch(0.63 0.21 25);
+  font-weight: 600;
+}
+
+/* ── an ask's own question, set apart from what is around it (app.js `Ask`) ──
+   Jonas, 25 Nov 2026: "the formatting of all of these questions is horrible. You have to like
+   bold the question". The question is the largest and the only bold text of its ask; who asked,
+   the model, the options and the chat are smaller and grey, under it. Each ask of a task has a
+   rule above it, and the list has no indent on a narrow screen. */
+.needs-question {
+  display: block;
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.needs-question .needs-link {
+  font-weight: 600;
+}
+
+.needs-asks > li + li {
+  margin-top: 0.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.needs-asks > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.needs-asks > li > .needs-who,
+.needs-asks > li > .needs-answer {
+  margin-top: 0;
+}
+
+@media (max-width: 640px) {
+  .needs-asks,
+  .task-asks .needs-asks {
+    padding-inline-start: 0;
+  }
+
+  .chat-sheet {
+    width: 100vw;
+    border-left: 0;
+  }
+}
+
+/* ── the agent's own last message, under an ask's question (app.js `Blocking`) ── */
+.needs-said {
+  padding: 0.5rem 0.625rem;
+  border-left: 3px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+  font-size: 0.8125rem;
+}
+
+.needs-said-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.needs-said > p {
+  display: -webkit-box;
+  margin: 0.125rem 0 0;
+  overflow: hidden;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.needs-said[data-whole] > p {
+  display: block;
+}
+
+.needs-said > .tasks-link {
+  font-size: 0.75rem;
+}
+
+.needs-said code {
+  padding: 0 0.2rem;
+  border-radius: 3px;
+  background: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
 }

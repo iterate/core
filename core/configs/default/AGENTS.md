@@ -73,6 +73,8 @@ that names your task BEFORE the task, not after a failure:
   limit: [mail-replies.md](mail-replies.md).
 - Before you let another mind in, send events to one, or act on what one sent:
   [minds.md](minds.md).
+- Before you make, move, give out, follow or answer a task, ask a person a question that a
+  task waits for, or read the board: [tasks.md](tasks.md).
 - Before you add analytics or error reporting to a page: every page already has both
   ([page-events.md](page-events.md)). To see what broke, `await itx.config.exceptions()`
   ([errors.md](errors.md)). To see how fast the pages are, `await itx.config.pageSpeed()`
@@ -224,6 +226,10 @@ Each app is a folder under `apps/` ([apps.md](apps.md)).
   grants nothing.
 - `apps/docs/` is the Docs app, on `docs.<zone>` for members: the files of this mind's repos,
   written together in a browser ([docs-app.md](docs-app.md)).
+- `apps/tasks/` is the task board, on `tasks.<zone>` for members: each Markdown file under
+  `tasks/` of the tasks repo is a card, and "Needs a person" lists what the agents ask the
+  members, who answer there. An agent keeps a card with `itx.config.taskOpen`, `taskUpdate` and
+  `taskAssign`, and follows one with `itx.config.followTasks` ([tasks.md](tasks.md)).
 - `apps/meet/` is Meet, on `meet.<zone>`: start a meeting (`itx.config.startMeeting`), and any
   agent's chat with its call, for members and the guests they let in by a link
   ([apps.md](apps.md), "Meet"). The Dash's agent page does the same for a member: Share makes,

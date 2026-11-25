@@ -24,8 +24,13 @@ const TASKS_REPO = "/repos/tasks";
 
 /** `repo`: THE REPO THE BOARD POINTS AT, a path of this mind (`/repos/<name>`). The page shows
  *  the markdown files under `tasks/` of it. While the mind has no such repo, the page shows the
- *  config repo's `tasks/`; `?repo=<name>` shows any other repo for one visit. */
-export function tasksApp({ repo = TASKS_REPO }: { repo?: string } = {}) {
+ *  config repo's `tasks/`; `?repo=<name>` shows any other repo for one visit.
+ *  `retiredAgents`: the paths of agents that the mind retired. "Needs a person" marks an ask of
+ *  one as maybe outdated, and asks the task's agent about it in its place. */
+export function tasksApp({
+  repo = TASKS_REPO,
+  retiredAgents = [],
+}: { repo?: string; retiredAgents?: string[] } = {}) {
   return {
     /** The app's description and icon, for anyone: worker.ts asks this before its guard
      *  (../open-files.ts). */
@@ -39,7 +44,7 @@ export function tasksApp({ repo = TASKS_REPO }: { repo?: string } = {}) {
       if (url.pathname === "/processors.json") return Response.json(await processorsAnswer());
       // the repo worker.ts points the board at: the page asks once, when it loads
       if (url.pathname === "/board.json")
-        return Response.json({ repo }, { headers: { "cache-control": "no-store" } });
+        return Response.json({ repo, retiredAgents }, { headers: { "cache-control": "no-store" } });
       // The page's own socket (/itx) and what @iterate-com/ui's shell asks of its host
       // (/.auth/session.json, /.auth/minds.json, /.auth/logout).
       const page = host.auth.memberPage(request);

@@ -84,13 +84,33 @@ import {
 import { itxSessionOf, memberItx } from "@iterate-com/ui/live";
 import {
   agentChatPath,
+  agoOf,
+  answerMessage,
+  decisionsOf,
+  keeperOf,
+  PRIORITIES,
+  pressOf,
+  staleOf,
+  stillNeededMessage,
+  receiversOf,
+  askIsFor,
+  contextOf,
+  NEEDS_ORDERS,
+  needsFor,
+  orderNeeds,
+  peopleAsked,
+  talkDraft,
+  huhDraft,
+  huhHref,
   applyChange,
   columnOf,
   columnsOf,
   commitOf,
   DIMENSIONS,
   dimensionsOf,
+  eventPath,
   filterTasks,
+  linkedParts,
   messageOf,
   needsAPerson,
   newTask,
@@ -99,6 +119,7 @@ import {
   TASKS_REPO,
   tasksOf,
   valuesOf,
+  waitsForAPerson,
 } from "./tasks-model.js";
 
 // ── the member's itx ──
@@ -121,6 +142,11 @@ const [{ principal }, initialRepos, pointed] = await Promise.all([
 const BOARD_REPO = /^\/repos\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(pointed?.repo)
   ? pointed.repo
   : TASKS_REPO;
+/** The agents that the mind retired (app.ts `tasksApp({ retiredAgents })`): an ask of one may be
+ *  outdated, and "Still needed?" goes to the task's agent in its place. */
+const RETIRED_AGENTS = Array.isArray(pointed?.retiredAgents)
+  ? pointed.retiredAgents.filter((path) => typeof path === "string")
+  : [];
 /** Who a commit made here is by: the person's email as both name and address. */
 const author = principal?.email ? { name: principal.email, email: principal.email } : undefined;
 
@@ -146,11 +172,13 @@ const CODE_REPO = "/repos/config";
 /** A task's file in the Docs app, where it is written and commented on. */
 const docsHref = (path) =>
   `https://docs.${domain}/?repo=${encodeURIComponent(REPO_NAME)}&doc=${encodeURIComponent(path)}`;
+/** The Dash of this mind: the host `dash` beside this one, on this page's own scheme and port. */
+const DASH = `${location.protocol}//dash.${location.host.split(".").slice(1).join(".") || location.host}`;
 /** An agent's chat in the Dash (tasks-model.js `agentChatPath`), or null when the card names no
  *  context path. */
 const agentHref = (agent) => {
   const path = agentChatPath(agent);
-  return path && `https://dash.${domain}${path}`;
+  return path && `${DASH}${path}`;
 };
 /** The board of another repo: the page again, with no filter of this one. */
 const showRepo = (name) => {
@@ -466,6 +494,11 @@ function useView() {
       task: params.get("task"),
       /** `?needs=person`: the list of what waits for a person in place of the board */
       needs: params.get("needs") === "person",
+      /** "Needs a person" for one person (`?for=Jonas`; `?for=-`: the asks that name nobody), or null */
+      needsFor:
+        params.get("for") === null ? null : params.get("for") === "-" ? "" : params.get("for"),
+      /** the order of "Needs a person" (`?order=`): tasks-model.js `NEEDS_ORDERS` */
+      order: NEEDS_ORDERS.find(({ id }) => id === params.get("order"))?.id ?? NEEDS_ORDERS[0].id,
     };
   }, [search]);
 }
@@ -741,7 +774,12 @@ function App() {
       <//>
       ${
         view.needs
-          ? html`<${NeedsPage} state=${state} tasks=${needsAPerson(shown)} filtered=${filtered} />`
+          ? html`<${NeedsPage}
+              state=${state}
+              tasks=${needsAPerson(shown)}
+              filtered=${filtered}
+              view=${view}
+            />`
           : html`<${Page}
               state=${state}
               shown=${shown}
@@ -979,6 +1017,10 @@ function useAskers(tasks) {
   }, [asked]);
   return askers;
 }
+/** One ask's row of `useAskers`: null until the first answer, `{ unread }` when the call failed,
+ *  and `{}` for an ask that the answer does not have (a new one): the page then names the task's agent. */
+const askerOf = (askers, task, ask) =>
+  askers && (askers === "unread" ? { unread: true } : (askers.get(`${task.path}\n${ask}`) ?? {}));
 
 /** WHO ASKED, UNDER AN ASK: the agent that added the ask, as a link to its chat in the Dash, where
  *  a person asks it why before they answer. `asker` is the ask's row of `useAskers`. When nothing
@@ -1024,57 +1066,662 @@ function Asker({ task, asker }) {
   `;
 }
 
+/** THE MESSAGE THAT ASKED, AFTER WHO ASKED (Jonas, 25 Nov 2026): a link to the one event of the
+ *  asker's log in which it asked, open in the Dash's raw view of that context (tasks-model.js
+ *  `eventPath`), when `itx.config.taskAskers` knows it (`message`: apps/tasks/askers.js says how
+ *  it is found). An event that led to the ask and does not hold its words is called that, not
+ *  "the message". The link opens the raw view of a context, never the agent's chat, and its title
+ *  says so. With none, there is no link here, and "Asked by" opens the chat as before. */
+function AskMessage({ asker }) {
+  const path = asker?.message && eventPath(asker.message.path, asker.message.offset);
+  if (!path) return null;
+  return html`
+    <a
+      class="needs-huh"
+      data-ask-message
+      href=${`${DASH}${path}`}
+      target="_blank"
+      rel="noreferrer"
+      data-words=${asker.message.words || undefined}
+      title=${
+        asker.message.words
+          ? `Opens event ${asker.message.offset} of ${asker.message.path} in the Dash's view of that context (not the agent's chat): the turn in which this was asked.`
+          : `Opens event ${asker.message.offset} of ${asker.message.path} in the Dash's view of that context (not the agent's chat): the event that led to this ask. It does not hold the ask's words.`
+      }
+    >
+      ${asker.message.words ? "the message" : "what led to it"}
+    </a>
+  `;
+}
+
+/** "huh?", AFTER WHO ASKED (Misha, 23 Nov 2026): a new tab with the Agents app's home, where the
+ *  box that starts a NEW agent holds a draft that asks it to explain this ask (tasks-model.js
+ *  `huhDraft`, `huhHref`). Nothing is sent: the person reads the draft, changes it and starts the
+ *  agent, or closes the tab. The asker is not told. No link before the askers are read: the draft
+ *  names who asked. */
+function Huh({ task, ask, asker }) {
+  if (!asker) return null;
+  const draft = huhDraft({
+    domain,
+    repo: REPO_NAME,
+    path: task.path,
+    title: task.title,
+    ask,
+    asker,
+    taskAgent: task.agent,
+  });
+  return html`
+    <a
+      class="needs-huh"
+      href=${huhHref(domain, draft)}
+      target="_blank"
+      rel="noreferrer"
+      title="Opens a new agent's message box with a draft that asks it to explain this question. Nothing is sent until you send it, and the agent that asked is not told."
+    >
+      huh?
+    </a>
+  `;
+}
+
+/** A LINE WITH ITS LINKS: an ask or what holds a task, where `[words](https://…)` and a bare
+ *  `https://…` are links (tasks-model.js `linkedParts`). A link opens in a new tab, so that the
+ *  answer a person is writing stays. */
+function Linked({ text }) {
+  return linkedParts(text).map((part, index) =>
+    part.href
+      ? html`<a
+          key=${index}
+          class="needs-link"
+          href=${part.href}
+          target="_blank"
+          rel="noreferrer"
+          title=${part.href}
+          >${part.text}</a
+        >`
+      : part.text,
+  );
+}
+
+/** "3 d ago", or "just now". */
+const agoWords = (at) => (agoOf(at) === "now" ? "just now" : `${agoOf(at)} ago`);
+
+/** WHO FOLLOWS WHICH TASK (`itx.config.taskFollowers`), for the line that says who hears an
+ *  answer: null until the first answer, [] when the call fails (the line then names the asker as
+ *  one that gets a message, which is what the page then does). Asked once for a page, and again
+ *  after an answer. */
+let followersAsked;
+const followersOf = (fresh) =>
+  (followersAsked =
+    (!fresh && followersAsked) ||
+    itx.config.taskFollowers({ repo: REPO_NAME }).then(
+      (rows) => [...rows],
+      () => [],
+    ));
+function useFollowers() {
+  const [followers, setFollowers] = useState(null);
+  useEffect(() => {
+    let live = true;
+    followersOf().then((rows) => live && setFollowers(rows));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return followers;
+}
+
+// WHAT THIS PERSON ANSWERED HERE, kept in this browser alone (localStorage, for a week, the
+// newest 40): the ask, the answer and the agents that heard it, so that the page can say what
+// happened to an answer and where the agent's reply will be (its chat). The card's own text
+// keeps every answer for everybody (`## Answers`); this list is only the way back to the chats.
+const ANSWERED_KEY = `tasks:answered:${REPO_NAME}`;
+const answeredStore = (() => {
+  const listeners = new Set();
+  const read = () => {
+    try {
+      const rows = JSON.parse(localStorage.getItem(ANSWERED_KEY) || "[]");
+      return Array.isArray(rows)
+        ? rows.filter((row) => Date.now() - Date.parse(row.at) < 7 * 86_400_000)
+        : [];
+    } catch {
+      return [];
+    }
+  };
+  let rows = read();
+  return {
+    get: () => rows,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    add(row) {
+      rows = [row, ...rows].slice(0, 40);
+      try {
+        localStorage.setItem(ANSWERED_KEY, JSON.stringify(rows));
+      } catch {
+        // a browser that keeps nothing: the list lives as long as the page
+      }
+      for (const listener of listeners) listener();
+    },
+    /** One row's receiver, told or not: `told` true, or the words of why not. */
+    told(at, agent, told) {
+      rows = rows.map((row) =>
+        row.at === at
+          ? {
+              ...row,
+              receivers: row.receivers.map((each) =>
+                each.agent === agent ? { ...each, told } : each,
+              ),
+            }
+          : row,
+      );
+      try {
+        localStorage.setItem(ANSWERED_KEY, JSON.stringify(rows));
+      } catch {
+        // as above
+      }
+      for (const listener of listeners) listener();
+    },
+  };
+})();
+const useAnswered = () =>
+  useSyncExternalStore(answeredStore.subscribe, answeredStore.get, answeredStore.get);
+
+/** AN ANSWER, SENT: the board's change (one commit a moment later, `answerAsk`), a row of what this
+ *  person answered, and for an asker that does not follow the card a message to it
+ *  (tasks-model.js `receiversOf`, `answerMessage`). The message goes from this person's own
+ *  session to the agent that asked, and through no other agent. */
+function sendAnswer({ task, ask, answer, asker, followers }) {
+  const by = principal?.email || principal?.actor || "someone";
+  const at = new Date().toISOString();
+  const receivers = receiversOf({ task, asker, followers: followers ?? [] });
+  board.change({ kind: "answer", path: task.path, ask, answer, by, at });
+  answeredStore.add({
+    at,
+    path: task.path,
+    title: task.title,
+    ask,
+    answer: answer.replace(/\s+/g, " ").trim(),
+    receivers,
+  });
+  for (const { agent, hears, why } of receivers) {
+    if (hears !== "message") continue;
+    itx.agents
+      .get(agent)
+      .message(
+        answerMessage({
+          domain,
+          repo: REPO_NAME,
+          path: task.path,
+          title: task.title,
+          ask,
+          answer,
+          by,
+          why,
+        }),
+      )
+      .then(
+        () => answeredStore.told(at, agent, true),
+        (error) => answeredStore.told(at, agent, wordsOf(error)),
+      );
+  }
+  followersOf(true);
+}
+
+// ── an agent's chat, in a sheet ──
+// "Chat with <agent>" OPENS THAT AGENT'S CHAT IN A SHEET at the right of the page, over the list.
+// It is the DASH'S OWN PAGE OF THE AGENT in a frame (`dash.<domain>/agents/<path>?embed=1`:
+// apps/dash/index.html hides the Dash's sidebar button there). The Dash draws every kind of agent
+// with that kind's own view (a Claude Code session's turns, an iterate agent's chat) and its
+// composer. The frame is the member's own Dash, signed in by the same cookie on the same site: it
+// grants nothing that the Dash's link does not.
+//
+// HOW IT CAME TO THIS (Jonas, 25 Nov 2026). He asked for "an embedded agent component that slides
+// open and shows it inline, and then shows when your answer has gone in". A first try drew the
+// kit's plain `AgentChat` in a box under the ask: it shows "Nothing said yet" for a coding session.
+// A second drew the Dash's page under each ask as soon as the ask came into view: "yes but i hate
+// it. should be optional and probably open in a sheet or something when opened", and: "it's
+// overwhelming". So NOTHING OPENS A CHAT BUT THE PERSON'S CLICK on its button: not a task's
+// sheet, not another ask, not an answer. One chat is open at a time, and the answer box needs none.
+
+/** The button that opens an agent's chat, and the sheet with the chat. The sheet is this
+ *  button's own child, so that it opens over a task's sheet too, which is a dialog itself. Its
+ *  frame is made when the sheet first opens, and is gone when it closes. */
+function ChatButton({ agent, about }) {
+  const [open, setOpen] = useState(false);
+  const path = agentChatPath(agent);
+  return html`
+    <button
+      type="button"
+      class="needs-chat-toggle"
+      aria-haspopup="dialog"
+      title=${`Opens the chat with ${agent} in a sheet, live. You can write to it.`}
+      onClick=${() => setOpen(true)}
+    >
+      <${BotIcon} />Chat with ${valueLabel(DIMENSION.agent, agent)}
+    </button>
+    <${Sheet} open=${open} onOpenChange=${setOpen}>
+      <${SheetContent}
+        className="chat-sheet"
+        onKeyDown=${(event) => {
+          // Escape closes this sheet alone: the key goes no further up, where a task's sheet,
+          // which this one is a child of, would close too
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          setOpen(false);
+        }}
+        onPointerDown=${(event) => event.stopPropagation()}
+      >
+        <div class="chat-sheet-top">
+          <${SheetTitle} className="task-sheet-kind"
+            >Chat with ${valueLabel(DIMENSION.agent, agent)}<//
+          >
+          <${SheetDescription} className="chat-sheet-about">
+            ${about ? html`About: ${about}.${" "}` : ""}What you write here goes to the agent and is
+            no answer on the card.${" "}
+            <a class="needs-link" href=${agentHref(agent)} target="_blank" rel="noreferrer"
+              >Open in the Dash</a
+            >
+          <//>
+        </div>
+        ${open && html`<iframe class="chat-sheet-frame" src=${`${DASH}${path}${path.includes("?") ? "&" : "?"}embed=1`} title=${`The chat of ${agent}, in the Dash`} allow="clipboard-write"></iframe>`}
+      <//>
+    <//>
+  `;
+}
+
+/** AN AGENT'S WORDS, WITH THE LITTLE MARKDOWN THAT AGENTS WRITE MOST: `**bold**` is bold and
+ *  a span in backticks is code; links are links (`Linked`). Everything else is text as it is, with
+ *  its line breaks: a list's dashes and a heading's hashes stay. */
+function Said({ text }) {
+  return String(text)
+    .split(/(\*\*[^*\n]+\*\*|`[^`\n]+`)/)
+    .map((part, index) =>
+      /^\*\*[^*\n]+\*\*$/.test(part)
+        ? html`<strong key=${index}><${Linked} text=${part.slice(2, -2)} /></strong>`
+        : /^`[^`\n]+`$/.test(part)
+          ? html`<code key=${index}>${part.slice(1, -1)}</code>`
+          : html`<${Linked} key=${index} text=${part} />`,
+    );
+}
+
+/** UNDER AN ASK'S QUESTION: THE AGENT'S OWN LAST MESSAGE of the turn in which it asked
+ *  (`itx.config.taskAskers`, `blocking`: apps/tasks/askers.js says how it is found), so that a
+ *  person reads what the agent said with no chat opened. Its first lines show; "more" shows all
+ *  of it (at most 4,000 characters are kept). Its links, bold words and code are drawn (`Said`),
+ *  and no other Markdown. With none (the turn still runs, or a kind of agent whose log has no such event),
+ *  nothing is here and the question stands alone. */
+function Blocking({ asker }) {
+  const said = asker?.blocking;
+  const [whole, setWhole] = useState(false);
+  if (!said?.text) return null;
+  const long = said.text.length > 320 || said.text.split("\n").length > 4;
+  const href = eventPath(said.path, said.offset);
+  return html`
+    <div class="needs-said" data-whole=${whole || !long || undefined}>
+      <span class="needs-said-label">
+        ${valueLabel(DIMENSION.agent, said.path)} said${" "}
+        ${href && html`<a class="needs-huh" href=${`${DASH}${href}`} target="_blank" rel="noreferrer" title=${`Opens event ${said.offset} of ${said.path} in the Dash's view of that context.`}>where</a>`}
+      </span>
+      <p><${Said} text=${said.text} /></p>
+      ${long && html`<button type="button" class="tasks-link" aria-expanded=${whole} onClick=${() => setWhole(!whole)}>${whole ? "less" : "more"}</button>`}
+    </div>
+  `;
+}
+
+/** UNDER AN ASK THAT IS A CHOICE: the options with what each costs or gives, the one that the
+ *  asker recommends and why (the card's text keeps them: tasks-model.js `decisionsOf`), and WHICH
+ *  MODEL made the turn that asked, by the asker's own log (`itx.config.taskAskers`, `model`), or
+ *  "model unrecorded" when no event says. A click on an option writes its name into the answer
+ *  box; the person still sends it. An ask with no options shows the model's line alone. */
+function Decision({ decision, asker, onPick }) {
+  const model = asker?.model;
+  const by = !asker
+    ? null
+    : model
+      ? html`<span
+          class="needs-model"
+          title=${model.from === "llm-request" ? "From the LLM request of the turn that asked, on the agent's own log." : "From the start of the coding session that asked, on its own log. A model changed later in the session is not recorded."}
+        >
+          model ${model.name}${model.from === "session-start" ? " (at its session's start)" : ""}
+        </span>`
+      : html`<span
+          class="needs-model"
+          data-unrecorded
+          title="No event of the asker's own log says which model made this turn. The card's model key and an agent's own words are not read as evidence."
+          >model unrecorded</span
+        >`;
+  if (!decision)
+    return by && html`<div class="needs-decision" data-bare>The turn that asked: ${by}</div>`;
+  return html`
+    <div class="needs-decision">
+      <ul aria-label="Options">
+        ${decision.options.map(
+          ({ name, tradeoff }) => html`
+            <li key=${name} data-recommended=${name === decision.recommend || undefined}>
+              <button
+                type="button"
+                class="needs-option"
+                title="Writes this option into the answer box. You still send it."
+                onClick=${() => onPick(name)}
+              >
+                ${name}
+              </button>
+              <span><${Linked} text=${tradeoff} /></span>
+            </li>
+          `,
+        )}
+      </ul>
+      <p class="needs-recommend">
+        <strong>Recommended: ${decision.recommend}.</strong>
+        <${Linked} text=${decision.why} />
+        ${by && html`<span class="needs-by">Recommended by ${by}</span>`}
+      </p>
+    </div>
+  `;
+}
+
+/** BESIDE AN ASK THAT MAY BE OUTDATED (tasks-model.js `staleOf`): why, and "Still needed?", which
+ *  sends the ask's keeper (the agent that asked, else the one that has the task) a message from
+ *  this person: check the ask, and take it off, write it again or say that it stands. */
+function Stale({ task, ask, asker }) {
+  const [told, setTold] = useState(null);
+  const why = asker && staleOf({ asker, retired: RETIRED_AGENTS });
+  if (!why) return null;
+  const keeper = keeperOf({ task, asker, retired: RETIRED_AGENTS });
+  return html`
+    <span class="needs-stale">
+      May be outdated: ${why}.
+      ${
+        keeper &&
+        (told === null
+          ? html`<button
+              type="button"
+              class="tasks-link"
+              title=${`Sends ${keeper} a message from you: check this ask, and take it off, write it again, or say that it stands.`}
+              onClick=${() => {
+                setTold("sending");
+                itx.agents
+                  .get(keeper)
+                  .message(
+                    stillNeededMessage({
+                      domain,
+                      repo: REPO_NAME,
+                      path: task.path,
+                      title: task.title,
+                      ask,
+                      by: principal?.email || principal?.actor || "someone",
+                      why,
+                    }),
+                  )
+                  .then(
+                    () => setTold("sent"),
+                    (error) => setTold(wordsOf(error)),
+                  );
+              }}
+            >
+              Still needed?
+            </button>`
+          : html`<span role="status"
+              >${told === "sending" ? "Asking…" : told === "sent" ? `Asked ${valueLabel(DIMENSION.agent, keeper)}.` : `Not sent: ${told}`}</span
+            >`)
+      }
+    </span>
+  `;
+}
+
+/** ON A TASK OF "Needs a person": its priority, set in place (a change of the board, as in the
+ *  sheet), and a mark when work stands still for the answer (tasks-model.js `pressOf`). */
+function Press({ task }) {
+  const known = PRIORITIES.includes(task.priority)
+    ? PRIORITIES
+    : [...new Set([task.priority, ...PRIORITIES])].filter(Boolean);
+  return html`
+    <span class="needs-press">
+      ${pressOf(task).held && html`<${Badge} variant="secondary" title=${task.blockedOn ? `Blocked on: ${task.blockedOn}` : "The task is in progress or in review, and waits for this answer."}>Work is held<//>`}
+      <${NativeSelect}
+        size="sm"
+        aria-label=${`Priority of ${task.title}`}
+        data-priority=${task.priority || undefined}
+        value=${task.priority || ""}
+        onChange=${(event) => board.change({ kind: "field", path: task.path, field: "priority", value: event.target.value })}
+      >
+        <${NativeSelectOption} value="">No priority<//>
+        ${known.map((value) => html`<${NativeSelectOption} key=${value} value=${value}>${value}<//>`)}
+      <//>
+    </span>
+  `;
+}
+
+/** UNDER AN ANSWER BOX: which agents hear the answer, each a link to its chat, where its reply
+ *  will be. Nothing until the askers and the followers are read. */
+function Receivers({ receivers }) {
+  if (receivers.length === 0)
+    return html`<span class="needs-goes">Goes on the card. No agent is known to hear it.</span>`;
+  return html`
+    <span class="needs-goes">
+      Goes to${" "}
+      ${receivers.map(
+        ({ agent, why, hears }, index) => html`
+          ${index > 0 && " and "}
+          <a
+            key=${agent}
+            class="needs-link"
+            href=${agentHref(agent)}
+            target="_blank"
+            rel="noreferrer"
+            title=${`${agent} ${why}. It hears your answer ${hears === "card" ? "by the card, which it follows" : "by a message from you: it does not follow the card"}. Its reply will be in its chat.`}
+          >
+            ${valueLabel(DIMENSION.agent, agent)}
+          </a>
+          ${" "}(${why})
+        `,
+      )}
+    </span>
+  `;
+}
+
+/** WHAT YOU ANSWERED (in this browser, this week), CLOSED UNTIL THE PERSON OPENS IT: one line
+ *  that says how many. The list was open at first, under the asks, and read as cards that still
+ *  wait (Jonas, 25 Nov 2026: "this page currently shows loads of cards i have responded to. no
+ *  bueno"). An answered ask is off "Needs a person" at once; a task stays on it only while it has
+ *  another ask. Open, the list is each answer with the agents that heard it as
+ *  links to their chats, where a reply will be. `path`: one task's answers only (its sheet). A
+ *  message that could not be sent says so, with the reason. */
+function Answered({ path }) {
+  const rows = useAnswered().filter((row) => !path || row.path === path);
+  if (rows.length === 0) return null;
+  return html`
+    <details class="needs-answered" aria-label="What you answered">
+      <summary>
+        You answered
+        ${rows.length === 1 ? "one ask" : `${rows.length} asks`}${path ? " of this task" : ""} this
+        week: where each went, and the chats for the replies
+      </summary>
+      <ul>
+        ${rows.map((row) => html`<${AnsweredRow} key=${row.at} row=${row} path=${path} />`)}
+      </ul>
+    </details>
+  `;
+}
+
+/** One answer of "You answered". The chat of an agent that heard it opens under it: there the
+ *  person sees that the answer went in, and the agent's reply when it comes. */
+function AnsweredRow({ row, path }) {
+  return html`
+    <li>
+      ${
+        !path &&
+        html`<a
+          class="needs-answered-task"
+          href=${taskHref(row.path)}
+          onClick=${(event) => {
+            if (
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            )
+              return;
+            event.preventDefault();
+            openTask(row.path);
+          }}
+          >${row.title}</a
+        >`
+      }
+      <span class="needs-answered-ask"><${Linked} text=${row.ask} /></span>
+      <span class="needs-answered-said">${row.answer}</span>
+      <span class="needs-who">
+        <span class="needs-ago" title=${`${row.at.slice(0, 16).replace("T", " ")} UTC`}
+          >${agoWords(row.at)}</span
+        >
+        ${row.receivers.length === 0 && html`<span class="needs-ago">On the card. No agent is known to hear it.</span>`}
+        ${row.receivers.map(
+          ({ agent, hears, told }) => html`
+            <a
+              key=${agent}
+              class="needs-asker"
+              href=${agentHref(agent)}
+              target="_blank"
+              rel="noreferrer"
+              title=${`${agent}: its reply will be in its chat.`}
+            >
+              ${hears === "card" ? "Heard by" : told === true ? "Sent to" : typeof told === "string" ? "NOT sent to" : "Sending to"}${" "}
+              ${valueLabel(DIMENSION.agent, agent)}: see its reply<${ExternalLinkIcon} />
+            </a>
+            ${typeof told === "string" && html`<span class="needs-ago" role="alert">The message failed: ${told}. The answer is on the card.</span>`}
+            <${ChatButton} agent=${agent} about=${row.title} />
+          `,
+        )}
+      </span>
+    </li>
+  `;
+}
+
 /** ONE ASK OF A TASK, WITH THE BOX THAT ANSWERS IT. An answer is a change like a moved card: the
  *  ask leaves the list at once, and a commit a moment later takes its line out of the file's
  *  `human-ask:` and keeps the ask with the answer, who gave it and when under `## Answers` in the
  *  task's text (tasks-model.js `answerAsk`). The agent that follows the task hears of that commit
  *  (apps/tasks/feed.js), so nobody has to tell it. */
-function Ask({ task, ask, asker }) {
+function Ask({ task, ask, asker, followers }) {
   const [answer, setAnswer] = useState("");
+  // the box grows with what is typed: a long answer is read whole before it is sent
+  const box = useRef(null);
+  useEffect(() => {
+    if (!box.current) return;
+    box.current.style.height = "auto";
+    box.current.style.height = `${Math.min(box.current.scrollHeight + 2, 320)}px`;
+  }, [answer]);
+  // the agent whose chat opens here: the one that asked, else the one that has the task
+  const chatAgent = [asker?.agent, task.agent].find((each) => agentHref(each));
+  const decision = useMemo(() => decisionsOf(task.source).get(ask), [task.source, ask]);
   return html`
     <li>
-      <span>${ask}</span>
-      <${Asker} task=${task} asker=${asker} />
+      <span class="needs-question"><${Linked} text=${ask} /></span>
+      <${Blocking} asker=${asker} />
+      <${Decision}
+        decision=${decision}
+        asker=${asker}
+        onPick=${(name) => {
+          setAnswer(name);
+          box.current?.focus();
+        }}
+      />
+      <div class="needs-who">
+        <${Asker} task=${task} asker=${asker} />
+        <${AskMessage} asker=${asker} />
+        ${asker?.at && html`<span class="needs-ago" title=${`Asked on ${asker.at.slice(0, 16).replace("T", " ")} UTC`}>${agoWords(asker.at)}</span>`}
+        <${Huh} task=${task} ask=${ask} asker=${asker} />
+        ${chatAgent && html`<${ChatButton} agent=${chatAgent} about=${task.title} />`}
+      </div>
+      <${Stale} task=${task} ask=${ask} asker=${asker} />
       <form
         class="needs-answer"
         onSubmit=${(event) => {
           event.preventDefault();
           if (!answer.trim()) return;
-          board.change({
-            kind: "answer",
-            path: task.path,
-            ask,
-            answer,
-            by: principal?.email || principal?.actor || "someone",
-            at: new Date().toISOString(),
-          });
+          sendAnswer({ task, ask, answer, asker, followers });
         }}
       >
-        <${Input}
-          placeholder="Your answer, then Enter"
+        <textarea
+          ref=${box}
+          class="needs-box"
+          rows="1"
+          placeholder="Your answer. Enter sends it; Shift+Enter is a new line"
           aria-label=${`Your answer to: ${ask}`}
           value=${answer}
-          onChange=${(event) => setAnswer(event.target.value)}
+          onInput=${(event) => setAnswer(event.target.value)}
           onKeyDown=${(event) => {
-            // Enter sends it, with Cmd or Ctrl too: a browser sends a form on the bare key alone
-            if (event.key !== "Enter" || event.isComposing || event.nativeEvent?.isComposing)
+            // Enter sends it, with Cmd or Ctrl too; Shift+Enter is a new line in the box
+            if (
+              event.key !== "Enter" ||
+              event.shiftKey ||
+              event.isComposing ||
+              event.nativeEvent?.isComposing
+            )
               return;
             event.preventDefault();
             event.currentTarget.form.requestSubmit();
           }}
-        />
+        ></textarea>
         <${Button} type="submit" variant="outline" size="sm" disabled=${!answer.trim()}>Answer<//>
       </form>
+      ${asker && followers && html`<${Receivers} receivers=${receiversOf({ task, asker, followers })} />`}
     </li>
   `;
 }
 
+/** UNDER A TASK OF "Needs a person": what a person reads before they answer, from the task's own
+ *  file (tasks-model.js `contextOf`): the newest note of its log, always shown, and behind "Context"
+ *  the text under its title and the notes before that one. The agent that has the task is a link
+ *  to its chat. So a person decides here, and opens the task or the chat only for more. */
+function Context({ task }) {
+  const { about, notes } = useMemo(() => contextOf(task.source), [task.source]);
+  if (!about && notes.length === 0 && !agentHref(task.agent)) return null;
+  return html`
+    <div class="needs-context">
+      ${notes[0] && html`<p class="needs-note" title="The newest note of the task's log"><${Linked} text=${notes[0]} /></p>`}
+      <details>
+        <summary>
+          Context
+          ${
+            agentHref(task.agent) &&
+            html`<a
+              class="needs-asker"
+              href=${agentHref(task.agent)}
+              target="_blank"
+              rel="noreferrer"
+              title=${`${task.agent} has the task. Opens its chat in the Dash.`}
+            >
+              The task's agent: ${valueLabel(DIMENSION.agent, task.agent)}<${ExternalLinkIcon} />
+            </a>`
+          }
+        </summary>
+        ${about ? html`<p class="needs-about"><${Linked} text=${about} /></p>` : html`<p class="needs-about">The task has no text under its title.</p>`}
+        ${notes.slice(1).map((note) => html`<p key=${note} class="needs-note"><${Linked} text=${note} /></p>`)}
+      </details>
+    </div>
+  `;
+}
+
 /** "Needs a person" (`?needs=person`), in place of the board: each task that is not done and asks a
- *  person something (`human-ask:`) or says what holds it (`blocked-on:`), as a row. A person
- *  answers an ask here (`Ask`), and each ask names the agent that asked it, as a link to its chat
- *  (`Asker`); what holds a task is only read. The board's other filters still narrow it. */
-function NeedsPage({ state, tasks, filtered }) {
-  const askers = useAskers(tasks);
+ *  person something (`human-ask:`), as a row. A person answers an ask here (`Ask`), and each ask
+ *  names the agent that asked it, as a link to its chat (`Asker`); what also holds the task
+ *  (`blocked-on:`) is only read. A task that is held and asks nothing is not listed: it waits for
+ *  no person. The board's other filters still narrow it. */
+function NeedsPage({ state, tasks: every, filtered, view }) {
+  const askers = useAskers(every);
+  const followers = useFollowers();
+  const people = peopleAsked(every);
+  // a name in the address that no ask has (the last ask for that person was answered): every task
+  const who = people.some(([name]) => name === view.needsFor) ? view.needsFor : null;
+  const tasks = orderNeeds(
+    needsFor(every, who),
+    view.order,
+    (task, ask) => askerOf(askers, task, ask)?.at,
+  );
+  // which of a task's asks are for somebody else: shown, and marked so
+  const others = (task) => (who === null ? [] : task.humanAsk.filter((ask) => !askIsFor(ask, who)));
   if (!state.loaded)
     return state.loadError
       ? html`<p class="tasks-note" role="alert">Couldn't read the tasks: ${state.loadError}</p>`
@@ -1088,18 +1735,60 @@ function NeedsPage({ state, tasks, filtered }) {
     `;
   if (tasks.length === 0)
     return html`
+      <${Answered} />
       <${Empty} className="tasks-empty">
         <${EmptyHeader}>
           <${EmptyTitle}>Nothing waits for a person<//>
           <${EmptyDescription}>
-            A task asks a person with <code>human-ask:</code> in its frontmatter, and says what
-            holds it with <code>blocked-on:</code>. An ask is answered here. A done task is not
-            listed.
+            A task asks a person with <code>human-ask:</code> in its frontmatter. An ask is answered
+            here. A done task is not listed, and neither is a task that is held and asks nothing.
           <//>
         <//>
       <//>
     `;
   return html`
+    <div class="needs-bar">
+      <div class="needs-for" role="group" aria-label="Whom the asks are for">
+        <button
+          class="needs-chip"
+          aria-pressed=${who === null}
+          onClick=${() => setView({ for: undefined })}
+        >
+          Everyone <i>${every.length}</i>
+        </button>
+        ${people.map(
+          ([name, count]) => html`
+            <button
+              key=${name}
+              class="needs-chip"
+              aria-pressed=${who === name}
+              onClick=${() => setView({ for: who === name ? undefined : name || "-" })}
+            >
+              ${name || "Nobody named"} <i>${count}</i>
+            </button>
+          `,
+        )}
+      </div>
+      <div class="needs-bar-end">
+        <${NativeSelect}
+          size="sm"
+          aria-label="Order"
+          value=${view.order}
+          onChange=${(event) => setView({ order: event.target.value === NEEDS_ORDERS[0].id ? undefined : event.target.value })}
+        >
+          ${NEEDS_ORDERS.map(({ id, label }) => html`<${NativeSelectOption} key=${id} value=${id}>${label}<//>`)}
+        <//>
+        <a
+          class="needs-talk"
+          href=${huhHref(domain, talkDraft({ domain, repo: REPO_NAME, tasks, who }))}
+          target="_blank"
+          rel="noreferrer"
+          title="Opens a new agent's message box with a draft that asks it to go through these asks with you. Nothing is sent until you send it. The draft tells the agent to answer and approve nothing: you answer here."
+        >
+          <${BotIcon} />Talk these through
+        </a>
+      </div>
+    </div>
     <ul class="needs" aria-label="Tasks that need a person">
       ${tasks.map(
         (task) => html`
@@ -1125,34 +1814,103 @@ function NeedsPage({ state, tasks, filtered }) {
                 ${task.title}
               </a>
               ${task.owner && html`<${Badge} variant="outline">${task.owner}<//>`}
+              <${Press} task=${task} />
             </div>
+            <ul class="needs-asks" aria-label="Asks">
+              ${task.humanAsk
+                .filter((ask) => !others(task).includes(ask))
+                .map(
+                  (ask) =>
+                    html`<${Ask}
+                      key=${ask}
+                      task=${task}
+                      ask=${ask}
+                      asker=${askerOf(askers, task, ask)}
+                      followers=${followers}
+                    />`,
+                )}
+            </ul>
             ${
-              task.humanAsk.length > 0 &&
+              others(task).length > 0 &&
               html`
-                <ul class="needs-asks" aria-label="Asks">
-                  ${task.humanAsk.map(
-                    (ask) =>
-                      html`<${Ask}
-                        key=${ask}
-                        task=${task}
-                        ask=${ask}
-                        asker=${
-                          // a row with no asker for an ask that the answer does not have (a new one): the task's agent then
-                          askers &&
-                          (askers === "unread"
-                            ? { unread: true }
-                            : (askers.get(`${task.path}\n${ask}`) ?? {}))
-                        }
-                      />`,
-                  )}
-                </ul>
+                <details class="needs-others">
+                  <summary>
+                    ${others(task).length === 1 ? "One more ask, for somebody else" : `${others(task).length} more asks, for somebody else`}
+                  </summary>
+                  <ul class="needs-asks" aria-label="Asks for somebody else">
+                    ${others(task).map((ask) => html`<${Ask} key=${ask} task=${task} ask=${ask} asker=${askerOf(askers, task, ask)} followers=${followers} />`)}
+                  </ul>
+                </details>
               `
             }
-            ${task.blockedOn && html`<p class="needs-blocked">Blocked on: ${task.blockedOn}</p>`}
+            ${task.blockedOn && html`<p class="needs-blocked">Blocked on: <${Linked} text=${task.blockedOn} /></p>`}
+            <${Context} task=${task} />
           </li>
         `,
       )}
     </ul>
+    <${Answered} />
+  `;
+}
+
+/** ON A CARD THAT WAITS FOR A PERSON: the mark (tasks-model.js `waitsForAPerson`), always shown,
+ *  under the title. It says who is asked when the asks name someone ("Needs Jonas"), and how many
+ *  asks there are when there are several. It opens the task's sheet, where the asks are answered. */
+function NeedsMark({ task }) {
+  const waits = waitsForAPerson(task);
+  if (!waits) return null;
+  return html`
+    <a
+      class="task-needs"
+      href=${taskHref(task.path)}
+      draggable="false"
+      title=${`${task.humanAsk.join("\n")}\n\nOpens the task, where you answer.`}
+      onClick=${(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+          return;
+        event.preventDefault();
+        openTask(task.path);
+      }}
+    >
+      <i aria-hidden="true"></i>
+      <span class="task-needs-who">${waits.label}</span>
+      ${waits.asks > 1 && html`<span class="task-needs-count">${waits.asks} asks</span>`}
+    </a>
+  `;
+}
+
+/** IN A TASK'S SHEET, BEFORE ITS TITLE AND PROPERTIES: what the task asks a person, each ask whole
+ *  with who asked it and the answer box of "Needs a person" (`Ask`: the one format, `answerAsk`),
+ *  and what holds the task (`blocked-on:`). A link to a card (`?task=<path>`) so opens on the ask.
+ *  A task with neither shows nothing here. */
+function TaskAsks({ task }) {
+  const askers = useAskers(task.humanAsk.length > 0 ? [task] : []);
+  const followers = useFollowers();
+  const answered = useAnswered().some((row) => row.path === task.path);
+  const waits = waitsForAPerson(task);
+  const count = task.humanAsk.length;
+  if (count === 0 && !task.blockedOn && !answered) return null;
+  return html`
+    <section
+      class="task-asks"
+      data-waits=${Boolean(waits) || undefined}
+      aria-label="What this task waits for"
+    >
+      ${
+        count > 0 &&
+        html`
+          <h3 class="task-asks-title">
+            <i aria-hidden="true"></i>
+            ${waits ? `${waits.label}: ${count === 1 ? "one answer" : `${count} answers`}` : "Still asked, though the task is done"}
+          </h3>
+          <ul class="needs-asks" aria-label="Asks">
+            ${task.humanAsk.map((ask) => html`<${Ask} key=${ask} task=${task} ask=${ask} asker=${askerOf(askers, task, ask)} followers=${followers} />`)}
+          </ul>
+        `
+      }
+      ${task.blockedOn && html`<p class="needs-blocked">Blocked on: <${Linked} text=${task.blockedOn} /></p>`}
+      <${Answered} path=${task.path} />
+    </section>
   `;
 }
 
@@ -1294,6 +2052,7 @@ function Page({
                           unsaved=${state.unsaved}
                           view=${view}
                           group=${group}
+                          closed=${column.id === "done" && !filtered}
                           composing=${composer?.column === column.id && composer.row === row.value}
                           compose=${() => compose(column, row.value)}
                           closeComposer=${closeComposer}
@@ -1316,7 +2075,10 @@ const CELL_PAGE = 40;
 
 /** One column of one row: its cards, the box for a new one, and where a dragged card is dropped.
  *  A drop changes the card's STATUS and nothing else: a card dropped in another row stays in its
- *  own row, because the board writes no dimension of a file that exists. */
+ *  own row, because the board writes no dimension of a file that exists.
+ *  `closed`: the cell shows no card until a person asks for them. That is the Done column with no
+ *  search and no filter on (Misha, 23 Nov 2026: done cards off the default view): the head keeps
+ *  its count, one press shows the cards, and a card can still be dropped here. */
 function Cell({
   column,
   columns,
@@ -1330,9 +2092,16 @@ function Cell({
   closeComposer,
   create,
   move,
+  closed,
 }) {
   const [over, setOver] = useState(false);
-  const [limit, setLimit] = useState(CELL_PAGE);
+  const [more, setMore] = useState(CELL_PAGE);
+  const [opened, setOpened] = useState(false);
+  const limit = closed && !opened ? 0 : more;
+  const setLimit = (next) => {
+    setOpened(true);
+    setMore(next);
+  };
   return html`
     <div
       class="board-cell"
@@ -1375,8 +2144,15 @@ function Cell({
       ${
         tasks.length > limit &&
         html`
-          <button class="tasks-link board-more" onClick=${() => setLimit(limit + CELL_PAGE)}>
-            Show ${Math.min(CELL_PAGE, tasks.length - limit)} more of ${tasks.length - limit}
+          <button
+            class="tasks-link board-more"
+            onClick=${() => setLimit(limit === 0 ? CELL_PAGE : limit + CELL_PAGE)}
+          >
+            ${
+              limit === 0
+                ? `Show ${tasks.length === 1 ? "the 1 task" : `the ${tasks.length} tasks`} in ${column.label}`
+                : `Show ${Math.min(CELL_PAGE, tasks.length - limit)} more of ${tasks.length - limit}`
+            }
           </button>
         `
       }
@@ -1474,6 +2250,7 @@ function Card({ task, columns, unsaved, view, group, move }) {
       draggable="true"
       data-dragging=${dragging || undefined}
       data-unsaved=${unsaved || undefined}
+      data-needs=${Boolean(waitsForAPerson(task)) || undefined}
       onDragStart=${(event) => {
         event.dataTransfer.setData("application/x-task", task.path);
         event.dataTransfer.setData("text/plain", task.title);
@@ -1542,6 +2319,7 @@ function Card({ task, columns, unsaved, view, group, move }) {
           <//>
         <//>
       </div>
+      <${NeedsMark} task=${task} />
       <div class="task-meta">
         ${task.folder && html`<span class="task-folder">${task.folder}</span>`}
         ${has("priority").map(
@@ -1766,6 +2544,7 @@ function TaskBody({ task, columns, dimensions, save, move }) {
   );
   return html`
     <div class="task-sheet-body">
+      <${TaskAsks} task=${task} />
       <${TaskHead} task=${task} columns=${columns} dimensions=${dimensions} move=${move} />
       <p class="task-saving" role="status">
         <${PropertiesSaving} save=${save} />
