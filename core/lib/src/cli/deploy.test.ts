@@ -1136,6 +1136,23 @@ test("a deploy over a mind keeps every field of the config that the mind was dep
   expect(() => overMind(whole, { mailForwardTo: "team@ada-labs.com" })).toThrow(
     /domain of the mind/,
   );
+  // the zones: the flag is the whole list, the mind's first zone stays first, no flag keeps them
+  expect(overMind(whole, { zones: "ada-labs.com,second.example" })).toEqual({
+    ...whole,
+    cloudflare: { ...whole.cloudflare, zones: ["ada-labs.com", "second.example"] },
+  });
+  for (const zones of [
+    "",
+    "second.example",
+    "second.example,ada-labs.com",
+    "ada-labs.com,not a domain",
+    "ada-labs.com,ada-labs.com",
+  ])
+    expect(() => overMind(whole, { zones }), zones).toThrow(/--zones/);
+  // an owner or a forward at a zone that joins is refused, as at any zone of the mind
+  expect(() => overMind(whole, { zones: "ada-labs.com,example.org" })).toThrow(
+    /domain of the mind/,
+  );
   // the egress gateway: a flag names another Worker, `none` takes it away, no flag keeps it
   expect(overMind(whole, { egressGateway: "other-egress" })).toEqual({
     ...whole,

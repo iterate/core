@@ -28,6 +28,7 @@ import { readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Alchemy from "alchemy";
+import { adopt } from "alchemy/AdoptPolicy";
 import * as Output from "alchemy/Output";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -584,17 +585,25 @@ export const mindStack = (config: MindConfig, options: { telemetryMode?: Telemet
           script: boundary.workerName,
         });
       }
-      const routing = yield* Cloudflare.Email.Routing(`EmailRouting-${zoneName}`, {
+      // The catch-all first, and Email Routing after it (it takes the zone from the catch-all,
+      // so Alchemy waits): Cloudflare publishes the zone's MX records when routing is turned
+      // on, and the boundary must be the handler by then. A zone that leaves goes the other way
+      // round: routing off, then the catch-all back as it was. Cloudflare takes a catch-all
+      // rule while routing is off (measured on a dev zone, 25 Nov 2026).
+      const catchAll = yield* Cloudflare.Email.CatchAll(`EmailCatchAll-${zoneName}`, {
         zone: zone.id,
-      });
-      yield* Cloudflare.Email.CatchAll(`EmailCatchAll-${zoneName}`, {
-        zone: routing.zoneId,
         actions: [{ type: "worker", value: [boundary.workerName] }],
       });
+      yield* Cloudflare.Email.Routing(`EmailRouting-${zoneName}`, { zone: catchAll.zoneId });
+      // A mind takes each of its zones whole. So a sending domain that the zone has already
+      // (its owner turned Email Sending on in the dashboard) is taken over as it is, with its
+      // DKIM key and its return-path records, and it is the stack's from then on: it is
+      // deleted when the zone leaves the config, and at a destroy. Without `adopt`, Alchemy
+      // refuses a sending domain that it did not make, and the plan fails.
       const sending = yield* Cloudflare.Email.SendingSubdomain(`EmailSending-${zoneName}`, {
         zoneId: zone.id,
         name: zoneName,
-      });
+      }).pipe(adopt(true));
       // What became of a sent mail that did not arrive. Cloudflare refuses the subscription
       // until the zone is a sending domain, so its source waits for Email Sending, and a zone
       // whose DNS checks did not pass in time stops the deploy here, by its name.

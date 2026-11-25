@@ -108,6 +108,8 @@ export type DeployInput = {
   mailForwardTo?: string;
   /** the share of requests whose trace is kept, 0 to 1; `default` is every one (`deployConfigOf`) */
   traceSampling?: string;
+  /** the mind's whole list of zones, with commas between (`deployConfigOf`) */
+  zones?: string;
   yes?: boolean;
   buy?: boolean;
   eraseRecords?: boolean;
@@ -175,6 +177,11 @@ type DeployedMind = z.infer<typeof DeployedConfig> & {
  *  there removes it, so that every trace is kept. So does `ownerEmailPatterns`, the config's
  *  field of that name (`*@<domain>`, commas or spaces between), and `none` there removes it.
  *
+ *  `zones` is the mind's WHOLE list of zones (commas or spaces between), and replaces what the
+ *  mind has: the stack then makes each new zone's records, routes and mail, and deletes those
+ *  of a zone that left. It holds `domain`, and its first zone stays the first of a mind that is
+ *  there: the auth Worker's self-test sends from it.
+ *
  *  `mindId` is the deployed mind's own, and nothing here ever gives a mind that has an id
  *  another. A mind with none gets the hash of the genesis that the command signs right before
  *  the deploy (./identity.ts `newIdentity`), which names the hostname that this answers. */
@@ -188,10 +195,30 @@ export function deployConfigOf(answers: {
   egressGateway?: string;
   mailForwardTo?: string;
   traceSampling?: string;
+  zones?: string;
   deployed?: DeployedMind;
 }) {
   const { deployed } = answers;
-  const zones = deployed?.zones || [answers.domain];
+  // an empty flag is an error, never "the zones it has" by accident
+  if (answers.zones === "")
+    throw new Error("--zones is empty: give the mind's whole list of domains, commas between.");
+  const listed = answers.zones
+    ?.toLowerCase()
+    .split(/[\s,]+/)
+    .filter(Boolean);
+  const zones = listed || deployed?.zones || [answers.domain];
+  if (listed) {
+    const first = deployed?.zones[0] || answers.domain;
+    if (
+      listed.some((zone) => !Hostname.safeParse(zone).success) ||
+      new Set(listed).size !== listed.length ||
+      !listed.includes(answers.domain) ||
+      listed[0] !== first
+    )
+      throw new Error(
+        `--zones ${answers.zones}: the mind's whole list of domains, each once, with ${first} first${first === answers.domain ? "" : ` and ${answers.domain} among them`}.`,
+      );
+  }
   const controlPlaneHostname = (
     answers.controlPlaneHostname ||
     deployed?.controlPlaneHostname ||
@@ -2420,6 +2447,7 @@ export async function deployMind(input: DeployInput) {
       ownerEmailPatterns: input.ownerEmailPatterns,
       mailForwardTo: input.mailForwardTo,
       traceSampling: input.traceSampling,
+      zones: input.zones,
       deployed: mind,
     });
     const { controlPlaneHostname } = config;
@@ -2469,6 +2497,13 @@ export async function deployMind(input: DeployInput) {
                 ? `EVERY address at ${patternsAfter} as an owner`
                 : `no owner by a pattern (was ${patternsBefore})`,
             ]),
+        // a zone that joins gets its records, routes and mail; one that leaves loses them
+        ...config.cloudflare.zones
+          .filter((zone) => !deployed.zones.includes(zone))
+          .map((zone) => `${zone} as a domain of the mind, whole`),
+        ...deployed.zones
+          .filter((zone) => !config.cloudflare.zones.includes(zone))
+          .map((zone) => `${zone} no longer its domain, its records, routes and mail deleted`),
       ];
       const forwardBefore = forwardOf(deployed.deployConfig?.mail);
       const forwardAfter = forwardOf(config.mail);

@@ -179,8 +179,11 @@ command reads that mind's own config from Cloudflare (the boundary Worker's vari
 shows it, and deploys over it. The deploy starts from the whole config that the mind was deployed
 with, which the stack keeps in the boundary Worker's variable `DEPLOY_CONFIG`, so every field
 stays, the sandboxes' image, the mail forward and the egress gateway among them. `--owner`,
-`--control-plane-hostname`, `--mail-forward-to` and `--egress-gateway` each replace what the mind
-has; `--mail-forward-to none` removes the forward, and `--egress-gateway none` the gateway. It
+`--control-plane-hostname`, `--mail-forward-to`, `--egress-gateway` and `--zones` each replace what
+the mind has; `--mail-forward-to none` removes the forward, and `--egress-gateway none` the gateway.
+`--zones a.example,b.example` is the mind's whole list of domains, its first domain first: the
+stack makes a new domain's records, routes and mail (it takes over an Email Sending domain that is
+there), and deletes those of a domain that left the list. It
 asks first; `--yes` is the yes. No file of an earlier deploy is needed. A run over a mind with a
 sandbox image planned no changes and took 29 s (18 Nov 2026).
 

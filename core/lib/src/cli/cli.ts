@@ -290,6 +290,12 @@ const launcherProcedures = {
           .describe(
             "Forward each mail to the mind there as it arrived, a verified destination address of the account's Email Routing; none stops it (default: none; for a mind that is there already: the one it has)",
           ),
+        zones: z
+          .string()
+          .optional()
+          .describe(
+            "The mind's whole list of domains, each a zone of the account, a comma between two, the mind's first domain first. The mind takes each whole: its hostnames and its mail, with an Email Sending domain that is there already. A domain that leaves the list loses its records, routes and mail (default: the domain; for a mind that is there already: the ones it has)",
+          ),
         traceSampling: z
           .string()
           .optional()
