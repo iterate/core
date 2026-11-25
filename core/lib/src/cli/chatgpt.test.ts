@@ -17,24 +17,15 @@ import {
 test("the consent URL asks OpenAI for the plan's usage, for this mind's host id, with PKCE", () => {
   const url = authorizeUrl({
     hostId: "urn:uuid:1",
-    domain: "example.com",
+    address: "iterate.example.com",
     state: "the-state",
     verifier: "the-verifier",
     nonce: "the-nonce",
   });
-  expect(
-    authorizeUrl({
-      hostId: "h",
-      domain: null,
-      state: "s",
-      verifier: "v",
-      nonce: "n",
-    }).searchParams.get("agent_name_hint"),
-  ).toBe("iterate");
   expect(url.origin + url.pathname).toBe("https://auth.openai.com/api/accounts/authorize");
   expect(Object.fromEntries(url.searchParams)).toEqual({
     client_id: "dynamic_agent_client",
-    agent_name_hint: "iterate-example.com",
+    agent_name_hint: "iterate.example.com",
     ext_agent_host_id: "urn:uuid:1",
     response_type: "code",
     redirect_uri: "http://127.0.0.1:1455/auth/callback",
@@ -180,14 +171,10 @@ test("the host script names the Cloud of the newest enrolment the Cloud signed, 
   const module = await import(
     `data:text/javascript,${encodeURIComponent(`export default ${hostScript()}`)}`
   );
-  const run = module.default as (itx: unknown) => Promise<{ cloud: string | null; domain: string }>;
-  const itxWith = (
-    read: () => Promise<unknown>,
-    url: () => Promise<string> = async () => "https://example.com/",
-  ) => ({
+  const run = module.default as (itx: unknown) => Promise<{ cloud: string | null }>;
+  const itxWith = (read: () => Promise<unknown>) => ({
     kv: { get: async () => "1", put: async () => {} },
     secrets: { list: async () => [] },
-    url,
     cd: (path: string) => ({
       readEvents: path === "/integrations/cloud" ? read : async () => ({ events: [] }),
     }),
@@ -232,17 +219,6 @@ test("the host script names the Cloud of the newest enrolment the Cloud signed, 
     "https://a.example.com",
     null,
   ]);
-  // the mind's own domain, for the name that the consent page suggests
-  expect(await run(itxWith(async () => ({ events: [] })))).toMatchObject({ domain: "example.com" });
-  // a mind whose control plane is at the first zone's apex refuses `itx.url()`: no domain, no throw
-  expect(
-    await run(
-      itxWith(
-        async () => ({ events: [] }),
-        async () => Promise.reject(new Error("INVALID_INPUT")),
-      ),
-    ),
-  ).toMatchObject({ domain: null });
 });
 
 test("the test request runs before the browser moves on, and the Cloud's page says how it went", async () => {
@@ -259,12 +235,7 @@ test("the test request runs before the browser moves on, and the Cloud's page sa
           return { email: "ada@example.com", plan: "plus" };
         }
         calls.push("host");
-        return {
-          hostId: "urn:uuid:h",
-          domain: "example.com",
-          connected: false,
-          cloud: "https://cloud.example.com",
-        };
+        return { hostId: "urn:uuid:h", connected: false, cloud: "https://cloud.example.com" };
       },
     } as unknown as MindItx;
     let browser: Promise<{ location: string | null; callsThen: string[] }> | undefined;

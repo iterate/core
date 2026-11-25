@@ -118,12 +118,12 @@ export async function exchange(material, fetch) {
 const random = () => randomBytes(32).toString("base64url");
 
 /** OpenAI's consent page for one sign-in. `hostId` is the mind's `urn:uuid:` id: OpenAI
- *  attributes the plan's usage to it. `domain` is the mind's own domain (`example.com`): the
- *  page suggests the name `iterate-example.com`, so that a person with two minds tells their
- *  connections apart. With no domain it suggests `iterate`. */
+ *  attributes the plan's usage to it. `address` is the mind's address (`iterate.example.com`):
+ *  the page suggests it as the name, so that a person with two minds tells their connections
+ *  apart. */
 export function authorizeUrl(input: {
   hostId: string;
-  domain: string | null;
+  address: string;
   state: string;
   verifier: string;
   nonce: string;
@@ -132,7 +132,7 @@ export function authorizeUrl(input: {
   url.search = new URLSearchParams({
     client_id: DYNAMIC_CLIENT_ID,
     // what the consent page calls the app; the person may rename it there
-    agent_name_hint: input.domain ? `iterate-${input.domain}` : "iterate",
+    agent_name_hint: input.address,
     ext_agent_host_id: input.hostId,
     response_type: "code",
     redirect_uri: REDIRECT_URI,
@@ -295,8 +295,6 @@ export function hostScript(): string {
     .at(-1)?.payload?.cloud;
   return {
     hostId: "urn:uuid:" + id,
-    // null where the control plane is at the first zone's apex: \`itx.url()\` refuses there
-    domain: await itx.url().then((url) => new URL(url).hostname, () => null),
     connected: (await itx.secrets.list()).some((secret) => secret.path === ${JSON.stringify(SECRET)}),
     email: account?.email,
     cloud: typeof cloud === "string" ? cloud : null,
@@ -386,7 +384,6 @@ export async function connectChatgpt(input: {
   // `run` answers unknown; the host script above returns this shape
   const mind = (await itx.run(hostScript())) as {
     hostId: string;
-    domain: string | null;
     connected: boolean;
     email?: string;
     cloud: string | null;
@@ -399,7 +396,7 @@ export async function connectChatgpt(input: {
   const verifier = random();
   const url = authorizeUrl({
     hostId: mind.hostId,
-    domain: mind.domain,
+    address,
     state,
     verifier,
     nonce: random(),
