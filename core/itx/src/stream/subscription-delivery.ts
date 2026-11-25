@@ -792,7 +792,13 @@ export class SubscriptionDelivery {
     }
     const kind = failureKind(error);
     if (isPlatformFailureKind(kind)) {
-      logPlatformFailure("subscription-delivery", action, kind, { name, message: String(error) });
+      logPlatformFailure("subscription-delivery", action, kind, {
+        name,
+        // which context's row: the crash job puts the line on /exceptions (the default config's
+        // apps/telemetry/crashes.ts), and a row's name alone says no context
+        path: this.#stream.path,
+        message: String(error),
+      });
       return;
     }
     reportIssue(failureSite, error, { name });

@@ -28,6 +28,8 @@ const {
   siteOf,
   exceptionGroups,
   crashQuery,
+  platformFailureQuery,
+  platformFailuresOf,
   installCrashSweep,
   sweepTick,
   CRASH_SWEEP_ON,
@@ -47,8 +49,11 @@ const HUNG =
  *  next of `globalThis.sqlAnswers`. */
 const telemetry = {
   query: async (query, options) => {
-    globalThis.sqlAsked.push({ query, options });
-    const next = globalThis.sqlAnswers.shift();
+    // the second query of a sweep (the platform's failures, the warn lines) has answers of its own,
+    // none unless a test gives some: `sqlAnswers` and `sqlAsked` are the first query's alone
+    const warn = query.includes("level = 'warn'");
+    (warn ? globalThis.warnAsked : globalThis.sqlAsked).push({ query, options });
+    const next = (warn ? globalThis.warnAnswers : globalThis.sqlAnswers).shift();
     if (next instanceof Error) throw next;
     return Array.isArray(next) || next === undefined ? { rows: next ?? [], sql: query } : next;
   },
@@ -103,7 +108,24 @@ const row = (said, more = {}) => ({
 function cloudflare(...answers) {
   globalThis.sqlAsked = [];
   globalThis.sqlAnswers = answers;
+  globalThis.warnAsked = [];
+  globalThis.warnAnswers = [];
 }
+/** A row of the second query: a warn line of the kernel about a failure of the platform. */
+const warnRow = (more = {}) => ({
+  scriptName: "example-mind",
+  name: "subscription-delivery.platform-failure-deliver",
+  kind: "overloaded",
+  subject: "doc",
+  path: "/docs/config/AGENTS.md",
+  said: "Error: Worker exceeded CPU time limit.",
+  n: 1,
+  firstAt: "2026-11-21 20:28:23.968",
+  lastAt: "2026-11-21 20:28:23.968",
+  traceId: "t2",
+  requestId: "r2",
+  ...more,
+});
 
 test("the window: the first run reads 120 s that end 45 s ago, cut to the second", () => {
   assert.deepEqual(sweepWindow(NOW, null), {
@@ -667,4 +689,95 @@ test("what broke: the runtime's groups, the code's and the outside's are words o
     assert.ok(!("wordsOfAnyone" in byPrint[print]), print);
     assert.ok(!("outside" in byPrint[print]), print);
   }
+});
+
+test("the platform's failures: each warn line that says .platform-failure- is an exception; any other line with a kind is left out", () => {
+  const failures = platformFailuresOf([
+    warnRow({ n: 2 }),
+    warnRow({ lastAt: "2026-11-21 20:29:00.000" }),
+    warnRow({
+      name: "rule-snapshot.platform-failure-gave-up",
+      subject: "rulesSnapshot",
+      path: null,
+    }),
+    warnRow({ name: "delivery.push.dropped", kind: "full" }),
+  ]);
+  assert.equal(failures.length, 2);
+  const [doc, snapshot] = failures;
+  assert.equal(doc.seen.kind, "overloaded");
+  assert.equal(doc.seen.count, 3);
+  assert.equal(doc.seen.lastAt, "2026-11-21T20:29:00.000Z");
+  assert.deepEqual(doc.seen.source, {
+    from: "runtime",
+    failureSite: "subscription-delivery.platform-failure-deliver",
+  });
+  assert.deepEqual(doc.seen.where, {
+    worker: "example-mind",
+    name: "doc",
+    path: "/docs/config/AGENTS.md",
+    traceId: "t2",
+    requestId: "r2",
+  });
+  // a line that names no context has no `path`
+  assert.deepEqual(snapshot.seen.where, {
+    worker: "example-mind",
+    name: "rulesSnapshot",
+    traceId: "t2",
+    requestId: "r2",
+  });
+});
+
+test("a sweep lands the platform's failures: one event for each failure, context and hour, with no filter", async () => {
+  const mind = recordingMind();
+  cloudflare([]);
+  const rows = [
+    warnRow(),
+    warnRow({ path: "/docs/config/tasks.md" }),
+    warnRow({ kind: "disconnected", said: "Error: Network connection lost." }),
+  ];
+  globalThis.warnAnswers = [rows];
+  await crashSweep(mind.itx, { offset: 11 }, NOW);
+  assert.equal(globalThis.sqlAsked.length, 1);
+  assert.equal(globalThis.warnAsked.length, 1);
+  assert.deepEqual(windowOf(globalThis.warnAsked[0].query), windowOf(globalThis.sqlAsked[0].query));
+  assert.equal(
+    globalThis.warnAsked[0].query,
+    platformFailureQuery({ from: "2026-11-21T20:27:15Z", to: "2026-11-21T20:29:15Z" }, 0),
+  );
+  assert.deepEqual(
+    mind.appended.map((event) => [event.path, event.payload.kind, event.payload.where.path]),
+    [
+      [EXCEPTIONS, "overloaded", "/docs/config/AGENTS.md"],
+      [EXCEPTIONS, "overloaded", "/docs/config/tasks.md"],
+      [EXCEPTIONS, "disconnected", "/docs/config/AGENTS.md"],
+    ],
+  );
+  assert.equal(
+    mind.appended[0].idempotencyKey,
+    `exception/seen:runtime:${mind.appended[0].payload.fingerprint}:2026-11-21T20:/docs/config/AGENTS.md:doc`,
+  );
+  // the same two contexts have one fingerprint: the context in the key keeps them apart
+  assert.equal(mind.appended[0].payload.fingerprint, mind.appended[1].payload.fingerprint);
+  assert.equal(mind.kv[SWEPT_THROUGH], "2026-11-21T20:29:15Z");
+  // a later sweep of the hour reads the same rows and appends nothing
+  cloudflare([]);
+  globalThis.warnAnswers = [rows];
+  await crashSweep(mind.itx, { offset: 12 }, NOW + 60_000);
+  assert.equal(mind.appended.length, 3);
+});
+
+test("a sweep whose second query is refused moves no kept end, and says so once", async () => {
+  const mind = recordingMind();
+  cloudflare([]);
+  globalThis.warnAnswers = [new Error("Cloudflare's Analytics SQL refused the query")];
+  await crashSweep(mind.itx, { offset: 11 }, NOW);
+  assert.equal(mind.kv[SWEPT_THROUGH], undefined);
+  assert.deepEqual(
+    mind.appended.map((event) => [event.path, event.type]),
+    [[SWEEPS, SWEEP_FAILED]],
+  );
+});
+
+test("the second query takes only a time of the window", () => {
+  assert.throws(() => platformFailureQuery({ from: "x' OR '1", to: "2026-11-21T20:29:15Z" }, 0));
 });

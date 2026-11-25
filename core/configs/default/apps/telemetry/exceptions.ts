@@ -132,7 +132,8 @@ export type Seen = {
   /** What kind of failure: "uncaught", "rejection", "render", "module-load" for a page;
    *  "dead-letter", "publish" for a handler; "issue" for a reported issue; "uncaught" (a throw
    *  of `fetch`), "rejection" (in `waitUntil`) for the code; "uncaught", "cpu-limit",
-   *  "memory-limit", "hung", "internal" for the runtime. */
+   *  "memory-limit", "hung", "internal" for the runtime, and "overloaded", "disconnected" for a
+   *  failure of the platform that the kernel caught (crashes.ts). */
   kind: string;
   message: string;
   stack?: string;

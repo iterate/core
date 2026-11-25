@@ -105,7 +105,8 @@ test("the crash job runs for the platform's tick alone: the same type elsewhere,
     origin: "/",
     schedule: { key: "crash-sweep", scheduledAtOffset: 3, at: "2026-11-22T12:00:00.000Z" },
   });
-  expect(queries).toHaveLength(1);
+  // the crashes, and the platform's failures that the kernel caught
+  expect(queries).toHaveLength(2);
 });
 
 test("the day's budget facet is in a module that a publication offers a facet's class from", async () => {

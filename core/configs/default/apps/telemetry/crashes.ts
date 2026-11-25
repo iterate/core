@@ -24,6 +24,10 @@
 // 20:59:30 is read by the last sweep of hour 20 and by the first of hour 21: its last time keeps
 // its key, and the second read lands nothing. A crash that repeats all day is 24 events.
 //
+// THE PLATFORM'S FAILURES THAT THE KERNEL CAUGHT are read by a second query of the same window
+// (`platformFailureQuery`): the warn lines `<area>.platform-failure-<action>`. Each lands as one
+// event for its fingerprint, context, name and hour, with no filter.
+//
 // THE SWITCH (`CRASH_SWEEP_ON`): the job reads the logs once a minute. Set to false, the next
 // publish cancels the tick and no sweep runs.
 //
@@ -89,10 +93,7 @@ export const PAGE = 30;
  *  is read and weights `count()` itself (measured 22 Nov 2026), so a count is `count()`. A message
  *  is cut to 300 characters. */
 export function crashQuery(window: { from: string; to: string }, offset: number): string {
-  // only a time of `sweepWindow`'s form goes into the text
-  for (const time of [window.from, window.to])
-    if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(time))
-      throw new Error(`crashQuery: ${JSON.stringify(time).slice(0, 40)} is no time of the window`);
+  checkWindow("crashQuery", window);
   return `SELECT scriptName, attributes['exception.name'] AS name, substring(error, 1, 300) AS said,
        count() AS n, APPROX_MIN(timestamp) AS firstAt, APPROX_MAX(timestamp) AS lastAt,
        first_value(traceId) AS traceId, first_value(requestId) AS requestId
@@ -100,6 +101,35 @@ FROM logs.workersLogs
 WHERE timestamp >= '${window.from}' AND timestamp < '${window.to}'
   AND logType = 'cf-worker' AND level = 'error' AND attributes['exception.name'] <> ''
 GROUP BY scriptName, name, said
+ORDER BY n DESC, said LIMIT ${PAGE} OFFSET ${Math.max(0, Math.floor(offset))}`;
+}
+
+/** Only a time of `sweepWindow`'s form goes into a query's text. */
+function checkWindow(query: string, window: { from: string; to: string }): void {
+  for (const time of [window.from, window.to])
+    if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(time))
+      throw new Error(`${query}: ${JSON.stringify(time).slice(0, 40)} is no time of the window`);
+}
+
+/** THE SECOND QUERY: THE PLATFORM'S FAILURES THAT THE KERNEL CAUGHT. A call that the platform
+ *  failed (a CPU or memory kill of a facet, an overload, a lost connection) is caught by the
+ *  kernel and logged at warn as `<area>.platform-failure-<action>` with its `kind`
+ *  (iterate/lib `logPlatformFailure`): it throws nothing, so the first query never sees it, and a
+ *  row that is retried is no dead letter. Jonas, 25 Nov 2026: "yes of course we need to capture
+ *  all"; "we can then insert if statements in our processEvent function to filter out garbage".
+ *  So every such line is read, with no filter here. The store refuses `LIKE` and `IN` on an
+ *  attribute (measured 25 Nov 2026), so the query takes each warn line that has a `kind`, and
+ *  `platformFailuresOf` keeps the ones whose name says `.platform-failure-`. */
+export function platformFailureQuery(window: { from: string; to: string }, offset: number): string {
+  checkWindow("platformFailureQuery", window);
+  return `SELECT scriptName, attributes['event'] AS name, attributes['kind'] AS kind,
+       attributes['name'] AS subject, attributes['path'] AS path, substring(message, 1, 300) AS said,
+       count() AS n, APPROX_MIN(timestamp) AS firstAt, APPROX_MAX(timestamp) AS lastAt,
+       first_value(traceId) AS traceId, first_value(requestId) AS requestId
+FROM logs.workersLogs
+WHERE timestamp >= '${window.from}' AND timestamp < '${window.to}'
+  AND logType = 'cf-worker' AND level = 'warn' AND attributes['kind'] <> ''
+GROUP BY scriptName, name, kind, subject, path, said
 ORDER BY n DESC, said LIMIT ${PAGE} OFFSET ${Math.max(0, Math.floor(offset))}`;
 }
 
@@ -171,6 +201,10 @@ export type CrashRow = {
   lastAt?: unknown;
   traceId?: unknown;
   requestId?: unknown;
+  /** The second query's alone: the line's `kind`, and the `name` and `path` it names. */
+  kind?: unknown;
+  subject?: unknown;
+  path?: unknown;
 };
 
 /** THE MERGE: each row as an exception, and the rows with the same fingerprint as one, with the sum
@@ -211,6 +245,54 @@ export function crashesOf(rows: CrashRow[]): { fingerprint: string; seen: Seen }
   return [...merged.values()];
 }
 
+/** THE PLATFORM'S FAILURES of the second query's rows, each as an exception: its kind is the
+ *  line's (`overloaded`, `disconnected`), its site the line's name
+ *  (`subscription-delivery.platform-failure-deliver`), and `where` says the row or the facet
+ *  (`name`) and the context (`path`) when the line names them. A row whose name is no
+ *  `.platform-failure-` line is left out. Rows with the same fingerprint, context and name are
+ *  one; `occurrence` is what tells two contexts with the same failure apart in the key. */
+export function platformFailuresOf(
+  rows: CrashRow[],
+): { fingerprint: string; occurrence: string; seen: Seen }[] {
+  const merged = new Map<string, { fingerprint: string; occurrence: string; seen: Seen }>();
+  for (const row of rows) {
+    const site = String(row.name ?? "");
+    if (!site.includes(".platform-failure-")) continue;
+    const worker = String(row.scriptName ?? "");
+    const subject = String(row.subject ?? "");
+    const path = String(row.path ?? "");
+    const count = Math.max(1, Number(row.n) || 1);
+    const firstAt = isoOfStore(row.firstAt);
+    const lastAt = isoOfStore(row.lastAt);
+    const seen: Seen = {
+      kind: String(row.kind ?? ""),
+      message: String(row.said ?? ""),
+      count,
+      ...(firstAt && { firstAt }),
+      ...(lastAt && { lastAt }),
+      source: { from: "runtime", failureSite: site },
+      where: {
+        worker,
+        ...(subject && { name: subject }),
+        ...(path && { path }),
+        traceId: String(row.traceId ?? ""),
+        requestId: String(row.requestId ?? ""),
+      },
+    };
+    const fingerprint = fingerprintOfSeen(seen);
+    const occurrence = `${path}:${subject}`;
+    const same = merged.get(`${fingerprint}:${occurrence}`);
+    if (!same) {
+      merged.set(`${fingerprint}:${occurrence}`, { fingerprint, occurrence, seen });
+      continue;
+    }
+    same.seen.count = (same.seen.count ?? 1) + count;
+    if (firstAt && (!same.seen.firstAt || firstAt < same.seen.firstAt)) same.seen.firstAt = firstAt;
+    if (lastAt && (!same.seen.lastAt || lastAt > same.seen.lastAt)) same.seen.lastAt = lastAt;
+  }
+  return [...merged.values()];
+}
+
 /** What the sweep needs of the mind's root: kv, an append, and the telemetry query. */
 export type SweepItx = Itx & {
   kv: {
@@ -240,28 +322,38 @@ export async function crashSweep(
   try {
     window = sweepWindow(now, await itx.kv.get(SWEPT_THROUGH));
     const { from, to } = window;
-    const rows: CrashRow[] = [];
-    for (let page = 0; page < 3; page++) {
-      const answer = await itx.telemetry.query(crashQuery({ from, to }, page * PAGE), {
-        hours: hoursFor({ from }, now),
-      });
-      // a notice, or no rows at all, is no read: the kept end stays
-      if (!Array.isArray(answer?.rows) || answer.notice)
-        throw new Error(answer?.notice ?? "itx.telemetry.query answered no rows");
-      // the cast: rows are JSON objects, and crashesOf checks each field of a CrashRow itself
-      rows.push(...(answer.rows as CrashRow[]));
-      if (answer.rows.length < PAGE) break;
-    }
+    // up to three pages of a query: a notice, or no rows at all, is no read, and the kept end stays
+    const read = async (query: typeof crashQuery) => {
+      const rows: CrashRow[] = [];
+      for (let page = 0; page < 3; page++) {
+        const answer = await itx.telemetry.query(query({ from, to }, page * PAGE), {
+          hours: hoursFor({ from }, now),
+        });
+        if (!Array.isArray(answer?.rows) || answer.notice)
+          throw new Error(answer?.notice ?? "itx.telemetry.query answered no rows");
+        // the cast: rows are JSON objects, and each field of a CrashRow is checked where it is read
+        rows.push(...(answer.rows as CrashRow[]));
+        if (answer.rows.length < PAGE) break;
+      }
+      return rows;
+    };
+    const kinds = [
+      ...crashesOf(await read(crashQuery)).map((crash) => ({ ...crash, occurrence: "" })),
+      ...platformFailuresOf(await read(platformFailureQuery)),
+    ];
     if (landed.size > 1_000) landed.clear();
     let lost = false;
-    for (const { fingerprint, seen } of crashesOf(rows)) {
+    for (const { fingerprint, occurrence, seen } of kinds) {
       // the hour of the kind's last time, not of the window's end: two overlapping windows that
       // read the same crash give it the same key
       const hour = hourOf(seen.lastAt ?? to);
-      if (landed.has(`${fingerprint}:${hour}`)) continue;
+      // a platform failure's key also names its context and its row: the same failure of two docs
+      // is two events
+      const rest = occurrence ? `${hour}:${occurrence}` : hour;
+      if (landed.has(`${fingerprint}:${rest}`)) continue;
       // the key names the kind and the hour: a later sweep of the hour lands nothing
-      if (await exceptionSeen(itx, (print) => `runtime:${print}:${hour}`, seen))
-        landed.add(`${fingerprint}:${hour}`);
+      if (await exceptionSeen(itx, (print) => `runtime:${print}:${rest}`, seen))
+        landed.add(`${fingerprint}:${rest}`);
       else lost = true;
     }
     // A kind that did not land (the source's minute spent, or the append failed) is no failure of

@@ -132,6 +132,33 @@ test("attempts that died with the context count: the claim is given up without o
   expect(context.issues().at(-1)).toContain("subscription-delivery.catch-up-given-up");
 });
 
+test("a push that the platform failed is logged with the context's path, so /exceptions can say which context", async () => {
+  using context = await contextWithCounterFacet();
+  context.tick();
+  await context.settled();
+  const warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  // as the runtime stamps a CPU kill of the facet's Worker (iterate/lib platform-retry.ts)
+  context.failPushes(
+    1,
+    Object.assign(new Error("Worker exceeded CPU time limit."), { overloaded: true }),
+  );
+  context.tick();
+  await context.settled();
+  expect(warned.mock).toMatchObject({
+    calls: [
+      [
+        {
+          event: "subscription-delivery.platform-failure-deliver",
+          kind: "overloaded",
+          name: "counter",
+          path: "/x",
+          message: "Error: Worker exceeded CPU time limit.",
+        },
+      ],
+    ],
+  });
+});
+
 test("a push of ephemerals alone that fails owes nothing: the log could not return them", async () => {
   using context = await contextWithCounterFacet();
   context.failPushes(1);

@@ -383,6 +383,11 @@ export class Stream {
     return this.#highestDurableOffset;
   }
 
+  /** The context's path. */
+  get path(): string {
+    return this.#path;
+  }
+
   get coreReducedState(): CoreState {
     return this.#coreReducedState;
   }
