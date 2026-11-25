@@ -19,7 +19,6 @@ import type { IterateConfigProcessEventArgs } from "iterate/sdk";
 import { ConfigApi } from "./api.ts";
 import { dashApp } from "./apps/dash/app.ts";
 import { docsApp } from "./apps/docs/app.ts";
-import { mcpApp } from "./apps/mcp/app.ts";
 import { meetApp } from "./apps/meet/app.ts";
 import { onboardingApp } from "./apps/onboarding/app.ts";
 import { tasksApp } from "./apps/tasks/app.ts";
@@ -38,7 +37,6 @@ import { cloudflareClient, me, publicProfile } from "./website.ts";
 // The apps: a folder each under apps/ (apps.md).
 const dash = dashApp();
 const docs = docsApp();
-const mcp = mcpApp();
 const meet = meetApp();
 // The onboarding page and its guides are the repo /repos/onboarding; this repo keeps its steps.
 const onboarding = onboardingApp({ repo: "/repos/onboarding" });
@@ -63,8 +61,6 @@ export default class extends ConfigApi {
           return dash.open(request) || this.auth.require(request) || dash.fetch(request, this);
         case "docs": // Docs, for members: the files of the mind's repos, written together
           return docs.open(request) || this.auth.require(request) || docs.fetch(request, this);
-        case "mcp": // the mind's own MCP server, for members: open serves its app description, fetch answers MCP's own 401 and hands `run` to the platform (apps/mcp)
-          return mcp.open(request) || mcp.fetch(request, this);
         case "meet": // Meet, for members and their guests: its own routes ask for who they need
           return meet.fetch(request, this);
         case "onboarding": // the first steps of a new mind, for members

@@ -1,5 +1,5 @@
-// The default config's MCP server (core/configs/default/apps/mcp/, mounted on mcp.<zone> in
-// worker.ts): RFC 9728 discovery, app description for passkey-only member sign-in, anonymous and
+// The default config's MCP server (core/configs/default/apps/mcp/). The default worker.ts does NOT
+// mount it: the last test holds that. For a host that mounts it: RFC 9728 discovery, app description for passkey-only member sign-in, anonymous and
 // non-member refusals, initialize/tools/list wording, and handing `run` to `auth.mcpRun`.
 import { expect, test } from "vitest";
 import {
@@ -161,16 +161,18 @@ test("runUnavailable refuses and points at the control plane /mcp", async () => 
   });
 });
 
-test("worker.ts mounts apps/mcp on mcp.<zone>: app description is public for members, and a member's run hands off via auth.mcpRun", async () => {
-  const worker = Object.create(Config.prototype) as Config;
-  Object.assign(worker, { auth, ctx: { waitUntil: () => {} } });
+test("mounted on a host, apps/mcp: app description is public for members, and a member's run hands off via auth.mcpRun", async () => {
+  const app = mcpApp();
+  const worker = {
+    fetch: async (request: Request) => app.open(request) || app.fetch(request, { auth }),
+  };
 
   // App description is open so the sign-in page shows the mind's icon and opens on the passkey.
   const described = await worker.fetch(new Request(`${ORIGIN}/.well-known/iterate-app`));
   expect(described).toMatchObject({ status: 200 });
   expect(await described.json()).toEqual({ name: "MCP", icon: "/icon.svg", for: "members" });
 
-  // Discovery document is open on mcp.<zone>.
+  // Discovery document is open.
   const discovery = await worker.fetch(
     stampedRequest(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`),
   );
@@ -239,7 +241,6 @@ test("worker.ts mounts apps/mcp on mcp.<zone>: app description is public for mem
   });
 
   // Sanity check default description mentions run.
-  const app = mcpApp();
   const list = await app.fetch(
     stampedRequest(
       `${ORIGIN}/mcp`,
@@ -255,6 +256,32 @@ test("worker.ts mounts apps/mcp on mcp.<zone>: app description is public for mem
   expect(await list.json()).toMatchObject({
     result: { tools: [{ name: "run", description: MCP_RUN_DESCRIPTION }] },
   });
+});
+
+test("the default worker does not mount apps/mcp: mcp.<zone> is the public website, and no run is handed off", async () => {
+  const worker = Object.create(Config.prototype) as Config;
+  Object.assign(worker, { auth, ctx: { waitUntil: () => {} } });
+
+  for (const request of [
+    new Request(`${ORIGIN}/.well-known/iterate-app`),
+    stampedRequest(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`),
+    stampedRequest(
+      `${ORIGIN}/mcp`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          call("tools/call", { name: "run", arguments: { script: "async () => 1" } }),
+        ),
+      },
+      { principal: MEMBER },
+    ),
+  ]) {
+    const answer = await worker.fetch(request);
+    expect(answer).toMatchObject({ status: 404 });
+    expect(answer.headers.get(ITERATE_SERVE_HEADER)).toBeNull();
+    expect(answer.headers.get("www-authenticate")).toBeNull();
+  }
 });
 
 // ── helpers ──

@@ -1,7 +1,6 @@
 // mcp-page.js — THE DASH'S MCP PAGE: how to connect coding agents (Claude Code, Codex, Claude)
-// to this mind over MCP. Shows both the platform endpoint (`https://<mind>/mcp`, which stays up
-// even if userspace code breaks the web UI) and the customizable userspace endpoint
-// (`https://mcp.<zone>/mcp`, served by apps/mcp/ in /repos/config).
+// to this mind over MCP. Shows the platform endpoint (`https://<mind>/mcp`), which stays up
+// even if userspace code breaks the web UI.
 import { html } from "@iterate-com/ui/page";
 import { CopyText } from "@iterate-com/ui/components/copy-text";
 import {
@@ -60,12 +59,8 @@ function EndpointSection({ title, description, server, name }) {
 }
 
 export function DashMcp({ mind }) {
-  const zone = location.hostname.split(".").slice(1).join(".");
   const platformServer = `https://${mind}/mcp`;
   const platformName = mind.replaceAll(".", "-");
-  const userspaceHost = `mcp.${zone}`;
-  const userspaceServer = `https://${userspaceHost}/mcp`;
-  const userspaceName = userspaceHost.replaceAll(".", "-");
 
   return html`
     <div className="min-h-0 flex-1 overflow-y-auto">
@@ -90,12 +85,6 @@ export function DashMcp({ mind }) {
           description="Served directly by the platform — keeps working even if userspace code breaks the Dash or another web app."
           server=${platformServer}
           name=${platformName}
-        />
-        <${EndpointSection}
-          title="Userspace MCP (customizable)"
-          description="Served by apps/mcp/ in /repos/config, so you can customize the instructions and run tool description your coding agents see."
-          server=${userspaceServer}
-          name=${userspaceName}
         />
       </div>
     </div>
