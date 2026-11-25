@@ -1,6 +1,8 @@
 // Retries ride the DO's own alarm because facets have none (workerd#6810). At-least-once survives an
 // eviction because a cursor row's claim on the alarm is exactly its persisted `nextAttemptAtMs`,
-// written before any read or call: nothing in memory is a reason to wake.
+// written before any read or call: nothing in memory is a reason to wake. A facet owns its progress,
+// so its row has no cursor, until a push to it fails: that row then claims the alarm for a catch-up
+// from the log, on the same ladder (`#oweFacetCatchUp`).
 
 import type { ItxExpression } from "iterate/expression";
 import { codedError, errorCode, jsonEqual, reportIssue, withTimeout } from "iterate/lib";
@@ -347,7 +349,7 @@ export class SubscriptionDelivery {
       const events = freshEvents.filter((event) => rowTakes(row, event));
       if (targetOwnsProgress(state, row)) {
         // Re-pointed at a target that owns its progress: the stream's cursor is nothing of the target's.
-        if (record.cursor) {
+        if (record.cursor && !record.cursor.facetCatchUpOwed) {
           record.cursor = undefined;
           this.#stream.storage.deleteSubscriptionCursor(name);
         }
@@ -395,7 +397,7 @@ export class SubscriptionDelivery {
     return mayHaveClaimed;
   }
 
-  async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
+  async #catchUpFacetRow(name: string, row: Subscription, againAfterRestart = true): Promise<void> {
     const { head } = await this.#evaluateItxExpressionTargetHead(name, row);
     if (!this.#isStillTheRow(name, row)) return;
     if (!(head instanceof FacetHandle)) return;
@@ -409,7 +411,7 @@ export class SubscriptionDelivery {
       }
       // Cut off by an abort or a platform restart: the fresh instance owes it.
       const code = errorCode(error);
-      if (code === "FACET_ABORTED" || code === "FACET_RESTARTED")
+      if (againAfterRestart && (code === "FACET_ABORTED" || code === "FACET_RESTARTED"))
         return this.#catchUpFacetRow(name, row);
       throw error;
     }
@@ -483,20 +485,35 @@ export class SubscriptionDelivery {
       ([, row]) => !targetOwnsProgress(state, row),
     );
     const rows = cursorRows.filter(([, row]) => !row.halted);
+    // Behind whatever is being pushed to the facet now, as a push is. A row re-pointed away from
+    // its facet is a cursor row, and the claim is its cursor.
+    const facetCatchUps = Object.entries(state.subscriptions)
+      .filter(
+        ([name, row]) =>
+          !row.halted && targetOwnsProgress(state, row) && this.cursor(name)?.facetCatchUpOwed,
+      )
+      .map(([name, row]) => {
+        const record = this.#deliveryRecordFor(name);
+        record.deliveryChain = record.deliveryChain
+          .then(() => this.#catchUpOwedFacetRow(name, row))
+          .catch((error) => reportIssue("subscription-delivery.catch-up", error, { name }));
+        return record.deliveryChain;
+      });
     for (const [name, row] of rows)
       if (isFanOutRow(state, row)) {
         this.#fanOutRowFor(name, row).dangling = false;
         this.#pumpFanOut(name);
       }
-    await Promise.all(
-      rows.map(([name, row]) =>
+    await Promise.all([
+      ...facetCatchUps,
+      ...rows.map(([name, row]) =>
         isFanOutRow(state, row)
           ? Promise.all([...(this.#deliveryRecordByName.get(name)?.fanOut?.outcomes ?? [])])
           : this.#deliverFromCursor(name).catch((error) =>
               reportIssue("subscription-delivery.cursor", error, { name }),
             ),
       ),
-    );
+    ]);
     // A halted row's backlog too: the pass delivers it nothing.
     const head = this.#stream.highestDurableOffset();
     for (const [name] of cursorRows) {
@@ -621,13 +638,15 @@ export class SubscriptionDelivery {
         } finally {
           this.#deliveryCharsInFlight.release(chars);
         }
+        // The facet read what an earlier push missed before it took this one.
+        this.#settleFacetCatchUp(name, row);
       } catch (error) {
         if (deterministicFailure(error)) {
           this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
           return;
         }
-        // A push the watchdog timed out, an abort or a platform restart cut off was never checkpointed and
-        // nothing else redelivers it: the restarted facet catches up from the log, once per such push.
+        // A push the watchdog timed out, an abort or a platform restart cut off was never checkpointed:
+        // the restarted facet catches up from the log now, once per such push.
         const code = errorCode(error);
         if (code === "TIMEOUT" || code === "FACET_ABORTED" || code === "FACET_RESTARTED")
           this.#catchUpAfterPushTimeout(name, row);
@@ -636,7 +655,10 @@ export class SubscriptionDelivery {
     } catch (error) {
       // A dangling row errors until its rule lands, so a push into it is no issue.
       const code = errorCode(error);
-      if (code === "NO_ITX_EXPRESSION_MATCH" || code === "FACET_ABORTED") return;
+      if (code === "NO_ITX_EXPRESSION_MATCH") return;
+      if (code === "NO_FACET" && this.#isStillTheRow(name, row)) return;
+      this.#oweFacetCatchUp(name, row, events, range);
+      if (code === "FACET_ABORTED") return;
       if (code === "FACET_RESTARTED") {
         console.log({
           event: "delivery.facet-restarted-in-flight",
@@ -647,15 +669,110 @@ export class SubscriptionDelivery {
         });
         return;
       }
-      if (code === "NO_FACET" && this.#isStillTheRow(name, row)) return;
       this.#reportFacetRowFailure("deliver", name, row, error);
     }
   }
 
+  // A push to a facet that failed is owed to it as a catch-up from the log, by the alarm: a new
+  // invocation, so it does not start under the subrequest depth that failed the push, and a durable
+  // claim, so the next incarnation owes it too. Without it the facet reads what it missed only at
+  // its next push, and an agent in the middle of a turn makes the next event itself. A standing
+  // claim keeps its rung. Ephemerals ride a push only: the log could not return them.
+  #oweFacetCatchUp(
+    name: string,
+    row: Subscription,
+    events: StreamEvent[],
+    range: ScannedRange,
+  ): void {
+    const state = this.#stream.coreReducedState;
+    if (
+      events.every((event) => event.ephemeral) ||
+      !this.#isStillTheRow(name, row) ||
+      state.subscriptions[name]!.halted ||
+      this.#stream.versionEnded() ||
+      targetIsLentCallback(state, row) ||
+      this.cursor(name)?.facetCatchUpOwed
+    )
+      return;
+    this.#adoptCursor(
+      name,
+      {
+        confirmedOffset: range.after,
+        attempt: 0,
+        nextAttemptAtMs: Date.now() + durableLadderDelayMs(1),
+        facetCatchUpOwed: true,
+      },
+      true,
+    );
+    this.#reconcileAlarm();
+  }
+
+  // A push that succeeded or a catch-up that ended: nothing is owed.
+  #settleFacetCatchUp(name: string, row: Subscription): void {
+    const record = this.#deliveryRecordByName.get(name);
+    if (!record?.cursor?.facetCatchUpOwed || !this.#isStillTheRow(name, row)) return;
+    record.cursor = undefined;
+    this.#stream.storage.deleteSubscriptionCursor(name);
+    this.#reconcileAlarm();
+  }
+
+  // The alarm's pass. The next rung is claimed before the call, so an attempt that dies with the
+  // context counts. A facet that restarts under the catch-up fails the attempt: the next one waits
+  // its rung. After the last rung the claim is given up and the row is not halted: it is pushed as
+  // before, and the facet reads what it missed at the first push that succeeds.
+  async #catchUpOwedFacetRow(name: string, row: Subscription): Promise<void> {
+    const owed = this.cursor(name);
+    if (!owed?.facetCatchUpOwed || !this.#isStillTheRow(name, row)) return;
+    if (Date.now() < (owed.nextAttemptAtMs ?? 0)) return;
+    const giveUp = (attempts: number, error: unknown) => {
+      this.#settleFacetCatchUp(name, row);
+      reportIssue("subscription-delivery.catch-up-given-up", error, {
+        name,
+        attempts,
+        afterOffset: owed.confirmedOffset,
+      });
+    };
+    if (owed.attempt >= DELIVERY_MAX_ATTEMPTS)
+      return giveUp(
+        owed.attempt,
+        new Error(
+          `${owed.attempt} catch-ups of this facet ended with the context (it died mid-call)`,
+        ),
+      );
+    const attempt = owed.attempt + 1;
+    this.#adoptCursor(
+      name,
+      { ...owed, attempt, nextAttemptAtMs: Date.now() + durableLadderDelayMs(attempt + 1) },
+      true,
+    );
+    try {
+      await this.#catchUpFacetRow(name, row, false);
+    } catch (error) {
+      if (!this.cursor(name)?.facetCatchUpOwed || !this.#isStillTheRow(name, row)) return;
+      if (deterministicFailure(error) || attempt >= DELIVERY_MAX_ATTEMPTS)
+        return giveUp(attempt, error);
+      this.#metrics("subscription.retries", 1, name);
+      this.#reportFacetRowFailure("catch-up", name, row, error);
+      return;
+    }
+    if (!this.cursor(name)?.facetCatchUpOwed || !this.#isStillTheRow(name, row)) return;
+    this.#settleFacetCatchUp(name, row);
+    // A catch-up that met a refusal halted the row itself.
+    if (this.#stream.coreReducedState.subscriptions[name]!.halted) return;
+    console.log({
+      event: "delivery.facet-caught-up",
+      namespace: "subscription-delivery",
+      message: "a facet read from the log what a failed push did not deliver",
+      name,
+      afterOffset: owed.confirmedOffset,
+      attempt,
+    });
+  }
+
   // NO_FACET once the row is gone is the removal it raced. A platform failure is logged, not reported:
-  // the facet reads what it missed from the log at its next push.
+  // the row owes the facet a catch-up (`#oweFacetCatchUp`).
   #reportFacetRowFailure(
-    action: "resume" | "configured" | "deliver" | "catch-up-after-timeout",
+    action: "resume" | "configured" | "deliver" | "catch-up" | "catch-up-after-timeout",
     name: string,
     row: Subscription,
     error: unknown,
@@ -688,12 +805,14 @@ export class SubscriptionDelivery {
     );
   }
 
-  // Chained after this row's in-flight delivery; a catch-up that fails is reported, never retried.
+  // Chained after this row's in-flight delivery; a catch-up that fails is reported, and the alarm
+  // has the next one (`#oweFacetCatchUp`).
   #catchUpAfterPushTimeout(name: string, row: Subscription): void {
     const record = this.#deliveryRecordFor(name);
     record.deliveryChain = record.deliveryChain.then(() =>
-      this.#catchUpFacetRow(name, row).catch((error) =>
-        this.#reportFacetRowFailure("catch-up-after-timeout", name, row, error),
+      this.#catchUpFacetRow(name, row).then(
+        () => this.#settleFacetCatchUp(name, row),
+        (error) => this.#reportFacetRowFailure("catch-up-after-timeout", name, row, error),
       ),
     );
   }

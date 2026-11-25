@@ -732,6 +732,9 @@ export type SubscriptionCursor = {
   parkedProbes?: number;
   // Kept across incarnations so a re-point while the context slept is seen by the next one.
   route?: string;
+  // A facet's row has a cursor only while a push to it failed: the alarm owes the facet a catch-up
+  // from the log, after `confirmedOffset` (subscription-delivery.ts `#oweFacetCatchUp`).
+  facetCatchUpOwed?: true;
 };
 
 export type FanOutDeliveryRecord = {
