@@ -76,6 +76,13 @@ export type KeptByTheFacet = {
   keepTemplate(kept: TemplateKept): Promise<void>;
 };
 
+/** What one comparison with the template leaves to land: the record to keep, and the fact when
+ *  there is something to say. */
+type TemplateFollowed = {
+  kept: TemplateKept;
+  fact: EmittedEventInput<typeof MindContract> | undefined;
+};
+
 type PublicationAttempt =
   | { kind: "admitted"; mainModule: string; manifest: WorkerManifest; missing: string[] }
   // `superseded`: main moved on before the commit was looked at, which says nothing about it
@@ -123,7 +130,12 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
   // per incarnation; the durable ground is the state
   #creating = false;
   #retriedFailedCreation = false;
-  #templateFollowed = false;
+  /** How many more times this incarnation compares the template: once, and once more after a
+   *  comparison that threw. */
+  #templateTriesLeft = 2;
+  #templateFollowing = false;
+  /** A comparison whose fact or record did not land yet: the next try lands this same result. */
+  #templateLanding: TemplateFollowed | undefined;
   /** Whether this incarnation made the root's own subscription row match the contract, or is
    *  about to; false again after a try that failed. */
   #ownRowMatched = false;
@@ -435,13 +447,15 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     }
   }
 
-  // Created, nothing owed, no publication running, and not compared yet in this incarnation.
+  // Created, nothing owed, no publication running, no comparison running, and a try left in this
+  // incarnation.
   #templateMayFollow(): boolean {
     return (
       this.#newestState?.creation?.status === "created" &&
       !this.#nextOwed() &&
       !this.#publishing &&
-      !this.#templateFollowed
+      !this.#templateFollowing &&
+      this.#templateTriesLeft > 0
     );
   }
 
@@ -523,20 +537,35 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     append: (...events: EmittedEventInput<typeof MindContract>[]) => Promise<unknown>,
   ): Promise<void> {
     if (!this.#templateMayFollow()) return;
-    this.#templateFollowed = true;
+    this.#templateFollowing = true;
     try {
-      const followed = await this.#followTemplate();
-      if (!followed) return;
-      if (followed.fact) await append(followed.fact);
-      await this.kept.keepTemplate(followed.kept);
+      // A comparison that was made is not made again when its fact or its record did not land:
+      // a second one would find the template's own commit at the tip, and say nothing of it. The
+      // fact has one key for its commit, so landing it twice lands it once.
+      const followed: TemplateFollowed | undefined =
+        this.#templateLanding ?? (await this.#followTemplate());
+      this.#templateLanding = followed;
+      if (followed) {
+        if (followed.fact) await append(followed.fact);
+        await this.kept.keepTemplate(followed.kept);
+      }
+      this.#templateLanding = undefined;
+      this.#templateTriesLeft = 0;
     } catch (error) {
-      // the next incarnation tries again: a commit made meanwhile only moved the tip
-      console.info({
+      // ONE MORE TRY IN THIS INCARNATION, at its next pass: a root stays awake for days, and a
+      // failure of the moment (the repo's facet restarting with its Worker) would else leave the
+      // mind on its old template until the next deploy. A failure that stays is said twice, and
+      // the next incarnation tries again. A commit made meanwhile only moved the tip.
+      this.#templateTriesLeft -= 1;
+      console.warn({
         event: "mind.template-not-followed",
         namespace: "mind",
         message: "the config repo was not compared with the bundled template",
         error: error instanceof Error ? error.message : String(error),
+        triesLeft: this.#templateTriesLeft,
       });
+    } finally {
+      this.#templateFollowing = false;
     }
   }
 
@@ -558,9 +587,15 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
     // the repo's facet answers an itx expression, which is typed `unknown`: each answer is parsed
     const filesAt = async (commitOid: string) =>
       FilesAnswer.parse(await call(configRepoCall("files", { commitOid })));
-    // 50 commits back: a seed older than that is out of reach, and the template then only adds
-    // the files the repo lacks
-    const log = LogAnswer.parse(await call(configRepoCall("log", { limit: 50 })));
+    // THE HISTORY IS READ FOR ONE THING, the seed of a mind that has no record yet: 50 commits
+    // back, and a seed older than that is out of reach (the template then only adds the files the
+    // repo lacks). A mind with a record asks for the tip alone. The repo's facet answers a history
+    // with every file version of its commits, and refuses more than it can hold
+    // (repo/git-wire.ts `MAX_INFLATED_BYTES`): a repo whose agents commit a large file often
+    // passes that within 50 commits, and its template was then never compared.
+    const log = LogAnswer.parse(
+      await call(configRepoCall("log", { limit: kept?.written ? 1 : 50 })),
+    );
     const tip = log[0]?.oid;
     if (!tip) return undefined;
     const current = await filesAt(tip);
@@ -583,7 +618,18 @@ export class MindProcessor extends StreamProcessor<MindState, ConsumedEvent<type
       seed?.template ||
       /"name":\s*"@iterate-com\/config-([\w-]+)"/.exec(manifest)?.[1] ||
       "";
-    if (!Object.hasOwn(this.templates, name)) return { kept: { ...kept, hash }, fact: undefined };
+    if (!Object.hasOwn(this.templates, name)) {
+      // The hash is kept, so this build does not compare again. A repo that follows no template is
+      // its owner's choice, so this is no warning.
+      console.info({
+        event: "mind.template-not-named",
+        namespace: "mind",
+        message:
+          "the config repo names no template that this build bundles, so nothing was compared",
+        template: name || null,
+      });
+      return { kept: { ...kept, hash }, fact: undefined };
+    }
     const template = await pinDependencies(this.#templateFilesOf(name));
     const now = await hashesOf(current);
     // every version the record keeps counts: a file put back to an older one is the platform's

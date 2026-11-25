@@ -4,6 +4,7 @@
 import { Redacted } from "iterate/app-config";
 import type { ItxExpression } from "iterate/expression";
 import { identityHashOf, type SignedRecord } from "iterate/mind-identity";
+import { sha256Hex } from "core-itx";
 import { ProcessorEngine, type StreamEvent, type StreamEventInput } from "iterate/stream/processor";
 import { memoryStorage, memoryStream } from "iterate/stream/test-support";
 import { expect, test, vi } from "vitest";
@@ -50,6 +51,128 @@ test("with nothing owed, the first wake compares the template at once, and a sec
   await mind.settled();
   expect(mind).toMatchObject({ asked: ["log", "files"], committed: [{ parent: "seed" }] });
   expect(mind.committed).toHaveLength(1);
+});
+
+test("a mind with no record reads 50 commits back, and its seed commit names the template and what the platform wrote", async () => {
+  const mind = mindOf({ owes: false });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({
+    history: [50],
+    // the seed's file is the platform's, so the newer template replaces it
+    committed: [{ message: "template: core/configs/default", parent: "seed" }],
+    facts: [{ payload: { template: "default", replaced: ["worker.ts"] } }],
+    kept: { template: "default" },
+  });
+});
+
+// The repo's facet answers a history with every file version of its commits and refuses more than
+// it can hold, so a repo whose agents commit a large file often could never be compared.
+test.for([
+  { name: "default", message: "template: core/configs/default", added: ["apps/onboarding/app.ts"] },
+  { name: "minimal", message: "template: core/configs/minimal", added: [] },
+])(
+  "a mind whose record names the template $name reads the tip alone, and that template is compared",
+  async ({ name, message, added }) => {
+    const mind = mindOf({
+      owes: false,
+      record: {
+        hash: "an older build's templates",
+        template: name,
+        // the platform wrote the repo's worker, and it is still what the platform wrote
+        written: { "worker.ts": await sha256Hex("the older worker\n") },
+      },
+    });
+    mind.deliver(mind.state);
+    await mind.settled();
+    expect(mind).toMatchObject({
+      history: [1],
+      asked: ["log", "files"],
+      committed: [{ message, parent: "seed" }],
+      facts: [{ payload: { template: name, added, replaced: ["worker.ts"] } }],
+      kept: { template: name },
+    });
+  },
+);
+
+test("a comparison that throws is a warning, and the incarnation tries once more at its next pass", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mind = mindOf({ owes: false, historyFails: 1 });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({ history: [50], committed: [], kept: undefined });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({
+    history: [50, 50],
+    committed: [{ message: "template: core/configs/default" }],
+    kept: { template: "default" },
+  });
+  expect(warn.mock.calls).toMatchObject([
+    [
+      {
+        event: "mind.template-not-followed",
+        error: "the test's repo could not answer its history",
+        triesLeft: 1,
+      },
+    ],
+  ]);
+});
+
+test("a comparison that throws twice is not tried a third time in the incarnation, and the next incarnation tries again", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mind = mindOf({ owes: false, historyFails: 2 });
+  // three passes of one incarnation: the first two compare and throw, the third asks nothing
+  for (let pass = 0; pass < 3; pass++) {
+    mind.deliver(mind.state);
+    await mind.settled();
+  }
+  expect(mind).toMatchObject({ history: [50, 50], committed: [] });
+  expect(warn.mock.calls).toMatchObject([[{ triesLeft: 1 }], [{ triesLeft: 0 }]]);
+  mind.restart();
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({ history: [50, 50, 50], committed: [{ parent: "seed" }] });
+});
+
+test("a comparison whose fact did not land is not made again: the next pass lands the same fact and the record, with the template's commit", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const mind = mindOf({ owes: false, appendFails: 1 });
+  mind.deliver(mind.state);
+  await mind.settled();
+  // the template's commit is made, and neither its fact nor the record is there
+  expect(mind).toMatchObject({ committed: [{ parent: "seed" }], facts: [], kept: undefined });
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({
+    // one comparison and one commit: the second pass asked the repo nothing
+    history: [50],
+    asked: ["log", "files"],
+    facts: [
+      {
+        type: "events.iterate.com/mind/template-applied",
+        payload: { commitOid: "template", replaced: ["worker.ts"] },
+      },
+    ],
+    kept: { template: "default", commit: "template" },
+  });
+  expect(mind.committed).toHaveLength(1);
+  expect(warn.mock.calls).toMatchObject([
+    [{ event: "mind.template-not-followed", error: "the test's root did not take the fact" }],
+  ]);
+});
+
+test("a config repo that names no template of the build is said so, nothing is compared, and the build is not compared again", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  // a record of what the platform wrote, with no template's name; the repo has no package.json
+  const mind = mindOf({ owes: false, record: { hash: "an older build's templates", written: {} } });
+  mind.deliver(mind.state);
+  await mind.settled();
+  mind.restart();
+  mind.deliver(mind.state);
+  await mind.settled();
+  expect(mind).toMatchObject({ history: [1], committed: [], facts: [] });
+  expect(info.mock.calls).toMatchObject([[{ event: "mind.template-not-named", template: null }]]);
 });
 
 test("the platform's own template commit that does not load is said as a fact of its own, with why", async () => {
@@ -750,8 +873,18 @@ function mindOf({
   head = "seed",
   there = {},
   probed = {},
+  record,
+  historyFails = 0,
+  appendFails = 0,
 }: {
   owes: boolean;
+  /** What the mind's facet keeps of the template at its start: nothing, for a mind that was
+   *  never compared. */
+  record?: TemplateKept;
+  /** How many reads of the repo's history throw before one answers. */
+  historyFails?: number;
+  /** How many appends of the processor's own facts throw before one lands. */
+  appendFails?: number;
   /** What each read of main's head answers, in turn; the last answer stays. */
   head?: string | string[];
   /** What the publication's probe answers: by default nothing of a config, so it is refused. */
@@ -767,7 +900,11 @@ function mindOf({
   const facts: StreamEventInput[] = [];
   const platformFacts: StreamEventInput[] = [];
   const background: Promise<unknown>[] = [];
-  let kept: TemplateKept | undefined;
+  let kept = record;
+  /** How many commits each read of the repo's history asked for, in order. */
+  const history: unknown[] = [];
+  let historyFailsLeft = historyFails;
+  let appendFailsLeft = appendFails;
   const seeded = { "worker.ts": "the older worker\n" };
   let headReads = 0;
   const state: MindState = MindContract.stateSchema.parse({
@@ -829,6 +966,9 @@ function mindOf({
       return { commitOid: "template", changedPaths: [] };
     }
     asked.push(verb);
+    if (verb === "log") history.push(argument.limit);
+    if (verb === "log" && historyFailsLeft-- > 0)
+      throw new Error("the test's repo could not answer its history");
     if (verb === "log")
       return [
         {
@@ -849,7 +989,10 @@ function mindOf({
     processor.processEvent({
       state: delivered,
       delivery: { caughtUp: true },
-      append: async (...events: StreamEventInput[]) => void facts.push(...events),
+      append: async (...events: StreamEventInput[]) => {
+        if (appendFailsLeft-- > 0) throw new Error("the test's root did not take the fact");
+        facts.push(...events);
+      },
       runInBackground: (work: () => Promise<unknown>) => void background.push(work()),
     } as unknown as Parameters<MindProcessor["processEvent"]>[0]);
   const publisher: MindPublisher = {
@@ -898,18 +1041,21 @@ function mindOf({
         template: async () => kept,
         keepTemplate: async (next) => void (kept = next),
       },
-      // the build's templates: one, with a file newer than the repo's and a file the repo lacks
+      // the build's templates: one with a file newer than the repo's and a file the repo lacks,
+      // and a smaller one
       {
         default: [
           { path: "worker.ts", content: "the newer worker\n" },
           { path: "apps/onboarding/app.ts", content: "the onboarding app\n" },
         ],
+        minimal: [{ path: "worker.ts", content: "the minimal worker\n" }],
       },
     );
   let processor = incarnation();
   return {
     state,
     asked,
+    history,
     published,
     committed,
     facts,
