@@ -9,7 +9,10 @@ The owner should come away with: their own Claude or Codex can use the mind, and
   Opening `https://<control-plane hostname>/mcp` in a browser shows the Claude and Claude Code
   connect commands, and so does the Dash's MCP page.
 - Claude (the app or claude.ai): Settings, Connectors, "Add custom connector", with that address.
-- Claude Code: `claude mcp add --transport http <name> https://<control-plane hostname>/mcp`, where
+- `npx iterate deploy` offers to add the server to Claude Code, Codex, Grok and Antigravity on the
+  computer it ran on, so the owner's assistant may have it already: ask before giving a command.
+  `npx iterate mcp <claude|codex|grok|agy>` prints the command for one of them.
+- Claude Code: `claude mcp add --scope user --transport http <name> https://<control-plane hostname>/mcp`, where
   `<name>` is the control-plane hostname with a hyphen for each dot (`iterate-example-com` for
   `iterate.example.com`). Then, inside
   Claude Code: `/mcp`, pick `<name>`, Authenticate.

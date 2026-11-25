@@ -16,7 +16,7 @@ npx iterate login example.com --device    # approve from a phone, when the issue
 npx iterate whoami
 npx iterate repl --context /notes         # local Node REPL
 npx iterate itx run --eval 'return await itx.whoami();'
-npx iterate mcp claude                    # the command that adds the mind's MCP server to Claude Code
+npx iterate mcp claude                    # the command that adds the mind's MCP server to Claude Code; also codex, grok, agy
 npx iterate use-my-computer --name myComputer
 npx iterate tunnel 5173 --name blog       # a local port on blog.<address>
 npx iterate provide ./whatsapp.ts         # a local file's functions as itx.whatsapp
@@ -243,10 +243,29 @@ after a no, it still posts the mind's identity and prints the config, then print
 address, opens nothing and ends non-zero. Run the command again to check again: it deploys over
 the mind. The check is this computer's view: a browser with another resolver can still differ.
 
-After the deploy, once the mind is answering and its identity is posted, the command prints a short
-success message, waits for Enter, and opens `https://onboarding.<zone>/` in the browser to continue
-setup there. With `--no-setup`, in non-interactive mode, or over SSH / headless Linux, it prints
-`https://onboarding.<zone>/` without waiting or opening a browser.
+After the deploy, once the mind is answering and its identity is posted, **the way to setup also
+signs this computer in to the mind**, so `iterate` commands reach it at once. The command prints a
+short link to this computer's own sign-in listener (`http://localhost:<port>/start`), waits for
+Enter and opens it. On a new mind the browser goes to `https://<control plane>/sign-in/access`:
+Cloudflare Access mails the owner a code, the owner adds their first passkey, and the browser goes
+on to the mind's consent page for the CLI, signed in. After **Allow** the browser comes back to the
+listener, which sends it on to `https://onboarding.<zone>/`. Over SSH or headless Linux, or for a
+coding agent, the device sign-in prints the same way in, ending at the approval page with its code
+filled in. The command waits up to 30 minutes for the browser (the device code lasts 5). A failed
+sign-in does not fail the deploy: the command says to run `iterate login <control plane>`. A
+computer with no mind in any profile takes the new mind as its default profile's.
+
+A redeploy from a computer that has a sign-in to the mind opens `https://onboarding.<zone>/`.
+`--no-sign-in` keeps the old end: setup's page alone. With `--no-setup`, or with nobody at the
+terminal and no coding agent (a CI job), nothing is signed in and the command prints setup's address
+without waiting or opening a browser.
+
+**On a first deploy, the command offers the mind's MCP server to the coding agents on this
+computer**: Claude Code, Codex, Grok and Antigravity, each one whose command (`claude`, `codex`,
+`grok`, `agy`) is on `PATH`, all ticked. Each gets the server for all your folders under the name
+`iterate-<control plane with - for .>` (`iterate mcp <client>` prints the command), and signs in to
+it itself at its first use: one **Allow** in a browser that is signed in to the mind. `--mcp
+claude,codex` (or `all`, or `none`) answers the question, also for a coding agent or a redeploy.
 
 **It handles the expected way alone.** A run that stops says why. Run it again on the same
 computer: each step reads what the account has, and a deploy keeps what it made. A coding agent

@@ -44,16 +44,23 @@ export async function registerClient(
 /** Sign in to `mind`'s issuer in a browser, for `resource`: `openBrowser` gets the
  *  authorization URL, and the redirect back to this process's loopback listener is validated
  *  (state, `iss`, no `error`) before its code is redeemed with the PKCE verifier. The scope is
- *  `iterate`, the one a mind's issuer grants. */
+ *  `iterate`, the one a mind's issuer grants. `through` makes a page that leads to the
+ *  authorization URL (a new mind's first sign-in): `openBrowser` then gets the listener's own short
+ *  `/start`, which sends the browser there. `then` is where the browser goes on after the redirect,
+ *  in place of the page that sends the person back to the terminal; `waitMs` is how long the
+ *  listener waits for the redirect (default five minutes). */
 export async function oauthLogin(input: {
   mind: DiscoveredMind;
   resource: string;
   clientName?: string;
   openBrowser: (url: URL) => void | Promise<void>;
+  through?: (authorizationUrl: string) => string;
+  then?: string;
+  waitMs?: number;
 }): Promise<StoredSession> {
   const { mind, resource } = input;
   const as = authorizationServerOf(mind);
-  await using loopback = await listenForRedirect();
+  await using loopback = await listenForRedirect({ waitMs: input.waitMs });
   const client = await registerClient(mind, {
     client_name: input.clientName || CLIENT_NAME,
     redirect_uris: [loopback.redirectUri],
@@ -68,7 +75,10 @@ export async function oauthLogin(input: {
     redirectUri: loopback.redirectUri,
     resources: [resource],
   });
-  await input.openBrowser(request.url);
+  if (input.then) loopback.sendOnward(input.then, request.state);
+  await input.openBrowser(
+    input.through ? loopback.startAt(input.through(request.url.href)) : request.url,
+  );
   let callback: URLSearchParams;
   try {
     callback = oauth.validateAuthResponse(as, client, await loopback.redirect, request.state);
@@ -203,15 +213,25 @@ function redirectPage(title: string, message: string) {
 }
 
 /** The loopback redirect (https://www.rfc-editor.org/rfc/rfc8252#section-7.3): `/callback` on an
- *  ephemeral localhost port, answered once. `redirect` is its query string, for oauth4webapi to
- *  validate; it rejects after five minutes without one. Disposal closes the listener. */
-async function listenForRedirect() {
+ *  ephemeral localhost port, answered once with a page. `redirect` is its query string, for
+ *  oauth4webapi to validate; it rejects after `waitMs` (default five minutes) without one.
+ *  `startAt(page)` makes `/start` send a browser to `page`, and answers its address: a short link
+ *  to print for a long page. `sendOnward(to, state)` answers a redirect with a code and that state
+ *  with a 303 to `to` in place of the page; any other redirect still gets the page. Disposal closes
+ *  the listener. */
+export async function listenForRedirect(options: { waitMs?: number } = {}) {
   const settle = Promise.withResolvers<URLSearchParams>();
   // Rejected only by the timeout, which a login that already failed never awaits.
   void settle.promise.catch(() => {});
   let answered = false;
+  let start: string | undefined;
+  let onward: { to: string; state: string } | undefined;
   const server = createServer((request, response) => {
     const url = new URL(request.url || "/", "http://localhost");
+    if (url.pathname === "/start" && start) {
+      response.writeHead(303, { location: start, "cache-control": "no-store" }).end();
+      return;
+    }
     if (url.pathname !== "/callback") {
       response.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("Not found.");
       return;
@@ -224,6 +244,17 @@ async function listenForRedirect() {
     }
     answered = true;
     const declined = url.searchParams.has("error");
+    // only the redirect this sign-in asked for goes on: its state, and a code
+    if (
+      !declined &&
+      onward &&
+      url.searchParams.has("code") &&
+      url.searchParams.get("state") === onward.state
+    ) {
+      response.writeHead(303, { location: onward.to, "cache-control": "no-store" }).end();
+      settle.resolve(url.searchParams);
+      return;
+    }
     response
       .writeHead(declined ? 400 : 200, { "content-type": "text/html; charset=utf-8" })
       .end(
@@ -242,13 +273,20 @@ async function listenForRedirect() {
   });
   const timeout = setTimeout(
     () => settle.reject(new Error("Timed out waiting for the sign-in redirect.")),
-    5 * 60_000,
+    options.waitMs ?? 5 * 60_000,
   );
   // A TCP listener's address is an AddressInfo; only a pipe or socket path answers a string.
   const { port } = server.address() as AddressInfo;
   return {
     redirectUri: `http://localhost:${port}/callback`,
     redirect: settle.promise,
+    sendOnward(to: string, state: string) {
+      onward = { to, state };
+    },
+    startAt(page: string) {
+      start = page;
+      return new URL(`http://localhost:${port}/start`);
+    },
     async [Symbol.asyncDispose]() {
       clearTimeout(timeout);
       server.closeAllConnections();

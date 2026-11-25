@@ -343,7 +343,7 @@ async function isDiscoverProbe(request: Request) {
 function mcpHelp(request: Request, config: Pick<MindConfig, "controlPlaneHostname">) {
   const origin = controlPlaneOriginOf(config);
   const mcp = mindMcpUrlOf(config.controlPlaneHostname);
-  const add = `claude mcp add --transport http ${mindMcpNameOf(config.controlPlaneHostname)} ${mcp}`;
+  const add = `claude mcp add --scope user --transport http ${mindMcpNameOf(config.controlPlaneHostname)} ${mcp}`;
   if (request.method === "GET" && request.headers.get("accept")?.includes("text/html"))
     return {
       type: "text/html; charset=utf-8",

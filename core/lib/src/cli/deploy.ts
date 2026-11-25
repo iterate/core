@@ -37,7 +37,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual, promisify, styleText } from "node:util";
 import * as p from "@clack/prompts";
 import { z } from "zod";
-import { mindAddressAsTyped } from "../mind-api.ts";
+import { mindAddressAsTyped, mindApiUrlOf, mindMcpNameOf, mindMcpUrlOf } from "../mind-api.ts";
 import {
   domainOfOwnerEmailPattern,
   Hostname,
@@ -47,6 +47,7 @@ import {
   zoneOf as zoneOfMind,
   zoneOfMailAddress,
 } from "../mind-config.ts";
+import { discoveredMind, signInToMind } from "../node.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import {
   type Answer,
@@ -62,6 +63,14 @@ import {
   parsed,
   resultOf,
 } from "./cloudflare-access.ts";
+import {
+  DEFAULT_CONFIG_NAME,
+  readConfigFile,
+  readSession,
+  setConfigMind,
+  withSessionsLock,
+  writeSession,
+} from "./config.ts";
 import { loginFlowFor } from "./device-login/flow.ts";
 import {
   IDENTITIES,
@@ -71,6 +80,14 @@ import {
   newIdentity,
   postIdentity,
 } from "./identity.ts";
+import {
+  addMcpServer,
+  MCP_CLIENTS,
+  type McpClient,
+  mcpClientsOf,
+  mcpClientsOnPath,
+} from "./mcp-clients.ts";
+import { refreshOAuthSession } from "./oauth.ts";
 import { openPageCommand } from "./open-page.ts";
 
 const exec = promisify(execFile);
@@ -97,6 +114,10 @@ export type DeployInput = {
   source?: string;
   ref?: string;
   setup?: boolean;
+  /** false: this computer is not signed in to the mind after the deploy (`signInHere`) */
+  signIn?: boolean;
+  /** the coding agents that get the mind's MCP server: names, `all` or `none` (`addMcpHere`) */
+  mcp?: string;
   /** the stack's plan alone, over a mind that is there: nothing changes (`planArgsOf`) */
   plan?: boolean;
 };
@@ -654,6 +675,25 @@ export function setupDestinationOf(mind: {
     : "Continue setup in your browser:";
   return { url, prompt };
 }
+
+/** THE PAGE THAT SIGNS THIS COMPUTER IN TO THE MIND, from the issuer's own page for it (the
+ *  browser flow's authorization request, or the device flow's approval page with its code). A new
+ *  mind's owner has no passkey to approve it with yet, so on a first deploy the way there goes
+ *  through `/sign-in/access`: Cloudflare Access proves the owner's email, the owner adds their
+ *  first passkey, and the browser goes on to the issuer's page as `next`, signed in
+ *  (core/auth-worker/src/access-sign-in.ts, enrolment.ts). On a redeploy the issuer's page is the
+ *  way: it asks a browser that is not signed in for its passkey first. */
+export function signInPageOf(
+  mind: { controlPlaneHostname: string; firstDeploy: boolean },
+  issuerPage: string,
+) {
+  if (!mind.firstDeploy) return issuerPage;
+  return `https://${mind.controlPlaneHostname}/sign-in/access?${new URLSearchParams({ next: issuerPage })}`;
+}
+
+/** How long the sign-in after a deploy waits for the person: a new owner reads a mailed code and
+ *  adds a passkey on the way. */
+const SIGN_IN_WAIT_MS = 30 * 60_000;
 
 /** WHAT THE COMMAND DOES NEXT FOR THE ACCOUNT'S ZERO TRUST ORGANIZATION, by Cloudflare's answer to
  *  `GET /accounts/<id>/access/organizations`, or, once `tried`, to the set-up after it. An owner
@@ -1959,6 +1999,129 @@ async function identityPublished(mind: { mindId: string; controlPlaneHostname: s
 // ---------------------------------------------------------------------------------------------
 // The command.
 
+/** THIS COMPUTER'S SIGN-IN TO THE MIND, ON THE WAY TO SETUP, so that `iterate` commands work
+ *  right after the deploy (cli.ts `login` does the same). In the browser flow the setup page is the
+ *  sign-in: the browser goes from the issuer's page (through the first passkey on a new mind,
+ *  `signInPageOf`) to this computer's loopback, which sends it on to `onboarding`. The device flow
+ *  prints its page instead, for a browser on another computer. A sign-in that fails ends nothing:
+ *  the deploy is done, and `iterate login` signs in later.
+ *
+ *  `opened`: a browser was sent toward setup, so no other page is opened. `signedIn`: the session
+ *  is stored. Nobody signs in when `--no-sign-in` says so, when there is no person and no coding
+ *  agent to pass the page on (a log in CI), or when a redeploy finds a sign-in kept here already. */
+async function signInHere(
+  input: DeployInput,
+  mind: {
+    controlPlaneHostname: string;
+    firstDeploy: boolean;
+    setup: { url: string; prompt: string };
+    onboarding: string;
+  },
+): Promise<{ opened: boolean; signedIn: boolean }> {
+  const c = palette();
+  const { controlPlaneHostname } = mind;
+  const resource = mindApiUrlOf(controlPlaneHostname);
+  if (input.signIn === false || (!interactive() && !isCodingAgent(process.env)))
+    return { opened: false, signedIn: false };
+  if (!mind.firstDeploy && (await keptSignInLives(resource)))
+    return { opened: false, signedIn: true };
+  const flow = signInFlow();
+  let opened = false;
+  let waiting: ReturnType<typeof wait> | undefined;
+  try {
+    const discovered = await discoveredMind(controlPlaneHostname);
+    await signInToMind(discovered, resource, {
+      flow,
+      // the device flow's page and code, on lines of their own; the first line names the issuer
+      print: (line) => {
+        if (!line.startsWith("Signing in to ")) console.log(line);
+      },
+      through: (page) => signInPageOf(mind, page),
+      then: mind.onboarding,
+      waitMs: SIGN_IN_WAIT_MS,
+      openBrowser: async (url) => {
+        await page(mind.setup.prompt, url.href);
+        opened = true;
+        waiting = wait("Waiting for you in the browser");
+      },
+    });
+    waiting?.done();
+    p.log.success(`This computer is signed in to ${c.domain(controlPlaneHostname)}.`);
+    // a computer with no mind yet takes this one; one with another mind already keeps it
+    const minds = Object.values(readConfigFile().configs || {}).map((profile) => profile.mind);
+    if (!minds.some(Boolean)) setConfigMind(DEFAULT_CONFIG_NAME, controlPlaneHostname);
+    else if (!minds.includes(controlPlaneHostname))
+      p.log.info(
+        `Your iterate commands still go to the mind they went to. Add --mind ${controlPlaneHostname} to reach this one.`,
+      );
+    return { opened, signedIn: true };
+  } catch (error) {
+    waiting?.fail();
+    p.log.warn(
+      `This computer is not signed in to the mind (${error instanceof Error ? error.message : String(error)}). Run ${c.callout(`iterate login ${controlPlaneHostname}`)} to sign in.`,
+    );
+    return { opened, signedIn: false };
+  }
+}
+
+/** Whether this computer's kept sign-in for `resource` still works: the issuer renews it now (a
+ *  stored token proves nothing once its grant was ended at the issuer). The renewed one is kept. */
+async function keptSignInLives(resource: string) {
+  return withSessionsLock(async () => {
+    const kept = readSession(resource);
+    if (!kept?.refreshToken) return false;
+    try {
+      writeSession(resource, await refreshOAuthSession({ resource, session: kept }));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** THE MIND'S MCP SERVER IN THE CODING AGENTS ON THIS COMPUTER (./mcp-clients.ts), on a first
+ *  deploy: the ones `--mcp` names, or with a person there, the ones they tick of those found
+ *  (all ticked). Each signs in itself on its first use. A redeploy asks nothing:
+ *  `iterate mcp <client>` adds it any time. */
+async function addMcpHere(input: DeployInput, mind: { controlPlaneHostname: string }) {
+  const found = mcpClientsOnPath();
+  const named = input.mcp ? mcpClientsOf(input.mcp, found) : null;
+  if (!named && (!interactive() || !found.length)) return;
+  const chosen =
+    named ||
+    (await ask<McpClient[]>("", () =>
+      p.multiselect<McpClient>({
+        message: `Let your coding agents work in the mind? This adds its MCP server to each one you tick.`,
+        options: found.map((client) => ({ value: client, label: MCP_CLIENTS[client].title })),
+        initialValues: found,
+        required: false,
+      }),
+    ));
+  const url = mindMcpUrlOf(mind.controlPlaneHostname);
+  const name = mindMcpNameOf(mind.controlPlaneHostname);
+  const added: McpClient[] = [];
+  for (const client of chosen) {
+    const result = addMcpServer(client, url);
+    if ("failed" in result)
+      p.log.warn(`${MCP_CLIENTS[client].title} did not take the MCP server: ${result.failed}`);
+    // another entry of that name, which may be another mind's, stays: this mind's is not added
+    else if ("kept" in result)
+      p.log.warn(
+        `${MCP_CLIENTS[client].title} has another server named ${name} already, and keeps it. To put this mind's in its place: ${MCP_CLIENTS[client].remove(name)}, then iterate mcp ${client} --exec --mind ${mind.controlPlaneHostname}`,
+      );
+    else added.push(client);
+  }
+  if (!added.length) return;
+  const titles = added.map((client) => MCP_CLIENTS[client].title);
+  const who =
+    titles.length > 1
+      ? `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)} have`
+      : `${titles[0]} has`;
+  p.log.success(
+    `${who} the mind's MCP server as ${name}. Sign each one in once:\n${added.map((client) => `${MCP_CLIENTS[client].title}: ${MCP_CLIENTS[client].signIn(name)}`).join("\n")}`,
+  );
+}
+
 /** Minimum Node version for `iterate deploy`: Node 24.7+ (ML-DSA-65 identity keys + modern TLS/fetch
  *  so Cloudflare OAuth does not reject older runtimes with HTTP 403 / fetch failed). */
 export const MIN_DEPLOY_NODE = [24, 7] as const;
@@ -2017,6 +2180,8 @@ export async function deployMind(input: DeployInput) {
     if (process.platform === "win32")
       throw new Error("iterate deploy runs on macOS and Linux (on Windows: in WSL).");
     assertSupportedNodeVersion();
+    // a wrong `--mcp` stops before anything changes, not after the deploy
+    if (input.mcp) mcpClientsOf(input.mcp, []);
     // the source comes while the person signs in and chooses
     const sourceBegan = Date.now();
     const source = sourceOf(input);
@@ -2643,8 +2808,24 @@ export async function deployMind(input: DeployInput) {
     if (keyLine) p.log.info(keyLine);
     // the pages that did not answer end the command non-zero, with setup's address and no open
     if (unanswered) throw new Error(unanswered);
-    if (input.setup !== false) await page(setup.prompt, setup.url);
-    else p.log.step(`${setup.prompt}\n${c.url(setup.url)}`);
+    const onboarding = onboardingUrlOf(primaryZone);
+    const here =
+      input.setup === false
+        ? { opened: false, signedIn: false }
+        : await signInHere(input, {
+            controlPlaneHostname,
+            firstDeploy: isFirstDeploy,
+            setup,
+            onboarding,
+          });
+    // signed in, the owner has a passkey: setup is the onboarding page itself
+    const next = here.signedIn ? { ...setup, url: onboarding } : setup;
+    // a browser that went toward setup already is not sent there twice
+    if (!here.opened) {
+      if (input.setup !== false) await page(next.prompt, next.url);
+      else p.log.step(`${next.prompt}\n${c.url(next.url)}`);
+    }
+    if (isFirstDeploy || input.mcp) await addMcpHere(input, { controlPlaneHostname });
     // the check's miss, said above, ends the command non-zero once every step is done
     if (missed) throw new Error(missed);
     p.outro(`Done in ${seconds(began)}.`);

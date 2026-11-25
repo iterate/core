@@ -10,13 +10,16 @@ import { pollUntilAnswered, type PollAnswer } from "./poll.ts";
 /** Sign in to `mind`'s issuer from a browser on any device, for `resource`: the person opens the
  *  printed page, checks the code, and approves. `deviceName` is the registration's `client_name`,
  *  which that page shows. `print` writes a line for the person, or the agent that relays it;
- *  `colors` says whether the person sees its colors (`showsColors`). */
+ *  `colors` says whether the person sees its colors (`showsColors`). `through` makes the page to
+ *  print from the approval page with its code filled in: a page that leads there (a new mind's
+ *  first sign-in, which adds the owner's first passkey on the way). */
 export async function deviceLogin(input: {
   mind: DiscoveredMind;
   resource: string;
   deviceName: string;
   print: (line: string) => void;
   colors: boolean;
+  through?: (approvalPage: string) => string;
 }): Promise<StoredSession> {
   const { mind, resource } = input;
   const issuer = mind.issuer;
@@ -41,10 +44,19 @@ export async function deviceLogin(input: {
   );
   const expiresInSeconds = Math.min(device.expires_in, 300);
   // the page and the link on lines of their own, so a terminal or an agent's transcript copies them
-  input.print("\nTo sign in, open this page in a browser on any device:\n");
-  input.print(`  ${device.verification_uri}\n`);
-  input.print(`and enter the code:  ${device.user_code}\n`);
-  if (device.verification_uri_complete) {
+  const through = input.through?.(device.verification_uri_complete || device.verification_uri);
+  if (through) {
+    input.print("\nTo sign in, open this page in a browser on any device:\n");
+    input.print(`  ${through}\n`);
+    input.print(`It ends at the code:  ${device.user_code}\n`);
+    input.print("Or scan this QR code. It opens the same page:\n");
+    input.print(`${terminalQrCode(through, input.colors)}\n`);
+  } else {
+    input.print("\nTo sign in, open this page in a browser on any device:\n");
+    input.print(`  ${device.verification_uri}\n`);
+    input.print(`and enter the code:  ${device.user_code}\n`);
+  }
+  if (!through && device.verification_uri_complete) {
     input.print("Or scan this QR code, or open the link under it. Both fill in the code:\n");
     input.print(`${terminalQrCode(device.verification_uri_complete, input.colors)}\n`);
     input.print(`  ${device.verification_uri_complete}\n`);

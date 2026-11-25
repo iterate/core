@@ -67,6 +67,12 @@ export type SignInOptions = {
   flow?: LoginFlow;
   print?: (line: string) => void;
   openBrowser?: (url: URL) => void | Promise<void>;
+  /** A page that leads to the issuer's own page (cli/oauth.ts `oauthLogin`, cli/device-login
+   *  `deviceLogin`): a new mind's first sign-in, which adds the owner's first passkey on the way. */
+  through?: (issuerPage: string) => string;
+  /** The browser flow: where the browser goes on after the sign-in, and how long it may take. */
+  then?: string;
+  waitMs?: number;
 };
 
 /** SIGN IN to `mind`'s issuer for `resource` and store the session. The device flow when it is
@@ -88,11 +94,15 @@ export async function signInToMind(
         deviceName: `iterate CLI on ${hostname()}`,
         print,
         colors: showsColors(process.stderr.isTTY, process.env),
+        through: options.through,
       })
     : await oauthLogin({
         mind,
         resource,
         openBrowser: options.openBrowser || ((url) => openForSignIn(url, print)),
+        through: options.through,
+        then: options.then,
+        waitMs: options.waitMs,
       });
   writeSession(resource, session);
   return session;

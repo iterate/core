@@ -36,6 +36,7 @@ import {
   pickDomain,
   planArgsOf,
   setupDestinationOf,
+  signInPageOf,
   PNPM_COMPAT_ENV,
   pnpmCommandOf,
   pnpmEnvFor,
@@ -917,6 +918,26 @@ test("createDeployProgress names what Alchemy is still making, for a line in a q
   progress.onLine(UNSEEN_CONSUMER);
   progress.onLine("[00:01:09.673] INFO: [ApexRoute-ada-labs.com] created (3.1s)");
   expect(progress.stillAt()).toBe("3 of 31 resources; still making Mind, Boundary");
+});
+
+test("the sign-in after a first deploy goes through the first passkey to the issuer's page; a redeploy's goes straight there", () => {
+  const authorize =
+    "https://iterate.ada-labs.com/oauth/authorize?client_id=c1&redirect_uri=http%3A%2F%2Flocalhost%3A5050%2Fcallback";
+  const first = new URL(
+    signInPageOf({ controlPlaneHostname: "iterate.ada-labs.com", firstDeploy: true }, authorize),
+  );
+  expect({
+    first: `${first.origin}${first.pathname}`,
+    next: first.searchParams.get("next"),
+    again: signInPageOf(
+      { controlPlaneHostname: "iterate.ada-labs.com", firstDeploy: false },
+      authorize,
+    ),
+  }).toEqual({
+    first: "https://iterate.ada-labs.com/sign-in/access",
+    next: authorize,
+    again: authorize,
+  });
 });
 
 test("deploy has no OAuth-client token prompt or Account API Token Provisioning, isolates token env vars, prints MindConfig, respects CI=1, waits for Enter before opening browser, and ends at onboarding.<zone>", () => {
