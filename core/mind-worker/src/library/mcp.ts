@@ -10,6 +10,13 @@ type McpWebhook = { url: string; secret: string };
 
 type McpLiveClient = { client: Client; transport: StreamableHTTPClientTransport };
 
+/** The MCP Apps extension (modelcontextprotocol/ext-apps, 2026-01-26): a client that declares it
+ *  may read a tool's `ui://` resource and draw it. A server may then offer its tools' views. */
+const MCP_APPS = { "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] } };
+/** A resource read answers at most this many characters of text and base64 in all: an event holds
+ *  up to 8 million, and an MCP App's document is 0.1 to 5 MB as a rule. */
+export const MCP_RESOURCE_MAX_CHARS = 8_000_000;
+
 /** A tool named like one of the connection's own members is reachable through `callTool` only. */
 export async function connectToMcp(
   itx: LibraryItx,
@@ -22,7 +29,12 @@ export async function connectToMcp(
   const connect = async (): Promise<McpLiveClient> => {
     const client = new Client(
       { name: "iterate-context", version: "1" },
-      { versionNegotiation: { mode: "auto" } },
+      {
+        versionNegotiation: { mode: "auto" },
+        capabilities: {
+          extensions: MCP_APPS,
+        },
+      },
     );
     const transport = new StreamableHTTPClientTransport(new URL(url), {
       fetch: async (input, init) =>
@@ -86,16 +98,21 @@ export class McpConnectionRpcTarget extends RpcTarget implements McpConnectionAp
   serverInfo() {
     return this.#serverInfo;
   }
+  /** Every page: with no cursor the SDK follows `nextCursor` to the end, and refuses a listing of
+   *  more than 64 pages (its `listMaxPages`). */
   async listTools() {
     return (await (await this.#client()).listTools()).tools;
   }
-  async callTool(...[name, args]: Parameters<McpConnectionApi["callTool"]>) {
+  async #call(name: string, args: Record<string, unknown> | undefined) {
     const client = await this.#client();
     // a tool may run as long as a script may (the SDK's default stops it at 60 s)
-    const result = await client.callTool(
-      { name, arguments: args || {} },
-      { timeout: RUN_DEADLINE_MS },
-    );
+    return await client.callTool({ name, arguments: args || {} }, { timeout: RUN_DEADLINE_MS });
+  }
+  async callToolResult(...[name, args]: Parameters<McpConnectionApi["callToolResult"]>) {
+    return await this.#call(name, args);
+  }
+  async callTool(...[name, args]: Parameters<McpConnectionApi["callTool"]>) {
+    const result = await this.#call(name, args);
     const text = result.content
       .flatMap((part) => (part.type === "text" ? [part.text] : []))
       .join("\n");
@@ -107,6 +124,18 @@ export class McpConnectionRpcTarget extends RpcTarget implements McpConnectionAp
     } catch {
       return text;
     }
+  }
+  async readResource(uri: string) {
+    const client = await this.#client();
+    const { contents } = await client.readResource({ uri });
+    // the SDK has checked the shape; the size is checked here, before it crosses to the caller
+    let size = 0;
+    for (const part of contents) size += ("text" in part ? part.text : part.blob).length;
+    if (size > MCP_RESOURCE_MAX_CHARS)
+      throw new Error(
+        `MCP resource ${uri} has more than ${String(MCP_RESOURCE_MAX_CHARS)} characters`,
+      );
+    return { contents };
   }
   async listEvents() {
     const client = await this.#client();

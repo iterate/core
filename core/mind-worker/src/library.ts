@@ -73,7 +73,7 @@ export const libraryRoots = {
   },
   connectToMcp: {
     description:
-      "a live MCP handle: `(await itx.connectToMcp(url)).listTools()`, one method per tool; `subscribe(event, args)` lands the server's events here as `events.iterate.com/mcp/webhook-received`",
+      "a live MCP handle: `(await itx.connectToMcp(url)).listTools()`, one method per tool; `callToolResult(name, args)` the whole result and `readResource(uri)` a `ui://` view (MCP Apps); `subscribe(event, args)` lands the server's events here as `events.iterate.com/mcp/webhook-received`",
     build: ({ itx, path, connections }) =>
       connections &&
       (((url, options) =>

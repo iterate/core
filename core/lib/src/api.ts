@@ -1104,8 +1104,33 @@ export type McpServerInfo = {
   serverInfo?: { name?: string; version?: string };
 };
 
-/** One tool as an MCP server's `tools/list` describes it. */
-export type McpTool = { name: string; description?: string; inputSchema?: unknown };
+/** One tool as an MCP server's `tools/list` describes it. `_meta.ui` is the MCP Apps extension's:
+ *  `resourceUri` (the tool's `ui://` view) and `visibility` (`"model"`, `"app"`). */
+export type McpTool = {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema?: unknown;
+  _meta?: Record<string, unknown>;
+};
+
+/** A tool's whole result (MCP's `CallToolResult`): an `isError` result is a result, not a throw. */
+export type McpToolResult = {
+  content?: unknown[];
+  structuredContent?: unknown;
+  isError?: boolean;
+  _meta?: Record<string, unknown>;
+};
+
+/** One part of a resource that `resources/read` answers: text, or base64 in `blob`. An MCP App's
+ *  view is text of the type `text/html;profile=mcp-app`, its `_meta.ui` the view's `csp`. */
+export type McpResourceContents = {
+  uri: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
+  _meta?: Record<string, unknown>;
+};
 
 /** One event an MCP server offers (the draft MCP Events extension's `events/list`): its name, the
  *  delivery modes it supports, the subscription arguments it takes and the payload it delivers. */
@@ -1130,6 +1155,12 @@ export interface McpConnectionApi {
   /** The result's `structuredContent`, else its text content JSON-parsed when it parses, else the
    *  text; an `isError` result throws with that text. */
   callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  /** The tool's whole result, `isError` included: what an MCP App's view is given. */
+  callToolResult(name: string, args?: Record<string, unknown>): Promise<McpToolResult>;
+  /** `resources/read`: the resource's parts, at most 8 million characters in all (an MCP App's
+   *  `ui://` view, say). The connection declares the MCP Apps extension, so a server offers its
+   *  views. */
+  readResource(uri: string): Promise<{ contents: McpResourceContents[] }>;
   /** The events the server offers. */
   listEvents(): Promise<McpEvent[]>;
   /** Subscribe this context to the event `name` with its arguments: the server POSTs each one to
