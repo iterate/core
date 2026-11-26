@@ -682,6 +682,26 @@ test("one exchange: the request, its exact bytes, the frames, the settlement, th
   assert.equal(state.totals.costUsd, result.usage.costUsd);
 });
 
+test("OpenAI takes a cache key of 64 characters at most: an agent with a longer path asks with a shorter key of its own", () => {
+  const keyFor = (cacheKey) =>
+    openaiResponses().body({ model: "openai/gpt-6.2-sol", instructions: "x", items: [], cacheKey })
+      .bodyWithoutInput.prompt_cache_key;
+  // a path that OpenAI takes is the key as it is
+  assert.equal(keyFor("/agents/test"), "/agents/test");
+  const longest = `/agents/${"a".repeat(56)}`;
+  assert.equal(longest.length, 64);
+  assert.equal(keyFor(longest), longest);
+  // one character more was refused: HTTP 400, "Invalid 'prompt_cache_key': string too long"
+  const long = `/agents/chat/example.com_example-org_${"a".repeat(28)}`;
+  assert.equal(long.length, 65);
+  assert.equal(keyFor(long).length, 64);
+  assert.ok(keyFor(long).startsWith(long.slice(0, 47)));
+  // the same agent has the same key each time, and two agents whose paths begin alike have two
+  assert.equal(keyFor(long), keyFor(long));
+  assert.notEqual(keyFor(long), keyFor(`${long.slice(0, -1)}b`));
+  assert.equal(keyFor("x".repeat(500)).length, 64);
+});
+
 test("thinking with no words: a frame says `thinking` at once, and each window's two frames share a `sequence`", async () => {
   // OpenAI's encrypted reasoning: an item opens and closes, and gives no words
   const reasoning = { type: "reasoning", id: "rs_1", encrypted_content: "…", summary: [] };

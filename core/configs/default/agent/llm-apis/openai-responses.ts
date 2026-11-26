@@ -51,6 +51,26 @@ export type OpenaiResponsesHost = {
   report?: (event: Record<string, unknown>) => void;
 };
 
+/** OpenAI refuses a `prompt_cache_key` of more than this many characters (HTTP 400, "string too
+ *  long", on a dev mind on 26 November 2026). */
+const CACHE_KEY_MAX = 64;
+
+/** FNV-1a over a text's UTF-16 units, as 8 hex digits: `body` is not async, so no SHA. */
+function fnv1a(text: string, seed: number) {
+  let hash = seed;
+  for (let at = 0; at < text.length; at++) hash = Math.imul(hash ^ text.charCodeAt(at), 0x01000193);
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/** THE KEY AS OPENAI TAKES IT. An agent's cache key is its path, and a path can be longer than
+ *  OpenAI allows: such an agent got no answer at all. A longer key keeps its beginning and gets
+ *  a hash of the whole key, so one agent always has the same key, and two agents whose paths
+ *  begin alike have two. */
+function openaiCacheKey(key: string) {
+  if (key.length <= CACHE_KEY_MAX) return key;
+  return `${key.slice(0, CACHE_KEY_MAX - 17)}~${fnv1a(key, 0x811c9dc5)}${fnv1a(key, 0x01000193)}`;
+}
+
 /** How an attempt writes one of this API's own facts (llm-api.ts). */
 type RecordFact = Parameters<NonNullable<LlmApi["transport"]>>[0]["record"];
 
@@ -113,7 +133,7 @@ export function openaiResponses(host: OpenaiResponsesHost = {}): LlmApi {
         store: false,
         include: ["reasoning.encrypted_content"],
         // routes every request of this agent to the same cache
-        prompt_cache_key: cacheKey,
+        prompt_cache_key: openaiCacheKey(cacheKey),
         ...(reasoningEffort && { reasoning: { effort: reasoningEffort, summary: "auto" } }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the provider's body: an absent field is the provider's default, and it takes no null
         ...(maxOutputTokens && { max_output_tokens: maxOutputTokens }),
