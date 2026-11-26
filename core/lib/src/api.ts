@@ -1575,6 +1575,17 @@ export type ContextListOptions = {
   limit?: number;
 };
 
+/** One live in-flight activity on a context's activity stack (`itx.contexts.list`, `activities` live state). */
+export type ContextActivity = {
+  key: string;
+  text: string;
+  icon?: string;
+  url?: string;
+  tags?: string[];
+  pushedAt?: string;
+  expiresAt?: string;
+};
+
 /** One context as the mind's catalog lists it (`itx.contexts.list`). */
 export type ContextListing = {
   path: string;
@@ -1597,6 +1608,8 @@ export type ContextListing = {
   /** What the context is for, in its own words: its newest `events.iterate.com/itx/described`. */
   description?: string;
   metadata?: Record<string, unknown>;
+  /** Live in-flight activities on this context's stack while it is awake, newest first. */
+  activities?: ContextActivity[];
 };
 
 /** An entity collection root (`itx.repos`, `itx.workspaces`, `itx.sandboxes`): `get(path)` the entity's handle,

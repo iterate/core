@@ -2,6 +2,43 @@
 // catalog, so it must not pull core-processor.ts into a client.
 import { z } from "zod";
 
+export const CONTEXT_ACTIVITY_PUSHED_TYPE = "events.iterate.com/itx/activity-pushed";
+export const CONTEXT_ACTIVITY_POPPED_TYPE = "events.iterate.com/itx/activity-popped";
+
+/** Maximum number of live items retained on a context's activity stack; older items drop off the bottom. */
+export const CONTEXT_ACTIVITY_STACK_LIMIT = 32;
+
+const ContextActivityTag = z.string().trim().min(1).max(40);
+
+export const ContextActivity = z.object({
+  key: z.string().min(1).max(120),
+  text: z.string().min(1).max(160),
+  icon: z.string().min(1).max(500).optional(),
+  url: z.string().min(1).max(500).optional(),
+  tags: z.array(ContextActivityTag).max(8).optional(),
+  pushedAt: z.string().optional(),
+  expiresAt: z.string().optional(),
+});
+export type ContextActivity = z.infer<typeof ContextActivity>;
+
+export const ContextActivityPushedEntry = ContextActivity.omit({ pushedAt: true }).extend({
+  ttlMs: z.number().int().positive().max(86_400_000).optional(),
+});
+export type ContextActivityPushedEntry = z.infer<typeof ContextActivityPushedEntry>;
+
+export const ContextActivityPushedPayload = z.union([
+  ContextActivityPushedEntry,
+  z.object({ items: z.array(ContextActivityPushedEntry).min(1).max(CONTEXT_ACTIVITY_STACK_LIMIT) }),
+]);
+export type ContextActivityPushedPayload = z.infer<typeof ContextActivityPushedPayload>;
+
+export const ContextActivityPoppedPayload = z.union([
+  z.object({ key: z.string().min(1).max(120) }),
+  z.object({ keys: z.array(z.string().min(1).max(120)).min(1).max(CONTEXT_ACTIVITY_STACK_LIMIT) }),
+  z.object({ tag: ContextActivityTag }),
+]);
+export type ContextActivityPoppedPayload = z.infer<typeof ContextActivityPoppedPayload>;
+
 export const CoreEventCatalog = {
   events: {
     "events.iterate.com/itx/ingress-configured": {
@@ -32,6 +69,16 @@ export const CoreEventCatalog = {
         description: z.string().max(2_000).nullable().optional(),
         metadata: z.record(z.string(), z.unknown()).nullable().optional(),
       }),
+    },
+    [CONTEXT_ACTIVITY_PUSHED_TYPE]: {
+      description:
+        "One or more live activities were pushed onto this context's in-memory activity stack (context/context-activity-stack.ts). Pushing an existing key updates it in place and promotes it to the top of the stack.",
+      payloadSchema: ContextActivityPushedPayload,
+    },
+    [CONTEXT_ACTIVITY_POPPED_TYPE]: {
+      description:
+        "Activities were removed from this context's in-memory activity stack by key, keys, or tag (context/context-activity-stack.ts).",
+      payloadSchema: ContextActivityPoppedPayload,
     },
     "events.iterate.com/itx/signed-request-sent": {
       description:

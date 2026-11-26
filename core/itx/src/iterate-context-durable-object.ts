@@ -97,7 +97,16 @@ import {
   awakeContextOf,
   awakeContexts,
   isAwakeWebSocket,
+  setAwakeActivities,
 } from "./context/awake.ts";
+import {
+  ContextActivityReport,
+  ContextActivityTracker,
+  describeFetchActivity,
+  describeItxCallActivity,
+  describeScriptRunActivity,
+  withTrackedActivity,
+} from "./context/context-activity-stack.ts";
 import { ContextCatalog, type ContextSummaryMessage } from "./context/context-catalog.ts";
 import { ContextSummaryTracker } from "./context/context-summary.ts";
 import { egress } from "./context/egress.ts";
@@ -359,6 +368,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return claimed;
       });
       this.#contextSummary.committed(events);
+      this.#activityStack.committed(events, this.#durableObjectAddress.path);
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
       if (woken) this.#announceToAncestors(woken.source?.cause);
       this.#measureSize();
@@ -571,8 +581,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #libraryItx = new InvokeHandle((steps) => {
     this.#residency.pinCallStarted();
     const { app: _loadedCode, ...caller } = this.#caller;
-    return this.#invokeInProcess(["itx", ...steps], [], caller).finally(() =>
-      this.#residency.pinCallEnded(),
+    return this.#invokeInProcess(["itx", ...steps], [], { ...caller, libraryHop: true }).finally(
+      () => this.#residency.pinCallEnded(),
     );
   }) as unknown as LibraryItx;
   readonly #connections = new Connections();
@@ -621,6 +631,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     code: string,
     requester: Requester | undefined,
   ): Promise<void> {
+    const runActivity = describeScriptRunActivity(requestOffset);
+    this.#activityStack.push(runActivity.entry, { runOffset: runActivity.runOffset });
     const cause = this.#stream.coreReducedState.scriptRuns[requestOffset]?.cause;
     // Straight onto the stream: no writer can append the platform's own record. A run that is no
     // longer open was settled already: by a new version, whose log its key no longer dedupes.
@@ -678,6 +690,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         });
       else reportIssue("iterate-context.run-settle", error, { requestOffset });
     } finally {
+      this.#activityStack.pop({ key: runActivity.entry.key });
       this.#scriptRunsInFlight.delete(requestOffset);
     }
   }
@@ -809,6 +822,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     builtIns: this.#builtIns,
     path: this.#durableObjectAddress.path,
     caller: () => this.#caller,
+    wrapActivity: (expression, caller, run) =>
+      withTrackedActivity(
+        describeItxCallActivity(expression, this.#durableObjectAddress.path, caller),
+        {
+          push: (entry) => this.#activityStack.push(entry),
+          pop: (key) => this.#activityStack.pop({ key }),
+        },
+        run,
+      ),
   });
 
   // This incarnation only ends the version: the next one empties what it left and is born
@@ -860,6 +882,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // What this incarnation still says of the context to the mind's catalog is of the new
       // version: the earlier one's description and counts are not sent under the new offsets.
       this.#contextSummary.startOver();
+      this.#activityStack.clear();
       // Best effort, as the kernel, whatever each row consumes: a callback that fails or is offline
       // misses the batch, and 2 s bounds how long the slowest one holds the answer. An event that
       // a row does not take reaches its callback as the bare border, with the version alone: not
@@ -1069,6 +1092,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     cause: () => this.#caller.cause,
     caller: () => this.#caller,
     causeOfCall: (call) => this.#causeNamingCaller(call),
+    activitiesSnapshot: () => this.#activityStack.active(),
+    activitiesLiveSnapshot: () => this.#activityStack.liveSnapshot(),
   });
 
   // A facet's code calls as the context's, so the person who called it rides the call's cause,
@@ -1103,14 +1128,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #awakeSocket = new AwakeSocket({
     path: this.#durableObjectAddress.path,
     busy: () => this.#residency.busy(),
-    summary: () =>
-      JSON.stringify({
+    summary: () => {
+      const activities = this.#activityStack.active();
+      return JSON.stringify({
         ...this.#contextSummary.current(),
         processors: Object.values(this.#stream.coreReducedState.subscriptions).flatMap((row) =>
           row.hostedFacet ? [row.hostedFacet.name] : [],
         ),
         storageBytes: this.ctx.storage.sql.databaseSize,
-      } satisfies ContextSummaryMessage),
+        ...(activities.length > 0 && { activities }),
+      } satisfies ContextSummaryMessage);
+    },
     dial: () =>
       contexts()
         .getByName(DurableObjectNameCodec.stringify(AWAKE_CONTEXT_PATH))
@@ -1120,6 +1148,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             [AWAKE_WEBSOCKET_HEADER]: encodeURIComponent(this.#durableObjectAddress.path),
           },
         }),
+  });
+
+  // Live in-flight activities in RAM only (never persisted to KV/SQLite), streaming deltas via
+  // `LiveState` and pushing live stack updates over `#awakeSocket`.
+  readonly #activityStack = new ContextActivityTracker({
+    sink: {
+      append: (event) => {
+        if (this.#stream.versionEnded()) return;
+        try {
+          this.#stream.append(event);
+        } catch {
+          // A paused or ended stream drops the live-state delta; clients re-seed on revision gap.
+        }
+      },
+    },
+    onChanged: () => this.#awakeSocket.activityChanged(),
   });
 
   // What this context says about itself, folded from its log (context/context-summary.ts).
@@ -1572,19 +1616,47 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #egress(request: Request, options?: { signFor?: string }): Promise<Response> {
-    return egress(request, {
-      cause: this.#caller.cause,
-      path: this.#durableObjectAddress.path,
-      ...options,
-    });
+    return withTrackedActivity(
+      describeFetchActivity(request, options),
+      {
+        push: (entry) => this.#activityStack.push(entry),
+        pop: (key) => this.#activityStack.pop({ key }),
+      },
+      () =>
+        egress(request, {
+          cause: this.#caller.cause,
+          path: this.#durableObjectAddress.path,
+          ...options,
+        }),
+    );
+  }
+
+  /** Receives best-effort live activity push/pop notifications from `statelessResolverFor`.
+   *  Unborn or asleep contexts ignore notifications without recording a wake or touching storage. */
+  reportActivity(rawReport: unknown): void {
+    if (this.#stream.highestDurableOffset() === 0 || !this.#stream.wakeRecorded()) return;
+    const parsed = ContextActivityReport.safeParse(rawReport);
+    if (!parsed.success) return;
+    if (parsed.data.kind === "push") {
+      this.#activityStack.push(parsed.data.entry, {
+        createdAt: parsed.data.createdAt,
+        runOffset: parsed.data.runOffset,
+      });
+      return;
+    }
+    this.#activityStack.pop({ key: parsed.data.key });
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    // A context's summary: one row written, no wake record.
+    // A context's summary: one durable row written, live activities kept on the socket attachment.
     if (isAwakeWebSocket(this.ctx, ws)) {
       const { path } = awakeContextOf(ws);
       try {
-        this.#contextCatalog.store(path, typeof message === "string" ? message : "");
+        const activities = this.#contextCatalog.store(
+          path,
+          typeof message === "string" ? message : "",
+        );
+        setAwakeActivities(ws, activities);
       } catch (error) {
         console.info({
           event: "context.catalog-summary-refused",

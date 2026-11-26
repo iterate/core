@@ -10,6 +10,12 @@ import {
   callContext,
   workersRoot,
 } from "./built-ins.ts";
+import {
+  type ContextActivityReport,
+  describeFetchActivity,
+  describeItxCallActivity,
+  withTrackedActivity,
+} from "./context-activity-stack.ts";
 import { egress } from "./egress.ts";
 import { ItxExpressionResolver } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, type DurableObjectAddress } from "./paths.ts";
@@ -99,6 +105,22 @@ export function statelessResolverFor(args: {
     ctx: args.ctx,
   });
   const context = reach.contextOf;
+  // Ordered per-resolver delivery so a fast `pop` never overtakes its preceding `push`. Best-effort
+  // and rollover-safe: an awake context running an older release during a deploy lacks the method
+  // and ignores it cleanly.
+  let activityReportChain: Promise<unknown> = Promise.resolve();
+  const sendActivityReport = (report: ContextActivityReport) => {
+    const contextName = DurableObjectNameCodec.stringify(path);
+    activityReportChain = activityReportChain
+      .then(() => args.namespace.getByName(contextName).reportActivity(report))
+      .catch(() => undefined);
+    args.ctx.waitUntil(activityReportChain);
+  };
+  const activityHooks = {
+    push: (entry: Extract<ContextActivityReport, { kind: "push" }>["entry"]) =>
+      sendActivityReport({ kind: "push", entry, createdAt: new Date().toISOString() }),
+    pop: (key: string) => sendActivityReport({ kind: "pop", key }),
+  };
   // No `connections`: a resolver lives one round trip, so a connector root is sent to the
   // context, whose residency holds and releases them.
   const resolverUnder = (callerNow: Caller): ItxExpressionResolver => {
@@ -106,7 +128,10 @@ export function statelessResolverFor(args: {
       ...buildPortableBuiltIns({
         path,
         context,
-        egress: (request, options) => egress(request, { cause: callerNow.cause, path, ...options }),
+        egress: (request, options) =>
+          withTrackedActivity(describeFetchActivity(request, options), activityHooks, () =>
+            egress(request, { cause: callerNow.cause, path, ...options }),
+          ),
         afterTheAnswer: (work) => args.ctx.waitUntil(work),
         caller: () => callerNow,
         invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
@@ -119,6 +144,12 @@ export function statelessResolverFor(args: {
       builtIns: build,
       path,
       caller: () => callerNow,
+      wrapActivity: (expression, callCaller, run) =>
+        withTrackedActivity(
+          describeItxCallActivity(expression, path, callCaller),
+          activityHooks,
+          run,
+        ),
     });
     return resolver;
   };
@@ -126,7 +157,7 @@ export function statelessResolverFor(args: {
   // the dotted members its prototype fallback serves.
   const { app: _loadedCode, ...libraryCaller } = caller;
   const libraryItx = new InvokeHandle((steps) =>
-    resolverUnder(libraryCaller).invoke(["itx", ...steps]),
+    resolverUnder({ ...libraryCaller, libraryHop: true }).invoke(["itx", ...steps]),
   ) as unknown as LibraryItx;
   return resolverUnder(caller);
 }

@@ -21,6 +21,8 @@
 // The accepting context is not `/`: every wake of `/` restarts the root's facets, and the root
 // would wake twice for each wake of any other context.
 
+import type { ContextActivity } from "iterate/api";
+
 export const AWAKE_CONTEXT_PATH = "/awake";
 export const AWAKE_WEBSOCKET_HEADER = "x-itx-awake";
 const AWAKE_WEBSOCKET_TAG = "awake";
@@ -33,10 +35,22 @@ export const AWAKE_QUIET_MS = 1_000;
 export const AWAKE_MAX_HOLD_MS = 5 * 60_000;
 /** While a context works, its summary is sent again at most this often. */
 export const AWAKE_SUMMARY_EVERY_MS = 15_000;
+/** Coalesces rapid activity push/pop bursts before sending an updated summary down the socket. */
+export const AWAKE_ACTIVITY_DEBOUNCE_MS = 100;
 /** After a dial that failed, no other dial for this long. */
 export const AWAKE_REDIAL_AFTER_MS = 10_000;
 
-export type AwakeContext = { path: string; since: number };
+export type AwakeContext = {
+  path: string;
+  since: number;
+  updatedAt?: number;
+  activities?: ContextActivity[];
+};
+
+export type AwakeContextState = {
+  since: number;
+  activities?: ContextActivity[];
+};
 
 /** The accepting side. Null: not a dial. Only the context at `AWAKE_CONTEXT_PATH` accepts. */
 export function acceptAwakeWebSocket(
@@ -76,20 +90,60 @@ export function isAwakeWebSocket(ctx: Pick<DurableObjectState, "getTags">, ws: W
 
 /** What `acceptAwakeWebSocket` attached to a socket under the awake tag. */
 export function awakeContextOf(ws: WebSocket): AwakeContext {
-  // the one reader of the attachment that `acceptAwakeWebSocket` alone writes
+  // the one reader of the attachment that `acceptAwakeWebSocket` and `setAwakeActivities` alone write
   return ws.deserializeAttachment() as AwakeContext;
 }
 
-/** Every context with an open socket here, by path, with when it woke. A context that dialed twice
- *  (its first socket's close has not arrived) is there once, with its earlier time. */
-export function awakeContexts(ctx: Pick<DurableObjectState, "getWebSockets">): Map<string, number> {
-  const sinceByPath = new Map<string, number>();
+/** Updates the live `activities` carried on an accepted awake socket's attachment (never SQLite),
+ *  so closing or crashing the socket clears its activities automatically. */
+export function setAwakeActivities(
+  ws: Pick<WebSocket, "deserializeAttachment" | "serializeAttachment">,
+  activities: ContextActivity[] | undefined,
+): void {
+  // Written by `acceptAwakeWebSocket` on the same tagged socket.
+  const current = ws.deserializeAttachment() as AwakeContext;
+  const next: AwakeContext = {
+    path: current.path,
+    since: current.since,
+    updatedAt: Date.now(),
+    ...(activities && activities.length > 0 && { activities }),
+  };
+  ws.serializeAttachment(next);
+}
+
+/** Every context with an open socket here, by path, with when it woke and its latest live
+ *  activities. A context that dialed twice (its first socket's close has not arrived) is there
+ *  once, with its earlier wake time and the newest socket state. */
+export function awakeContexts(
+  ctx: Pick<DurableObjectState, "getWebSockets">,
+): Map<string, AwakeContextState> {
+  const byPath = new Map<string, AwakeContextState & { updatedAt: number }>();
   for (const ws of ctx.getWebSockets(AWAKE_WEBSOCKET_TAG)) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    const { path, since } = awakeContextOf(ws);
-    sinceByPath.set(path, Math.min(since, sinceByPath.get(path) ?? Infinity));
+    const { path, since, updatedAt, activities } = awakeContextOf(ws);
+    const rank = updatedAt ?? since;
+    const prior = byPath.get(path);
+    if (!prior) {
+      byPath.set(path, {
+        since,
+        updatedAt: rank,
+        ...(activities && activities.length > 0 && { activities }),
+      });
+      continue;
+    }
+    const newer = rank >= prior.updatedAt;
+    const chosenActivities = newer ? activities : prior.activities;
+    byPath.set(path, {
+      since: Math.min(since, prior.since),
+      updatedAt: Math.max(rank, prior.updatedAt),
+      ...(chosenActivities && chosenActivities.length > 0 && { activities: chosenActivities }),
+    });
   }
-  return sinceByPath;
+  const states = new Map<string, AwakeContextState>();
+  for (const [path, { since, activities }] of byPath) {
+    states.set(path, activities ? { since, activities } : { since });
+  }
+  return states;
 }
 
 /** What the dialing side does when its timer fires. */
@@ -130,6 +184,8 @@ export class AwakeSocket {
   #noDialBefore = 0;
   #lastEntryAt = 0;
   #timer: ReturnType<typeof setTimeout> | undefined;
+  #activityTimer: ReturnType<typeof setTimeout> | undefined;
+  #activityDirty = false;
   #sentSummary: string | undefined;
   #sentSummaryAt = 0;
 
@@ -144,6 +200,22 @@ export class AwakeSocket {
     if (this.#timer === undefined) this.#recheckIn(AWAKE_QUIET_MS);
   }
 
+  /** Coalesces rapid activity stack mutations and pushes the updated summary while the context
+   *  is awake, without holding an idle context open or leaving a timer after close. */
+  activityChanged(): void {
+    if (this.#deps.path === AWAKE_CONTEXT_PATH || this.#timer === undefined) return;
+    this.#activityDirty = true;
+    if (this.#activityTimer !== undefined) return;
+    this.#activityTimer = setTimeout(() => {
+      this.#activityTimer = undefined;
+      if (this.#timer === undefined) return;
+      if (this.#socket) {
+        this.#activityDirty = false;
+        this.#sendSummary();
+      }
+    }, AWAKE_ACTIVITY_DEBOUNCE_MS);
+  }
+
   #recheckIn(ms: number): void {
     this.#timer = setTimeout(() => {
       this.#timer = undefined;
@@ -155,7 +227,10 @@ export class AwakeSocket {
       if (decision.action === "close") return this.#close();
       // again, when the far end closed it under a context that still works
       this.#open();
-      if (Date.now() - this.#sentSummaryAt >= AWAKE_SUMMARY_EVERY_MS) this.#sendSummary();
+      if (this.#activityDirty || Date.now() - this.#sentSummaryAt >= AWAKE_SUMMARY_EVERY_MS) {
+        this.#activityDirty = false;
+        this.#sendSummary();
+      }
       this.#recheckIn(decision.recheckInMs);
     }, ms);
   }
@@ -174,6 +249,10 @@ export class AwakeSocket {
         this.#socket = socket;
         // the context went quiet while the dial was on its way: its summary still goes
         if (this.#timer === undefined) return this.#close();
+        if (this.#activityDirty && this.#activityTimer === undefined) {
+          this.#activityDirty = false;
+          this.#sendSummary();
+        }
         const gone = () => {
           if (this.#socket === socket) this.#socket = undefined;
         };
@@ -212,6 +291,11 @@ export class AwakeSocket {
   }
 
   #close(): void {
+    if (this.#activityTimer !== undefined) {
+      clearTimeout(this.#activityTimer);
+      this.#activityTimer = undefined;
+    }
+    this.#activityDirty = false;
     this.#sendSummary();
     const socket = this.#socket;
     this.#socket = undefined;

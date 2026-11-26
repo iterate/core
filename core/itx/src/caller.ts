@@ -58,6 +58,10 @@ export type Caller = {
   // mind Worker's MCP server and by serve-host.ts, where the platform itself names the client and
   // the person: no other caller reaches `mcpCall` (./context/built-ins.ts `workersRoot`).
   mcpServer?: true;
+  // An internal hop made through `libraryItx` (`repos`, `sandboxes`, `files`) on behalf of an
+  // outer expression: activity tracking records the outer call alone so internal hops do not stack
+  // duplicate pills underneath it.
+  libraryHop?: true;
   copiedFrom?: EventCopiedFrom;
   cause?: Cause;
   onBehalfOf?: OnBehalfOf;

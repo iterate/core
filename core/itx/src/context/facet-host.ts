@@ -18,7 +18,7 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import type { FacetProps, StreamProcessorDurableObject } from "iterate/sdk";
-import type { FacetSpec, WorkerSource } from "iterate/api";
+import type { ContextActivity, FacetSpec, WorkerSource } from "iterate/api";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import type { Caller } from "../caller.ts";
 import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
@@ -38,6 +38,7 @@ import {
 } from "../first-party-facets.ts";
 import { itxLoader } from "../host.ts";
 import type { Stream } from "../stream/stream.ts";
+import { CONTEXT_ACTIVITIES_FACET } from "./context-activity-stack.ts";
 import {
   walkSteps,
   awaitAnswerReleasedIfRejected,
@@ -129,6 +130,8 @@ type FacetHostDeps = {
   caller: () => Caller;
   // The cause of a caller's own call to `<facet>.<method>`: a promise only when it must be signed.
   causeOfCall: (call: string) => Cause | undefined | Promise<Cause | undefined>;
+  activitiesSnapshot?: () => ContextActivity[];
+  activitiesLiveSnapshot?: () => { rev: number; state: ContextActivity[] };
 };
 
 // answered from the processor's reduce, after the deliveries its context owes it
@@ -290,8 +293,8 @@ export class FacetHost {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee
     if (typeof name !== "string")
       throw new Error("itx.facets.abort(name, reason?): name the facet");
-    if (name === CoreContract.slug)
-      throw new Error(`"${name}" is the core reduce — never a facet, nothing to abort`);
+    if (name === CoreContract.slug || name === CONTEXT_ACTIVITIES_FACET)
+      throw new Error(`"${name}" is built into the context — never a facet, nothing to abort`);
     if (firstPartyFacetClassOf(name)) assertFacetPlacement(name, this.#deps.path);
     else this.#facetStartupMemoFor(name, undefined);
     const why = reason ? `: ${reason}` : "";
@@ -578,6 +581,7 @@ export class FacetHost {
       this.#claimFacetAlarm(CoreContract.slug, null);
       this.#facetRevived(CoreContract.slug);
     }
+    names.delete(CONTEXT_ACTIVITIES_FACET);
     for (const name of names)
       this.#deleteFacet(
         name,
@@ -697,6 +701,22 @@ export class FacetHost {
         await walkSteps(
           {
             value: { snapshot: () => this.#deps.stream.coreReducedStateSnapshot() },
+            receiver: undefined,
+          },
+          itxExpressionSteps,
+        )
+      ).value;
+    }
+    if (name === CONTEXT_ACTIVITIES_FACET) {
+      if (spec) throw new Error(`"${name}" is the context activity stack — never a facet name`);
+      if (byPerson) assertFacetMethodIsAPersons(name, [], [], itxExpressionSteps);
+      return (
+        await walkSteps(
+          {
+            value: {
+              snapshot: () => this.#deps.activitiesSnapshot?.() ?? [],
+              liveSnapshot: () => this.#deps.activitiesLiveSnapshot?.() ?? { rev: 0, state: [] },
+            },
             receiver: undefined,
           },
           itxExpressionSteps,

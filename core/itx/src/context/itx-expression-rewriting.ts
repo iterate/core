@@ -903,6 +903,9 @@ export class ItxExpressionResolver {
   readonly #path: string;
   readonly #caller: () => Caller;
   readonly #reach: ResolverReach;
+  readonly #wrapActivity:
+    | ((expression: ItxExpression, caller: Caller, run: () => Promise<unknown>) => Promise<unknown>)
+    | undefined;
 
   constructor(args: {
     builtIns: Record<string, unknown> | (() => Record<string, unknown>);
@@ -910,6 +913,11 @@ export class ItxExpressionResolver {
     path: string;
     caller: () => Caller;
     reach: ResolverReach;
+    wrapActivity?: (
+      expression: ItxExpression,
+      caller: Caller,
+      run: () => Promise<unknown>,
+    ) => Promise<unknown>;
   }) {
     const { builtIns } = args;
     this.#buildBuiltIns = typeof builtIns === "function" ? builtIns : () => builtIns;
@@ -917,6 +925,7 @@ export class ItxExpressionResolver {
     this.#path = args.path;
     this.#caller = args.caller;
     this.#reach = args.reach;
+    this.#wrapActivity = args.wrapActivity;
   }
 
   // On the input only: the rows a call rewrites through are the owner's grants and are never checked.
@@ -956,14 +965,24 @@ export class ItxExpressionResolver {
   }
 
   async #invoked(call: ItxExpressionInput, extraArgs: unknown[], approved?: string) {
-    try {
-      return (await this.#dispatch(call, extraArgs, approved)).value;
-    } catch (error) {
-      recordRefusal(error, (cause, message) =>
-        this.#reach.recordLoopLimit(this.#path, cause, message),
-      );
-      throw error;
-    }
+    const run = async () => {
+      try {
+        return (await this.#dispatch(call, extraArgs, approved)).value;
+      } catch (error) {
+        recordRefusal(error, (cause, message) =>
+          this.#reach.recordLoopLimit(this.#path, cause, message),
+        );
+        throw error;
+      }
+    };
+    if (!this.#wrapActivity) return run();
+    const expression = normalizedItxExpression(call);
+    const last = expression.at(-1);
+    const fullExpression: ItxExpression =
+      extraArgs.length > 0 && typeof last === "string" && expression.length > 1
+        ? [...expression.slice(0, -1), [last, ...extraArgs]]
+        : expression;
+    return this.#wrapActivity(fullExpression, this.#caller(), run);
   }
 
   // A CALL THAT NOBODY WAITS FOR IS REFUSED WHEN AN APPROVAL RULE NAMES IT. A subscription's

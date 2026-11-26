@@ -1,15 +1,22 @@
 // context-catalog.ts — THE MIND'S CATALOG OF ITS CONTEXTS: one SQLite row per context, in the
 // storage of the context that accepts the awake sockets (awake.ts). A row is the newest summary
 // its context sent (context-summary.ts). A list joins the rows with the open sockets, so "awake"
-// is never stored. The catalog is a copy: every row can be made again from its context's own log.
+// and live `activities` are never stored in SQLite: when a socket closes, both vanish at once.
 import { z } from "zod";
 import type { ContextListing, ContextListOptions } from "iterate/api";
+import type { AwakeContextState } from "./awake.ts";
+import { activeContextActivities, ContextActivity } from "./context-activity-stack.ts";
 import { ContextSummary } from "./context-summary.ts";
 
-/** What a context sends: its folded summary, and what it reads off itself at that moment. */
-export const ContextSummaryMessage = ContextSummary.extend({
+/** Durable fields stored in SQLite `context_catalog.summary` (never live `activities`). */
+const StoredContextSummary = ContextSummary.extend({
   processors: z.array(z.string()),
   storageBytes: z.number().int().nonnegative(),
+});
+
+/** What a context sends over its awake socket: its durable summary plus live in-memory activities. */
+export const ContextSummaryMessage = StoredContextSummary.extend({
+  activities: z.array(ContextActivity).optional(),
 });
 export type ContextSummaryMessage = z.infer<typeof ContextSummaryMessage>;
 
@@ -38,10 +45,11 @@ export class ContextCatalog {
     this.#tableMade = true;
   }
 
-  /** Keeps `message` as `path`'s row unless the row is of a later offset. A message that is no
-   *  summary is refused with a thrown error, which its caller logs. */
-  store(path: string, message: string): void {
-    const summary = ContextSummaryMessage.parse(JSON.parse(message));
+  /** Keeps the durable part of `message` as `path`'s row unless the row is of a later offset, and
+   *  returns the live `activities` carried on the message so the caller can attach them to the
+   *  open awake socket (never SQLite). A message that is no summary is refused with a thrown error. */
+  store(path: string, message: string): ContextActivity[] | undefined {
+    const { activities, ...durable } = ContextSummaryMessage.parse(JSON.parse(message));
     this.#table();
     this.#sql.exec(
       `INSERT INTO context_catalog (path, through_offset, active_at, summary) VALUES (?, ?, ?, ?)
@@ -51,15 +59,20 @@ export class ContextCatalog {
          summary = excluded.summary
        WHERE excluded.through_offset >= context_catalog.through_offset`,
       path,
-      summary.throughOffset,
-      summary.lastActivityAt || summary.lastEventAt || "",
-      JSON.stringify(summary),
+      durable.throughOffset,
+      durable.lastActivityAt || durable.lastEventAt || "",
+      JSON.stringify(durable),
     );
+    return activities;
   }
 
   /** The contexts that match, the most recently active first. `awake` is the open sockets, by
-   *  path. An awake context with no row yet (its first wake) is listed with what is known. */
-  list(options: ContextListOptions, awake: ReadonlyMap<string, number>): ContextListing[] {
+   *  path, with their live in-memory activities. Sleeping contexts never carry `activities`. */
+  list(
+    options: ContextListOptions,
+    awake: ReadonlyMap<string, AwakeContextState>,
+    now = Date.now(),
+  ): ContextListing[] {
     this.#table();
     const limit = Math.min(Math.max(1, options.limit ?? 200), 1_000);
     const terms = (options.search || "").toLowerCase().split(/\s+/).filter(Boolean);
@@ -90,33 +103,72 @@ export class ContextCatalog {
         limit,
       )
       .toArray();
-    const listed = rows.map(({ path, summary }): ContextListing => {
-      const { throughOffset: _, ...stored } = ContextSummaryMessage.parse(JSON.parse(summary));
-      const since = awake.get(path);
-      return { path, ...stored, ...(since !== undefined && { awake: { since } }) };
-    });
-    if (terms.length > 0) return listed;
-    // An awake context with no row at all: one that has a row past this page is not one.
-    const candidates = [...awake.keys()].filter(matchesPath);
-    const stored = new Set(
-      this.#sql
-        .exec<{ path: string }>(
-          "SELECT path FROM context_catalog WHERE path IN (SELECT value FROM json_each(?))",
-          JSON.stringify(candidates),
-        )
-        .toArray()
-        .map((row) => row.path),
-    );
-    const unlisted = candidates
-      .filter((path) => !stored.has(path))
-      .map((path): ContextListing => ({
+    const toListing = (path: string, summaryJson: string): ContextListing => {
+      const { throughOffset: _, ...stored } = StoredContextSummary.parse(JSON.parse(summaryJson));
+      const awakeState = awake.get(path);
+      if (!awakeState) return { path, ...stored };
+      const liveActivities = activeContextActivities(awakeState.activities, now);
+      return {
         path,
-        awake: { since: awake.get(path) ?? Date.now() },
+        ...stored,
+        awake: { since: awakeState.since },
+        ...(liveActivities.length > 0 && { activities: liveActivities }),
+      };
+    };
+    const toUnlistedAwake = (path: string): ContextListing => {
+      const awakeState = awake.get(path);
+      const liveActivities = activeContextActivities(awakeState?.activities, now);
+      return {
+        path,
+        awake: { since: awakeState?.since ?? now },
         eventCount: 0,
         eventTypes: {},
         recentTypes: [],
         processors: [],
-      }));
+        ...(liveActivities.length > 0 && { activities: liveActivities }),
+      };
+    };
+    const listed = rows.map(({ path, summary }) => toListing(path, summary));
+    const candidates = [...awake.keys()].filter(matchesPath);
+    if (candidates.length === 0) return listed;
+
+    const storedRows = this.#sql
+      .exec<{ path: string; summary: string }>(
+        "SELECT path, summary FROM context_catalog WHERE path IN (SELECT value FROM json_each(?))",
+        JSON.stringify(candidates),
+      )
+      .toArray();
+    const storedByPath = new Map(storedRows.map((row) => [row.path, row.summary]));
+
+    if (terms.length > 0) {
+      const listedPaths = new Set(listed.map((row) => row.path));
+      const extraAwakeMatches: ContextListing[] = [];
+      for (const path of candidates) {
+        if (listedPaths.has(path)) continue;
+        const storedSummary = storedByPath.get(path);
+        const candidateListing = storedSummary
+          ? toListing(path, storedSummary)
+          : toUnlistedAwake(path);
+        const haystack = [
+          path,
+          storedSummary || "",
+          ...(candidateListing.activities || []).flatMap((item) => [
+            item.text,
+            item.key,
+            ...(item.tags || []),
+          ]),
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (terms.every((term) => haystack.includes(term))) {
+          extraAwakeMatches.push(candidateListing);
+        }
+      }
+      return [...extraAwakeMatches, ...listed].slice(0, limit);
+    }
+
+    // An awake context with no row at all: one that has a row past this page is not one.
+    const unlisted = candidates.filter((path) => !storedByPath.has(path)).map(toUnlistedAwake);
     return [...unlisted, ...listed].slice(0, limit);
   }
 }
