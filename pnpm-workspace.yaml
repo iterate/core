@@ -8,10 +8,10 @@ packages:
 # into it, rewriting this file.
 cleanupUnusedCatalogs: true
 catalog:
-  # One Cloudflare toolchain for every Worker in the repo, pinned here even where one package uses
-  # it: the Vite plugin, the wrangler it builds and deploys with, the runtime types and the
-  # containers library. Alchemy deploys a mind's stack (core/alchemy), on Effect: all pinned
-  # exactly, so every deployer runs the same set.
+  # iterate's UI kit, whose source is the iterate.com mind's repo /repos/ui (anyone may clone it):
+  # ONE commit for every app here that bundles it. To take a newer kit, move this pin and run
+  # `pnpm install`. A change to the kit is a pull on https://git.iterate.com/repos/ui.
+  # allow-high-entropy-next-line: a commit of the kit's repo, which anyone may read
   "@cloudflare/workers-types": ^5.20261103.1
   alchemy: 2.0.0-beta.87
   "@alchemy.run/cloudflare": 2.0.0-beta.87
